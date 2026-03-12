@@ -51,6 +51,13 @@ def parse_args():
     p.add_argument("--json-stream", action="store_true",
                    help="Newline-delimited JSON stream (Electron GUI mode)")
     p.add_argument("--no-color",  action="store_true")
+    p.add_argument("--min-cvss",  type=float, default=4.0,
+                   help="Minimum CVSS score to report (default: 4.0)")
+    p.add_argument("--nvd-key",   default="",
+                   help="NVD API key for higher rate limits (or set NETRECON_NVD_KEY env var)")
+    p.add_argument("--clear-cache", action="store_true", help="Clear NVD cache and exit")
+    p.add_argument("--cache-stats", action="store_true", help="Show NVD cache stats and exit")
+    p.add_argument("--preload-cache", action="store_true", help="Pre-populate NVD cache for common products")
     p.add_argument("--version",   action="version", version=f"NetRecon {VERSION}")
     return p.parse_args()
 
@@ -180,8 +187,11 @@ def run_single(target, args):
     print(f"[*] Scanning {target} ({len(ports)} ports)…")
     host_result = scan_host(target, ports=ports, max_workers=args.threads, timeout=args.timeout)
 
-    print(f"[*] Correlating CVEs ({len(host_result.ports)} open ports)…")
-    vuln_matches = correlate(host_result.ports)
+    from src.nvd_lookup import cache_stats
+    stats = cache_stats()
+    cache_note = f"(cache: {stats['entries']} entries)" if stats['entries'] > 0 else "(live NVD queries — first run may be slow)"
+    print(f"[*] Correlating CVEs via NVD API {cache_note}…")
+    vuln_matches = correlate(host_result.ports, min_cvss=getattr(args, "min_cvss", 4.0), verbose=True)
 
     # ── TLS Analysis ──
     tls_results = []
