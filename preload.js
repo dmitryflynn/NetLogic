@@ -1,5 +1,5 @@
 /**
- * NetLogic Replace Preload — Secure context bridge between renderer and main process.
+ * NetLogic Preload — Secure context bridge between renderer and main process.
  * Only exposes explicitly defined APIs to the renderer (no full Node access).
  */
 

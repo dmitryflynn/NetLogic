@@ -1,5 +1,5 @@
 """
-NetLogic Replace - HTTP Security Header Auditor
+NetLogic - HTTP Security Header Auditor
 Checks every security-relevant HTTP response header against current best practices.
 
 Covers:
@@ -64,7 +64,7 @@ def fetch_headers(url: str, timeout: float = 8.0) -> tuple[dict, int]:
     ctx.verify_mode = ssl.CERT_NONE
 
     req = urllib.request.Request(url, headers={
-        "User-Agent": "Mozilla/5.0 (compatible; NetLogicReplace/1.0; Security Scanner)",
+        "User-Agent": "Mozilla/5.0 (compatible; NetLogic/1.0; Security Scanner)",
         "Accept": "text/html,application/xhtml+xml,*/*",
     })
 

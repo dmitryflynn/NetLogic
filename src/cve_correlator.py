@@ -1,5 +1,5 @@
 """
-NetLogic Replace - CVE Correlation Engine (NVD-powered)
+NetLogic - CVE Correlation Engine (NVD-powered)
 =======================================================
 Replaces hardcoded CVE signatures with live NVD API lookups.
 Results are cached to disk (~/.netlogic/nvd_cache/) for 24 hours.

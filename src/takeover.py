@@ -1,5 +1,5 @@
 """
-NetLogic Replace - Subdomain Takeover Detector
+NetLogic - Subdomain Takeover Detector
 Identifies subdomains vulnerable to takeover via dangling DNS records.
 
 A subdomain takeover occurs when:
@@ -260,7 +260,7 @@ def resolve_cname_chain(hostname: str, max_depth: int = 8) -> list[str]:
         try:
             req = urllib.request.Request(url, headers={
                 "Accept": "application/dns-json",
-                "User-Agent": "NetLogicReplace/1.0",
+                "User-Agent": "NetLogic/1.0",
             })
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read())
@@ -293,7 +293,7 @@ def fetch_body(url: str, timeout: float = 6.0) -> tuple[str, int]:
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "NetLogicReplace/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "NetLogic/1.0"})
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             body = resp.read(8192).decode("utf-8", errors="replace")
             return body, resp.status

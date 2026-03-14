@@ -21,13 +21,13 @@ VSVersionInfo(
         StringTable(
           u'040904B0',
           [
-            StringStruct(u'CompanyName',      u'NetLogic Replace Security Tools'),
-            StringStruct(u'FileDescription',  u'NetLogic Replace - Attack Surface Mapper'),
+            StringStruct(u'CompanyName',      u'NetLogic Security Tools'),
+            StringStruct(u'FileDescription',  u'NetLogic - Attack Surface Mapper'),
             StringStruct(u'FileVersion',      u'2.0.0'),
             StringStruct(u'InternalName',     u'netlogic'),
             StringStruct(u'LegalCopyright',   u'For authorized security assessments only'),
             StringStruct(u'OriginalFilename', u'netlogic.exe'),
-            StringStruct(u'ProductName',      u'NetLogic Replace'),
+            StringStruct(u'ProductName',      u'NetLogic'),
             StringStruct(u'ProductVersion',   u'2.0.0'),
           ]
         )

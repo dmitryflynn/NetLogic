@@ -136,7 +136,7 @@ def lookup_asn(ip: str) -> Optional[ASNInfo]:
     """
     try:
         url = f"https://ipinfo.io/{ip}/json"
-        req = urllib.request.Request(url, headers={"User-Agent": "NetLogicReplace/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "NetLogic/1.0"})
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
         return ASNInfo(
@@ -187,7 +187,7 @@ def fingerprint_http(target: str, port: int = 80) -> list[str]:
     detected = []
     try:
         req = urllib.request.Request(url, method="HEAD", headers={
-            "User-Agent": "Mozilla/5.0 (compatible; NetLogicReplace/1.0)",
+            "User-Agent": "Mozilla/5.0 (compatible; NetLogic/1.0)",
         })
         # We deliberately ignore cert verification errors for recon
         import ssl

@@ -56,12 +56,12 @@
       "installerHeaderIcon": "assets/icon.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "NetLogic Replace",
+      "shortcutName": "NetLogic",
       "license": "LICENSE",
       "runAfterFinish": true
     },
     "portable": {
-      "artifactName": "NetLogic Replace-${version}-portable.exe"
+      "artifactName": "NetLogic-${version}-portable.exe"
     }
   },
   "devDependencies": {

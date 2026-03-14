@@ -1,5 +1,5 @@
 """
-NetLogic Replace - NVD Live CVE Lookup Engine
+NetLogic - NVD Live CVE Lookup Engine
 ======================================
 Queries the NIST National Vulnerability Database API v2.0 for CVEs
 matching discovered product/version combinations.
@@ -127,7 +127,7 @@ def _load_kev():
 
         # Fetch live
         try:
-            req = urllib.request.Request(KEV_URL, headers={"User-Agent": "NetLogicReplace/2.0"})
+            req = urllib.request.Request(KEV_URL, headers={"User-Agent": "NetLogic/2.0"})
             with urllib.request.urlopen(req, timeout=10) as resp:
                 raw = json.loads(resp.read())
             _kev_ids = {v["cveID"] for v in raw.get("vulnerabilities", [])}
@@ -202,7 +202,7 @@ def nvd_is_available() -> bool:
     try:
         req = urllib.request.Request(
             "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=1",
-            headers={"User-Agent": "NetLogicReplace/2.0"}
+            headers={"User-Agent": "NetLogic/2.0"}
         )
         urllib.request.urlopen(req, timeout=5)
         return True

@@ -1,6 +1,6 @@
 ; ============================================================
-;  NetLogic Replace Installer — NSIS Script
-;  Produces: NetLogic Replace-2.0.0-Setup.exe
+;  NetLogic Installer — NSIS Script
+;  Produces: NetLogic-2.0.0-Setup.exe
 ;
 ;  Requirements:
 ;    NSIS 3.x  https://nsis.sourceforge.io/Download
@@ -11,13 +11,13 @@
 ;    makensis installer.nsi
 ; ============================================================
 
-!define APP_NAME        "NetLogic Replace"
+!define APP_NAME        "NetLogic"
 !define APP_VERSION     "2.0.0"
-!define APP_PUBLISHER   "NetLogic Replace Security Tools"
+!define APP_PUBLISHER   "NetLogic Security Tools"
 !define APP_URL         "https://github.com/YOUR_USERNAME/netlogic"
 !define APP_EXE         "netlogic.exe"
-!define INSTALL_DIR     "$PROGRAMFILES64\NetLogic Replace"
-!define UNINSTALL_KEY   "Software\Microsoft\Windows\CurrentVersion\Uninstall\NetLogicReplace"
+!define INSTALL_DIR     "$PROGRAMFILES64\NetLogic"
+!define UNINSTALL_KEY   "Software\Microsoft\Windows\CurrentVersion\Uninstall\NetLogic"
 !define MUI_ICON        "netlogic.ico"     ; Optional — comment out if no icon
 !define MUI_UNICON      "netlogic.ico"
 
@@ -29,7 +29,7 @@
 
 ; ── Installer metadata ──────────────────────────────────────
 Name          "${APP_NAME} ${APP_VERSION}"
-OutFile       "NetLogic Replace-${APP_VERSION}-Setup.exe"
+OutFile       "NetLogic-${APP_VERSION}-Setup.exe"
 InstallDir    "${INSTALL_DIR}"
 InstallDirRegKey HKLM "${UNINSTALL_KEY}" "InstallLocation"
 RequestExecutionLevel admin
@@ -38,13 +38,13 @@ Unicode True
 
 ; ── MUI Pages ───────────────────────────────────────────────
 !define MUI_ABORTWARNING
-!define MUI_WELCOMEPAGE_TITLE     "Welcome to NetLogic Replace ${APP_VERSION} Setup"
-!define MUI_WELCOMEPAGE_TEXT      "NetLogic Replace is an attack surface mapper and vulnerability correlator.$\r$\n$\r$\nThis wizard will install NetLogic Replace ${APP_VERSION} on your computer.$\r$\n$\r$\nClick Next to continue."
+!define MUI_WELCOMEPAGE_TITLE     "Welcome to NetLogic ${APP_VERSION} Setup"
+!define MUI_WELCOMEPAGE_TEXT      "NetLogic is an attack surface mapper and vulnerability correlator.$\r$\n$\r$\nThis wizard will install NetLogic ${APP_VERSION} on your computer.$\r$\n$\r$\nClick Next to continue."
 !define MUI_FINISHPAGE_RUN        "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT   "Open a terminal in the install directory"
 !define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\README.md"
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "View README"
-!define MUI_FINISHPAGE_LINK       "NetLogic Replace on GitHub"
+!define MUI_FINISHPAGE_LINK       "NetLogic on GitHub"
 !define MUI_FINISHPAGE_LINK_LOCATION "${APP_URL}"
 
 !insertmacro MUI_PAGE_WELCOME
@@ -66,7 +66,7 @@ VIProductVersion                  "2.0.0.0"
 VIAddVersionKey "ProductName"     "${APP_NAME}"
 VIAddVersionKey "ProductVersion"  "${APP_VERSION}"
 VIAddVersionKey "CompanyName"     "${APP_PUBLISHER}"
-VIAddVersionKey "FileDescription" "NetLogic Replace Installer"
+VIAddVersionKey "FileDescription" "NetLogic Installer"
 VIAddVersionKey "FileVersion"     "${APP_VERSION}"
 VIAddVersionKey "LegalCopyright"  "For authorized security assessments only"
 
@@ -74,7 +74,7 @@ VIAddVersionKey "LegalCopyright"  "For authorized security assessments only"
 ;  COMPONENTS
 ; ============================================================
 
-Section "NetLogic Replace Core" SecCore
+Section "NetLogic Core" SecCore
   SectionIn RO   ; Required — cannot be deselected
   
   SetOutPath "$INSTDIR"
@@ -123,36 +123,36 @@ Section "Add to System PATH" SecPath
 SectionEnd
 
 Section "Desktop Shortcut" SecDesktop
-  CreateShortcut "$DESKTOP\NetLogic Replace Terminal.lnk" \
+  CreateShortcut "$DESKTOP\NetLogic Terminal.lnk" \
     "cmd.exe" \
     '/K "cd /d $INSTDIR && echo NetLogic ready. Type: netlogic.exe --help"' \
     "$INSTDIR\${APP_EXE}" 0
 SectionEnd
 
 Section "Start Menu Shortcuts" SecStartMenu
-  CreateDirectory "$SMPROGRAMS\NetLogic Replace"
+  CreateDirectory "$SMPROGRAMS\NetLogic"
   
   ; Open CMD in install dir
-  CreateShortcut "$SMPROGRAMS\NetLogic Replace\NetLogic Replace Terminal.lnk" \
+  CreateShortcut "$SMPROGRAMS\NetLogic\NetLogic Terminal.lnk" \
     "cmd.exe" \
     '/K "cd /d $INSTDIR && netlogic.exe --help"' \
     "$INSTDIR\${APP_EXE}" 0
   
   ; README
-  CreateShortcut "$SMPROGRAMS\NetLogic Replace\README.lnk" \
+  CreateShortcut "$SMPROGRAMS\NetLogic\README.lnk" \
     "$INSTDIR\README.md"
   
   ; Uninstaller
-  CreateShortcut "$SMPROGRAMS\NetLogic Replace\Uninstall NetLogic Replace.lnk" \
+  CreateShortcut "$SMPROGRAMS\NetLogic\Uninstall NetLogic.lnk" \
     "$INSTDIR\Uninstall.exe"
 SectionEnd
 
 ; ── Component descriptions ────────────────────────────────────
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecCore}      "NetLogic Replace executable and documentation. Required."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecCore}      "NetLogic executable and documentation. Required."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecPath}      "Add NetLogic to system PATH — run 'netlogic' from any terminal window."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop}   "Add a shortcut to your Desktop that opens a terminal ready to use NetLogic Replace."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecStartMenu} "Add NetLogic Replace to the Start Menu."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop}   "Add a shortcut to your Desktop that opens a terminal ready to use NetLogic."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecStartMenu} "Add NetLogic to the Start Menu."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 ; ============================================================
@@ -168,9 +168,9 @@ Section "Uninstall"
   RMDir  "$INSTDIR"
   
   ; Remove shortcuts
-  Delete "$DESKTOP\NetLogic Replace Terminal.lnk"
-  Delete "$SMPROGRAMS\NetLogic Replace\*.*"
-  RMDir  "$SMPROGRAMS\NetLogic Replace"
+  Delete "$DESKTOP\NetLogic Terminal.lnk"
+  Delete "$SMPROGRAMS\NetLogic\*.*"
+  RMDir  "$SMPROGRAMS\NetLogic"
   
   ; Remove from PATH
   ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path"
@@ -188,7 +188,7 @@ Section "Uninstall"
     RMDir /r "$PROFILE\.netlogic"
   SkipCache:
   
-  DetailPrint "NetLogic Replace has been uninstalled."
+  DetailPrint "NetLogic has been uninstalled."
 SectionEnd
 
 ; ============================================================

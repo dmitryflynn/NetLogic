@@ -1,5 +1,5 @@
 """
-NetLogic Replace unit tests — no network required
+NetLogic unit tests — no network required
 """
 import sys, os, unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

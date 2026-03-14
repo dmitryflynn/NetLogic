@@ -1,5 +1,5 @@
 """
-NetLogic Replace - JSON Stream Bridge
+NetLogic - JSON Stream Bridge
 Wraps the scanner to emit newline-delimited JSON events for the Electron frontend.
 Each line is a JSON object: {"type": "...", "data": {...}} or {"type": "error", "message": "..."}
 """

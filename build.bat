@@ -157,15 +157,15 @@ if errorlevel 1 (
     pause & exit /b 1
 )
 
-if exist "NetLogic Replace-%APP_VERSION%-Setup.exe" (
-    for %%A in ("NetLogic Replace-%APP_VERSION%-Setup.exe") do (
+if exist "NetLogic-%APP_VERSION%-Setup.exe" (
+    for %%A in ("NetLogic-%APP_VERSION%-Setup.exe") do (
         set /a INST_MB=%%~zA / 1048576
     )
     echo.
     echo ============================================================
     echo   BUILD COMPLETE
     echo ============================================================
-    echo   Installer : NetLogic Replace-%APP_VERSION%-Setup.exe  (!INST_MB! MB)
+    echo   Installer : NetLogic-%APP_VERSION%-Setup.exe  (!INST_MB! MB)
     echo   Standalone: dist\netlogic.exe
     echo ============================================================
 ) else (
