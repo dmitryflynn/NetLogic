@@ -60,7 +60,7 @@ function createWindow() {
     transparent: false,
     backgroundColor: '#0a0d12',
     show: false,
-    icon: path.join(__dirname, '..', 'assets', 'icon.ico'),
+    icon: path.join(__dirname, '..', 'netlogic.png'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -89,7 +89,7 @@ function createWindow() {
 }
 
 function createTray() {
-  const iconPath = path.join(__dirname, '..', 'assets', 'tray.ico');
+  const iconPath = path.join(__dirname, '..', 'netlogic.png');
   if (!fs.existsSync(iconPath)) return;
 
   tray = new Tray(iconPath);

@@ -6,11 +6,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('src', 'src')],
-    hiddenimports=['src.scanner', 'src.cve_correlator', 'src.nvd_lookup', 'src.osint', 'src.reporter', 'src.tls_analyzer', 'src.header_audit', 'src.takeover', 'src.stack_fingerprint', 'src.dns_security', 'src.json_bridge', 'ssl', '_ssl', 'socket', 'concurrent.futures', 'ipaddress', 'hashlib', 'threading'],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['tkinter', 'matplotlib', 'numpy', 'pandas', 'PIL'],
+    excludes=[],
     noarchive=False,
     optimize=0,
 )
@@ -35,5 +35,4 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    version='version_info.txt',
 )
