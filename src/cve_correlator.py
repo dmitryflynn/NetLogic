@@ -13,6 +13,7 @@ Flow:
 
 import re
 import os
+import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -146,6 +147,12 @@ def extract_product_version(banner_obj) -> tuple[Optional[str], Optional[str]]:
     if hasattr(banner_obj, 'product') and banner_obj.product:
         product = banner_obj.product.lower().strip()
         version = getattr(banner_obj, 'version', None)
+
+        # Skip generic HTTP product info (e.g., "http 1.1") and instead
+        # fall back to service+port inference.
+        if product.startswith('http'):
+            return None, None
+
         return product, version
 
     # Raw string banner
@@ -161,15 +168,19 @@ def extract_product_version(banner_obj) -> tuple[Optional[str], Optional[str]]:
             version = m.group(1) if m.lastindex and m.lastindex >= 1 else None
             # If no product_name in pattern, try to infer from raw
             if product_name is None:
-                # Try to match known products in the raw string
-                for key in PRODUCT_KEYWORD_MAP:
+                # Try to match known products in the raw string (skip generic placeholders)
+                for key, mapped in PRODUCT_KEYWORD_MAP.items():
+                    if mapped is None:
+                        continue
                     if key in raw_lower:
                         return key, version
                 return None, version
             return product_name, version
 
     # Last resort: check if any known product name appears in the banner
-    for key in PRODUCT_KEYWORD_MAP:
+    for key, mapped in PRODUCT_KEYWORD_MAP.items():
+        if mapped is None:
+            continue
         if len(key) > 3 and key in raw_lower:
             # Try to find a version number nearby
             vm = re.search(r'[\s/v]([\d]+\.[\d]+(?:\.[\d]+)?)', raw)
@@ -201,7 +212,9 @@ def infer_product_from_service(service: str, port: int) -> Optional[str]:
         25:    "postfix",
         1433:  "mssql",
     }
-    if service_lower in PRODUCT_KEYWORD_MAP:
+    # Only return service name if it maps to a real product (not a generic placeholder)
+    mapped = PRODUCT_KEYWORD_MAP.get(service_lower)
+    if mapped:
         return service_lower
     return port_map.get(port)
 
@@ -274,6 +287,7 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
     # Check NVD availability on first run
     from src.nvd_lookup import nvd_is_available, _nvd_unavailable
     if _nvd_unavailable or not nvd_is_available():
+        print("  [!] NVD API unreachable — using built-in offline signatures", file=sys.stderr)
         if verbose:
             print("  [!] NVD API unreachable — using built-in offline signatures")
         return _offline_correlate(ports, min_cvss)
@@ -288,9 +302,19 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
         if banner:
             product, version = extract_product_version(banner)
 
+        # Treat generic HTTP/HTTPS banner values as unknown so we can infer from port
+        if product and product.startswith('http'):
+            product = None
+            version = None
+
+        if verbose and product:
+            print(f"Correlating port {port}: product={product!r} version={version!r}", file=sys.stderr)
+
         # Fall back to service/port inference if no banner
         if not product:
             product = infer_product_from_service(service, port)
+            if verbose and product:
+                print(f"Inferred product from port {port}: {product!r}", file=sys.stderr)
 
         if not product:
             continue
@@ -331,6 +355,7 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
 
     # Sort by risk score descending
     results.sort(key=lambda m: m.risk_score, reverse=True)
+    print(f"Total CVEs found: {len(results)}", file=sys.stderr)
     return results
 
 

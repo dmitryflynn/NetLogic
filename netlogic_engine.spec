@@ -1,56 +1,25 @@
-# netlogic_engine.spec
-# PyInstaller spec to bundle the Python scanner engine into a standalone binary.
-# Used by the Windows build pipeline so the app doesn't require Python installed.
-#
-# Build with:
-#   pip install pyinstaller
-#   pyinstaller netlogic_engine.spec
+# -*- mode: python ; coding: utf-8 -*-
 
-import os
-
-block_cipher = None
 
 a = Analysis(
     ['netlogic.py'],
-    pathex=[os.getcwd()],
+    pathex=[],
     binaries=[],
-    datas=[
-        ('src/*.py', 'src'),
-    ],
-    hiddenimports=[
-        'src.scanner',
-        'src.cve_correlator',
-        'src.osint',
-        'src.reporter',
-        'src.json_bridge',
-        'concurrent.futures',
-        'ssl',
-        'ipaddress',
-        'socket',
-        'json',
-        'urllib.request',
-        'urllib.parse',
-        're',
-        'dataclasses',
-        'typing',
-    ],
+    datas=[('src', 'src')],
+    hiddenimports=['ssl'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['tkinter', 'matplotlib', 'numpy', 'PIL', 'cv2'],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
+    excludes=[],
     noarchive=False,
+    optimize=0,
 )
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
     a.scripts,
     a.binaries,
-    a.zipfiles,
     a.datas,
     [],
     name='netlogic_engine',
@@ -60,11 +29,10 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,          # Console app — output goes to stdout for Electron to read
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='assets/icon.ico',
 )

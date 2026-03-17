@@ -1,5 +1,5 @@
 """
-NetLogic - JSON Stream Bridge
+NetLogic Replace - JSON Stream Bridge
 Wraps the scanner to emit newline-delimited JSON events for the Electron frontend.
 Each line is a JSON object: {"type": "...", "data": {...}} or {"type": "error", "message": "..."}
 """
@@ -60,10 +60,8 @@ def run_streaming_scan(target: str, ports: list, timeout: float,
         "scan_duration_s": result.scan_duration_s,
     })
 
-    # Emit each open port
+    # Ports already emitted in real-time inside _scan_streaming
     emit("progress", {"percent": 60, "status": f"Found {len(result.ports)} open ports, correlating CVEs…"})
-    for p in result.ports:
-        emit("port", asdict(p))
 
     # CVE correlation
     vuln_matches = correlate(result.ports)

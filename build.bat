@@ -84,6 +84,8 @@ echo.
     --hidden-import ipaddress ^
     --hidden-import hashlib ^
     --hidden-import threading ^
+    --hidden-import certifi ^
+    --hidden-import requests ^
     --exclude-module tkinter ^
     --exclude-module matplotlib ^
     --exclude-module numpy ^

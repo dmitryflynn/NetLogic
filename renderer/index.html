@@ -95,12 +95,6 @@ html, body {
   color: var(--text-bright);
 }
 
-#titlebar-logo img {
-  width: 20px;
-  height: 20px;
-  object-fit: contain;
-}
-
 #titlebar-logo .dot {
   width: 8px; height: 8px;
   background: var(--accent);
@@ -454,18 +448,16 @@ html, body {
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 18px 20px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   transition: border-color 0.2s;
-  min-height: 88px;
-  justify-content: center;
 }
 .stat-card:hover { border-color: var(--text-dim); }
 .stat-card .num {
   font-family: var(--font-display);
-  font-size: 36px;
+  font-size: 28px;
   font-weight: 800;
   line-height: 1;
   color: var(--accent);
@@ -473,7 +465,7 @@ html, body {
 .stat-card .num.red { color: var(--critical); }
 .stat-card .num.orange { color: var(--high); }
 .stat-card .num.yellow { color: var(--medium); }
-.stat-card .lbl { font-size: 12px; color: var(--text-dim); font-weight: 500; letter-spacing: 0.05em; }
+.stat-card .lbl { font-size: 11px; color: var(--text-dim); font-weight: 500; }
 
 /* ─── Section Headers ─── */
 .section-header {
@@ -645,6 +637,9 @@ html, body {
   background: var(--bg-base);
   color: var(--text-dim);
   max-height: 240px;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 #log-output .log-info { color: var(--text-dim); }
 #log-output .log-port { color: var(--accent); }
@@ -845,7 +840,7 @@ html, body {
   <div id="titlebar">
     <div id="titlebar-logo">
       <div class="dot"></div>
-      NETLOGIC REPLACE
+      NETLOGIC
     </div>
     <div id="titlebar-spacer"></div>
     <div id="titlebar-status">READY</div>
@@ -924,6 +919,9 @@ html, body {
               </label>
               <label class="toggle-item">
                 <input type="checkbox" id="opt-cidr"> CIDR
+              </label>
+              <label class="toggle-item">
+                <input type="checkbox" id="opt-full"> FULL
               </label>
             </div>
           </div>
@@ -1016,13 +1014,13 @@ html, body {
         <div class="about-block">
           <h3>Version Info</h3>
           <div class="version-info" id="version-info">
-            <span>App <span class="val">NetLogic Replace 1.0.0</span></span>
+            <span>App <span class="val">NetLogic v2.0.0</span></span>
           </div>
         </div>
         <div class="about-block">
           <h3>Legal Notice</h3>
           <p>
-            NetLogic Replace is for authorized security assessments only. Always obtain explicit written permission before scanning systems you do not own. Unauthorized scanning may violate the Computer Fraud and Abuse Act and equivalent laws.
+            NetLogic is for authorized security assessments only. Always obtain explicit written permission before scanning systems you do not own. Unauthorized scanning may violate the Computer Fraud and Abuse Act and equivalent laws.
           </p>
         </div>
       </div><!-- /about-view -->
@@ -1035,7 +1033,7 @@ html, body {
 
 <script>
 /* ═══════════════════════════════════════════════════════════════
-   NETLOGIC REPLACE RENDERER — App Logic
+   NETLOGIC RENDERER — App Logic
 ═══════════════════════════════════════════════════════════════ */
 
 // ─── State ────────────────────────────────────────────────────
@@ -1070,12 +1068,18 @@ function startScan() {
   state.hostInfo = null;
   state.scanning = true;
 
+  const fullScan = document.getElementById('opt-full').checked;
   const config = {
     target,
-    portSet:  document.getElementById('port-set').value,
+    portSet:  fullScan ? 'full' : document.getElementById('port-set').value,
     timeout:  parseFloat(document.getElementById('timeout-val').value) || 2,
-    osint:    document.getElementById('opt-osint').checked,
+    osint:    fullScan || document.getElementById('opt-osint').checked,
     cidr:     document.getElementById('opt-cidr').checked,
+    full:     fullScan,
+    tls:      fullScan,
+    headers:  fullScan,
+    dns:      fullScan,
+    stack:    fullScan,
     threads:  100,
   };
 
@@ -1155,6 +1159,7 @@ function handleHostInfo(d) {
 }
 
 function handlePort(d) {
+  if (state.ports.some(p => p.port === d.port)) return; // deduplicate
   state.ports.push(d);
   appendLog(`Port ${d.port}/${d.service || '?'} open  ${d.banner?.product || ''} ${d.banner?.version || ''}`, 'port');
   renderPortTable();
@@ -1466,7 +1471,7 @@ async function init() {
   try {
     const v = await window.netlogic.getVersions();
     document.getElementById('version-info').innerHTML = `
-      <span>App <span class="val">NetLogic Replace 1.0.0</span></span>
+      <span>App <span class="val">NetLogic v2.0.0</span></span>
       <span>Electron <span class="val">${v.electron}</span></span>
       <span>Node <span class="val">${v.node}</span></span>
       <span>Platform <span class="val">${v.platform}</span></span>

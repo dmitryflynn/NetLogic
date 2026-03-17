@@ -174,154 +174,6 @@ def print_takeover_results(result, no_color=False):
         print(f"  {C.GREEN if not no_color else ''}No takeover vulnerabilities detected.{reset}")
 
 
-# ─── Main Single-Host Runner ──────────────────────────────────────────────────
-
-def run_single(target, args):
-    do_tls      = args.tls      or args.full
-    do_headers  = args.headers  or args.full
-    do_takeover = args.takeover or args.full
-    do_osint    = args.osint    or args.full
-    no_color    = args.no_color
-
-    ports = resolve_ports(args.ports)
-    print(f"[*] Scanning {target} ({len(ports)} ports)…")
-    host_result = scan_host(target, ports=ports, max_workers=args.threads, timeout=args.timeout)
-
-    from src.nvd_lookup import cache_stats
-    stats = cache_stats()
-    cache_note = f"(cache: {stats['entries']} entries)" if stats['entries'] > 0 else "(live NVD queries — first run may be slow)"
-    print(f"[*] Correlating CVEs via NVD API {cache_note}…")
-    vuln_matches = correlate(host_result.ports, min_cvss=getattr(args, "min_cvss", 4.0), verbose=True)
-
-    # ── TLS Analysis ──
-    tls_results = []
-    if do_tls:
-        from src.tls_analyzer import analyze_tls_ports
-        tls_ports = [p.port for p in host_result.ports if p.tls or p.port in (443,8443,993,995,465)]
-        if not tls_ports:
-            tls_ports = [443]
-        print(f"[*] Running TLS analysis on ports {tls_ports}…")
-        tls_results = analyze_tls_ports(target, tls_ports)
-
-    # ── Header Audit ──
-    header_audit = None
-    if do_headers:
-        from src.header_audit import audit_headers
-        http_port = next((p.port for p in host_result.ports if p.service in ("http","https","http-alt","https-alt")), 443)
-        print(f"[*] Auditing HTTP security headers (port {http_port})…")
-        header_audit = audit_headers(target, http_port)
-
-    # ── Takeover Detection ──
-    takeover_result = None
-    if do_takeover:
-        from src.takeover import discover_and_check
-        print(f"[*] Checking subdomains for takeover (CT log discovery)…")
-        takeover_result = discover_and_check(target)
-
-    # ── Stack Fingerprint ──
-    stack_result = None
-    do_stack = args.full or getattr(args, 'stack', False) or do_headers
-    if do_stack or do_headers:
-        from src.stack_fingerprint import fingerprint_stack
-        http_port2 = next((p.port for p in host_result.ports
-                          if p.service in ("http","https","http-alt","https-alt")), 443)
-        print(f"[*] Fingerprinting technology stack…")
-        stack_result = fingerprint_stack(target, http_port2)
-
-    # ── DNS Security ──
-    dns_result = None
-    do_dns = args.full or getattr(args, 'dns', False)
-    if do_dns:
-        from src.dns_security import check_dns_security
-        print(f"[*] Checking DNS/email security (SPF, DKIM, DMARC, DNSSEC)…")
-        dns_result = check_dns_security(target)
-
-    # ── OSINT ──
-    osint_result = None
-    if do_osint:
-        print(f"[*] Running passive OSINT…")
-        osint_result = run_osint(target, ip=host_result.ip)
-
-    # ── Output ──
-    if args.report in ("terminal", "all"):
-        print_terminal_report(host_result, vuln_matches, osint_result)
-        print_tls_results(tls_results, no_color)
-        print_header_results(header_audit, no_color)
-        print_stack_results(stack_result, no_color)
-        print_dns_results(dns_result, no_color)
-        print_takeover_results(takeover_result, no_color)
-
-    safe_name = target.replace("/","_").replace(":","_")
-    ts = time.strftime("%Y%m%d_%H%M%S")
-
-    if args.report in ("json", "all"):
-        os.makedirs(args.out, exist_ok=True)
-        report = generate_json_report(host_result, vuln_matches, osint_result)
-        # Embed new results in JSON
-        if tls_results:
-            from dataclasses import asdict
-            report["tls"] = [asdict(r) for r in tls_results]
-        if header_audit:
-            from dataclasses import asdict
-            report["headers"] = asdict(header_audit)
-        if takeover_result:
-            from dataclasses import asdict
-            report["takeover"] = asdict(takeover_result)
-        save_json_report(report, os.path.join(args.out, f"netlogic_{safe_name}_{ts}.json"))
-
-    if args.report in ("html", "all"):
-        os.makedirs(args.out, exist_ok=True)
-        html_content = generate_html_report(host_result, vuln_matches, osint_result)
-        save_html_report(html_content, os.path.join(args.out, f"netlogic_{safe_name}_{ts}.html"))
-
-
-def run_cidr(cidr, args):
-    ports = resolve_ports(args.ports)
-    print(f"[*] CIDR scan: {cidr}…")
-    results = scan_cidr(cidr, ports=ports, max_workers=args.threads, timeout=args.timeout)
-    print(f"[+] {len(results)} live host(s) found.\n")
-    for hr in results:
-        vm = correlate(hr.ports)
-        if args.report in ("terminal","all"):
-            print_terminal_report(hr, vm)
-        if args.report in ("json","all"):
-            os.makedirs(args.out, exist_ok=True)
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            save_json_report(generate_json_report(hr, vm),
-                             os.path.join(args.out, f"netlogic_{hr.ip}_{ts}.json"))
-
-
-def main():
-    args = parse_args()
-
-    if hasattr(args, 'json_stream') and args.json_stream:
-        from src.json_bridge import run_streaming_scan, emit
-        ports = resolve_ports(args.ports)
-        try:
-            run_streaming_scan(
-                target=args.target, ports=ports, timeout=args.timeout,
-                threads=args.threads, do_osint=(args.osint or args.full),
-                cidr=args.cidr,
-            )
-        except Exception as e:
-            emit("error", message=str(e))
-        return
-
-    if not args.no_color:
-        print(BANNER)
-    else:
-        print(f"NetLogic v{VERSION}\n")
-    print(f"  For authorized use only.\n")
-
-    if args.cidr:
-        run_cidr(args.target, args)
-    else:
-        run_single(args.target, args)
-
-
-if __name__ == "__main__":
-    main()
-
 # ─── Stack Fingerprint Printer ────────────────────────────────────────────────
 
 def print_stack_results(stack, no_color=False):
@@ -477,3 +329,150 @@ def print_dns_results(dns, no_color=False):
             print(f"  {'':12}{D}{f['detail'][:110]}{'…' if len(f['detail'])>110 else ''}{R}")
             if f.get('recommendation'):
                 print(f"  {'':12}{Cy}Fix: {f['recommendation'][:90]}{R}")
+
+# ─── Main Single-Host Runner ──────────────────────────────────────────────────
+
+def run_single(target, args):
+    do_tls      = args.tls      or args.full
+    do_headers  = args.headers  or args.full
+    do_takeover = args.takeover or args.full
+    do_osint    = args.osint    or args.full
+    no_color    = args.no_color
+
+    ports = resolve_ports(args.ports)
+    print(f"[*] Scanning {target} ({len(ports)} ports)…")
+    host_result = scan_host(target, ports=ports, max_workers=args.threads, timeout=args.timeout)
+
+    from src.nvd_lookup import cache_stats
+    stats = cache_stats()
+    cache_note = f"(cache: {stats['entries']} entries)" if stats['entries'] > 0 else "(live NVD queries — first run may be slow)"
+    print(f"[*] Correlating CVEs via NVD API {cache_note}…")
+    vuln_matches = correlate(host_result.ports, min_cvss=getattr(args, "min_cvss", 4.0), verbose=True)
+
+    # ── TLS Analysis ──
+    tls_results = []
+    if do_tls:
+        from src.tls_analyzer import analyze_tls_ports
+        tls_ports = [p.port for p in host_result.ports if p.tls or p.port in (443,8443,993,995,465)]
+        if not tls_ports:
+            tls_ports = [443]
+        print(f"[*] Running TLS analysis on ports {tls_ports}…")
+        tls_results = analyze_tls_ports(target, tls_ports)
+
+    # ── Header Audit ──
+    header_audit = None
+    if do_headers:
+        from src.header_audit import audit_headers
+        http_port = next((p.port for p in host_result.ports if p.service in ("http","https","http-alt","https-alt")), 443)
+        print(f"[*] Auditing HTTP security headers (port {http_port})…")
+        header_audit = audit_headers(target, http_port)
+
+    # ── Takeover Detection ──
+    takeover_result = None
+    if do_takeover:
+        from src.takeover import discover_and_check
+        print(f"[*] Checking subdomains for takeover (CT log discovery)…")
+        takeover_result = discover_and_check(target)
+
+    # ── Stack Fingerprint ──
+    stack_result = None
+    do_stack = args.full or getattr(args, 'stack', False) or do_headers
+    if do_stack or do_headers:
+        from src.stack_fingerprint import fingerprint_stack
+        http_port2 = next((p.port for p in host_result.ports
+                          if p.service in ("http","https","http-alt","https-alt")), 443)
+        print(f"[*] Fingerprinting technology stack…")
+        stack_result = fingerprint_stack(target, http_port2)
+
+    # ── DNS Security ──
+    dns_result = None
+    do_dns = args.full or getattr(args, 'dns', False)
+    if do_dns:
+        from src.dns_security import check_dns_security
+        print(f"[*] Checking DNS/email security (SPF, DKIM, DMARC, DNSSEC)…")
+        dns_result = check_dns_security(target)
+
+    # ── OSINT ──
+    osint_result = None
+    if do_osint:
+        print(f"[*] Running passive OSINT…")
+        osint_result = run_osint(target, ip=host_result.ip)
+
+    # ── Output ──
+    if args.report in ("terminal", "all"):
+        print_terminal_report(host_result, vuln_matches, osint_result)
+        print_tls_results(tls_results, no_color)
+        print_header_results(header_audit, no_color)
+        print_stack_results(stack_result, no_color)
+        print_dns_results(dns_result, no_color)
+        print_takeover_results(takeover_result, no_color)
+
+    safe_name = target.replace("/","_").replace(":","_")
+    ts = time.strftime("%Y%m%d_%H%M%S")
+
+    if args.report in ("json", "all"):
+        os.makedirs(args.out, exist_ok=True)
+        report = generate_json_report(host_result, vuln_matches, osint_result)
+        # Embed new results in JSON
+        if tls_results:
+            from dataclasses import asdict
+            report["tls"] = [asdict(r) for r in tls_results]
+        if header_audit:
+            from dataclasses import asdict
+            report["headers"] = asdict(header_audit)
+        if takeover_result:
+            from dataclasses import asdict
+            report["takeover"] = asdict(takeover_result)
+        save_json_report(report, os.path.join(args.out, f"netlogic_{safe_name}_{ts}.json"))
+
+    if args.report in ("html", "all"):
+        os.makedirs(args.out, exist_ok=True)
+        html_content = generate_html_report(host_result, vuln_matches, osint_result)
+        save_html_report(html_content, os.path.join(args.out, f"netlogic_{safe_name}_{ts}.html"))
+
+
+def run_cidr(cidr, args):
+    ports = resolve_ports(args.ports)
+    print(f"[*] CIDR scan: {cidr}…")
+    results = scan_cidr(cidr, ports=ports, max_workers=args.threads, timeout=args.timeout)
+    print(f"[+] {len(results)} live host(s) found.\n")
+    for hr in results:
+        vm = correlate(hr.ports)
+        if args.report in ("terminal","all"):
+            print_terminal_report(hr, vm)
+        if args.report in ("json","all"):
+            os.makedirs(args.out, exist_ok=True)
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            save_json_report(generate_json_report(hr, vm),
+                             os.path.join(args.out, f"netlogic_{hr.ip}_{ts}.json"))
+
+
+def main():
+    args = parse_args()
+
+    if hasattr(args, 'json_stream') and args.json_stream:
+        from src.json_bridge import run_streaming_scan, emit
+        ports = resolve_ports(args.ports)
+        try:
+            run_streaming_scan(
+                target=args.target, ports=ports, timeout=args.timeout,
+                threads=args.threads, do_osint=(args.osint or args.full),
+                cidr=args.cidr,
+            )
+        except Exception as e:
+            emit("error", message=str(e))
+        return
+
+    if not args.no_color:
+        print(BANNER)
+    else:
+        print(f"NetLogic v{VERSION}\n")
+    print(f"  For authorized use only.\n")
+
+    if args.cidr:
+        run_cidr(args.target, args)
+    else:
+        run_single(args.target, args)
+
+if __name__ == "__main__":
+    main()

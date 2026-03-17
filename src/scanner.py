@@ -8,6 +8,7 @@ import ssl
 import concurrent.futures
 import json
 import re
+import sys
 import struct
 import time
 from dataclasses import dataclass, field, asdict

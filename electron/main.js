@@ -22,22 +22,44 @@ const IS_MAC = process.platform === 'darwin';
  * Priority: bundled PyInstaller binary → system python3 → python
  */
 function getPythonPath() {
-  // 1. Bundled binary (distributed with the app via PyInstaller)
-  const bundled = path.join(
-    process.resourcesPath || path.join(__dirname, '..'),
-    'python_dist',
-    IS_WIN ? 'netlogic_engine.exe' : 'netlogic_engine'
-  );
-  if (fs.existsSync(bundled)) return { exe: bundled, script: null };
+  const engineName = IS_WIN ? 'netlogic_engine.exe' : 'netlogic_engine';
 
-  // 2. System Python with script
-  const scriptPath = path.join(__dirname, '..', 'netlogic.py');
-  for (const candidate of ['python3', 'python', 'py']) {
+  // All possible locations for the bundled engine
+  const candidateDirs = [
+    process.resourcesPath,                          // installed app: resources/
+    path.join(process.resourcesPath, 'python_dist'),// resources/python_dist/
+    path.join(__dirname, '..', 'python_dist'),      // dev: project/python_dist/
+    path.join(__dirname, '..'),                     // dev: project root
+    path.dirname(app.getPath('exe')),               // next to the exe
+    path.join(path.dirname(app.getPath('exe')), 'resources', 'python_dist'),
+    path.join(path.dirname(app.getPath('exe')), 'resources'),
+  ];
+
+  for (const dir of candidateDirs) {
+    const enginePath = path.join(dir, engineName);
+    console.log(`[python] checking: ${enginePath}`);
+    if (fs.existsSync(enginePath)) {
+      console.log(`[python] found engine at: ${enginePath}`);
+      return { exe: enginePath, script: null };
+    }
+  }
+
+  // Fall back to system Python + script
+  const scriptPaths = [
+    path.join(process.resourcesPath, 'netlogic.py'),
+    path.join(__dirname, '..', 'netlogic.py'),
+  ];
+  const scriptPath = scriptPaths.find(p => fs.existsSync(p)) || scriptPaths[1];
+
+  for (const candidate of ['python', 'python3', 'py']) {
     try {
       const result = require('child_process').spawnSync(
         candidate, ['--version'], { timeout: 2000 }
       );
-      if (result.status === 0) return { exe: candidate, script: scriptPath };
+      if (result.status === 0) {
+        console.log(`[python] using system ${candidate} with script: ${scriptPath}`);
+        return { exe: candidate, script: scriptPath };
+      }
     } catch {}
   }
 
@@ -183,15 +205,20 @@ function startScan(event, config) {
 function buildPythonArgs(config, scriptPath) {
   const args = [];
   if (scriptPath) args.push(scriptPath);
-  else args.push('--json-stream');   // bundled binary mode
 
   args.push(config.target);
-  args.push('--json-stream');        // machine-readable output mode
+  args.push('--json-stream');
   args.push('--ports', config.portSet || 'quick');
+  if (config.full)    args.push('--full');
   if (config.osint)   args.push('--osint');
+  if (config.tls)     args.push('--tls');
+  if (config.headers) args.push('--headers');
+  if (config.dns)     args.push('--dns');
+  if (config.stack)   args.push('--stack');
+  if (config.cidr)    args.push('--cidr');
   if (config.timeout) args.push('--timeout', String(config.timeout));
   if (config.threads) args.push('--threads', String(config.threads));
-  if (config.cidr)    args.push('--cidr');
+  args.push('--no-color');
 
   return args;
 }

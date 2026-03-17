@@ -18,15 +18,15 @@ Usage:
   from src.nvd_lookup import lookup_cves_for_service
   cves = lookup_cves_for_service("apache", "2.4.49")
 """
-
+import urllib.parse
+import urllib.request
+import urllib.error
 import os
 import re
 import json
 import time
 import hashlib
-import urllib.request
-import urllib.parse
-import urllib.error
+import requests
 from datetime import datetime, timezone
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -127,14 +127,14 @@ def _load_kev():
 
         # Fetch live
         try:
-            req = urllib.request.Request(KEV_URL, headers={"User-Agent": "NetLogic/2.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                raw = json.loads(resp.read())
-            _kev_ids = {v["cveID"] for v in raw.get("vulnerabilities", [])}
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            with open(KEV_CACHE, "w") as f:
-                json.dump({"ids": list(_kev_ids), "cached_at": time.time()}, f)
-            _kev_loaded = True
+            resp = requests.get(KEV_URL, headers={"User-Agent": "NetLogic/2.0"}, timeout=10)
+            if resp.status_code == 200:
+                raw = resp.json()
+                _kev_ids = {v["cveID"] for v in raw.get("vulnerabilities", [])}
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(KEV_CACHE, "w") as f:
+                    json.dump({"ids": list(_kev_ids), "cached_at": time.time()}, f)
+                _kev_loaded = True
         except Exception:
             _kev_loaded = True   # Don't retry on failure
 
@@ -176,36 +176,31 @@ def _nvd_request(params: dict) -> Optional[dict]:
 
     url = NVD_API_URL + "?" + urllib.parse.urlencode(params)
     try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        if e.code == 429:
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code == 200:
+            return resp.json()
+        elif resp.status_code == 429:
             # Rate limited — wait and retry once
             time.sleep(30)
-            try:
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    return json.loads(resp.read())
-            except Exception:
-                return None
+            resp = requests.get(url, headers=headers, timeout=15)
+            if resp.status_code == 200:
+                return resp.json()
         return None
-    except OSError:
+    except requests.exceptions.RequestException:
         # Network unreachable / DNS failure — stop trying for this session
         _nvd_unavailable = True
-        return None
-    except Exception:
         return None
 
 
 def nvd_is_available() -> bool:
     """Quick connectivity check."""
     try:
-        req = urllib.request.Request(
+        resp = requests.get(
             "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=1",
-            headers={"User-Agent": "NetLogic/2.0"}
+            headers={"User-Agent": "NetLogic/2.0"},
+            timeout=5
         )
-        urllib.request.urlopen(req, timeout=5)
-        return True
+        return resp.status_code == 200
     except Exception:
         return False
 

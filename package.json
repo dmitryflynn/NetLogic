@@ -2,6 +2,7 @@
   "name": "netlogic",
   "version": "1.0.0",
   "description": "Attack Surface Mapper & Vulnerability Correlator",
+  "author": "Dmitry Flynn",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
@@ -13,18 +14,19 @@
   "build": {
     "appId": "com.netlogic.app",
     "productName": "NetLogic",
-    "copyright": "Copyright © 2024",
+    "copyright": "Copyright © 2026 Dmitry Flynn",
+    "icon": "netlogic.ico",
     "directories": {
       "output": "dist",
-      "buildResources": "assets"
+      "buildResources": "."
     },
     "files": [
       "electron/**/*",
       "renderer/**/*",
       "src/**/*",
       "netlogic.py",
-      "assets/**/*",
-      "python_dist/**/*"
+      "netlogic.png",
+      "netlogic.ico"
     ],
     "extraResources": [
       {
@@ -35,29 +37,24 @@
     ],
     "win": {
       "target": [
-        {
-          "target": "nsis",
-          "arch": ["x64"]
-        },
-        {
-          "target": "portable",
-          "arch": ["x64"]
-        }
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
       ],
-      "icon": "assets/icon.ico",
-      "requestedExecutionLevel": "requireAdministrator"
+      "icon": "netlogic.ico",
+      "requestedExecutionLevel": "asInvoker",
+      "certificateFile": null,
+      "certificatePassword": null
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "allowElevation": true,
-      "installerIcon": "assets/icon.ico",
-      "uninstallerIcon": "assets/icon.ico",
-      "installerHeaderIcon": "assets/icon.ico",
+      "installerIcon": "netlogic.ico",
+      "uninstallerIcon": "netlogic.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "NetLogic",
-      "license": "LICENSE",
+      "license": "LICENSE.txt",
       "runAfterFinish": true
     },
     "portable": {
@@ -66,7 +63,7 @@
   },
   "devDependencies": {
     "electron": "^28.0.0",
-    "electron-builder": "^24.9.1"
+    "electron-builder": "^24.13.3"
   },
   "dependencies": {
     "electron-store": "^8.1.0"
