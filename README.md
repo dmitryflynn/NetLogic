@@ -13,7 +13,7 @@ NetLogic is a professional-grade network security reconnaissance tool that combi
 
 ## What makes this different?
 
-Most scanners stop at port discovery. NetLogic goes much further:
+Most scanners stop at port discovery, yet NetLogic goes much further:
 
 1. **Fingerprints** running services and extracts exact version strings via custom protocol probes (SSH, HTTP, FTP, Redis, MySQL, MongoDB…)
 2. **Queries the live NIST NVD API** for CVEs matching every discovered version — no stale hardcoded database, always current
