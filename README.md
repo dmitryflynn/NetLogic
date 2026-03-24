@@ -32,7 +32,7 @@ Most scanners stop at port discovery, yet NetLogic goes much further:
 ## Installation
 
 ```bash
-git clone https://github.com/yourusername/netlogic.git
+git clone https://github.com/dmitryflynn/netlogic.git
 cd netlogic
 # No third-party dependencies — pure Python 3.9+ standard library
 python netlogic.py --version
