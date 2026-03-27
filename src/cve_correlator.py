@@ -41,6 +41,9 @@ class CVE:
     kev: bool = False
     cwe: str = ""
     version_range: str = ""
+    has_metasploit: bool = False
+    has_public_exploit: bool = False
+    exploit_refs: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -53,6 +56,38 @@ class VulnMatch:
     risk_score: float = 0.0
     notes: list[str] = field(default_factory=list)
     source: str = "nvd"    # "nvd" | "cache" | "offline"
+    detection_confidence: str = "LOW"   # HIGH = version from banner, MEDIUM = product only, LOW = port guess
+
+
+# CVEs with confirmed public Metasploit modules
+METASPLOIT_CVE_IDS: set[str] = {
+    "CVE-2021-41773", "CVE-2021-44228", "CVE-2018-7600", "CVE-2014-3704",
+    "CVE-2017-5638",  "CVE-2019-0708",  "CVE-2017-0144", "CVE-2020-1938",
+    "CVE-2015-1427",  "CVE-2021-22205", "CVE-2011-2523", "CVE-2019-11510",
+    "CVE-2021-26855", "CVE-2020-5902",  "CVE-2019-19781","CVE-2020-14882",
+    "CVE-2007-2447",  "CVE-2017-7494",  "CVE-2022-26134","CVE-2019-11581",
+    "CVE-2021-32625", "CVE-2021-40438", "CVE-2019-9193", "CVE-2021-21972",
+    "CVE-2022-22965", "CVE-2021-44142", "CVE-2022-1388", "CVE-2022-36804",
+    "CVE-2024-23897", "CVE-2014-0160",  "CVE-2019-15846","CVE-2019-10149",
+    "CVE-2015-4852",  "CVE-2022-23131", "CVE-2022-27925","CVE-2012-1823",
+    "CVE-2019-11043", "CVE-2015-1635",  "CVE-2015-3306", "CVE-2019-12815",
+    "CVE-2012-2122",  "CVE-2021-22893", "CVE-2023-3519", "CVE-2021-21985",
+    "CVE-2020-2021",  "CVE-2022-3602",  "CVE-2020-36239","CVE-2021-37219",
+    "CVE-2024-3400",  "CVE-2023-20198", "CVE-2020-5135", "CVE-2021-20016",
+}
+
+# CVEs with confirmed public exploits on ExploitDB / GitHub / PacketStorm
+PUBLIC_EXPLOIT_CVE_IDS: set[str] = METASPLOIT_CVE_IDS | {
+    "CVE-2021-34473", "CVE-2024-21410", "CVE-2023-46214","CVE-2022-42475",
+    "CVE-2023-27997", "CVE-2018-13379", "CVE-2019-1579", "CVE-2020-3118",
+    "CVE-2018-0101",  "CVE-2023-4966",  "CVE-2020-15257","CVE-2019-5736",
+    "CVE-2022-21907", "CVE-2021-31166", "CVE-2021-38554","CVE-2023-28432",
+    "CVE-2019-20933", "CVE-2019-3826",  "CVE-2022-47966","CVE-2023-22515",
+    "CVE-2021-26084", "CVE-2022-32158", "CVE-2001-0529", "CVE-2021-44141",
+    "CVE-2020-13977", "CVE-2021-37344", "CVE-2019-0201", "CVE-2018-1002105",
+    "CVE-2016-8704",  "CVE-2018-1000115","CVE-2019-9670","CVE-2022-31626",
+    "CVE-2016-3115",  "CVE-2021-41617", "CVE-2018-15473","CVE-2014-0224",
+}
 
 
 # ─── Banner → Product/Version Extraction ─────────────────────────────────────
@@ -133,6 +168,106 @@ BANNER_PATTERNS = [
     (r"Drupal ([\d.]+)",                 "drupal"),
     (r"X-Generator: Drupal ([\d.]+)",    "drupal"),
 
+    # Jenkins
+    (r"X-Jenkins:\s*([\d.]+)",                "jenkins"),
+    (r"Jenkins[/ ]([\d.]+)",                   "jenkins"),
+    # Grafana
+    (r"Grafana/([\d.]+)",                      "grafana"),
+    (r"X-Grafana-Version:\s*([\d.]+)",         "grafana"),
+    # Kibana
+    (r'"number"\s*:\s*"([\d.]+)".*kibana',     "kibana"),
+    (r"kbn-name.*kibana",                      "kibana"),
+    # Confluence
+    (r"X-Confluence-Request-Time",             "confluence"),
+    (r"Confluence/([\d.]+)",                   "confluence"),
+    # Jira
+    (r"X-ASEN:\s*\S+",                         "jira"),
+    (r"Jira/([\d.]+)",                         "jira"),
+    # Bitbucket
+    (r"X-Atlassian-Token",                     "bitbucket"),
+    # Tomcat (extra patterns)
+    (r"Apache-Coyote/([\d.]+)",                "tomcat"),
+    # Spring Boot
+    (r"Spring Boot[/ ]([\d.]+)",               "spring"),
+    # GitLab
+    (r"X-Gitlab-Meta",                         "gitlab"),
+    (r"GitLab/([\d.]+)",                       "gitlab"),
+    # Memcached
+    (r"^VERSION ([\d.]+)",                     "memcached"),
+    # Docker API (port 2375/2376 JSON /version response)
+    (r'"Version"\s*:\s*"([\d.]+(?:-ce|-ee)?)"',"docker"),
+    # Kubernetes /version JSON
+    (r'"gitVersion"\s*:\s*"v([\d.]+)"',        "kubernetes"),
+    # etcd /version JSON
+    (r'"etcdserver"\s*:\s*"([\d.]+)"',         "etcd"),
+    # HashiCorp Vault
+    (r'"version"\s*:\s*"([\d.]+)".*vault',     "vault"),
+    (r"X-Vault-Request",                       "vault"),
+    # Consul
+    (r'"Config".*"Version"\s*:\s*"([\d.]+)"', "consul"),
+    # InfluxDB
+    (r"X-Influxdb-Version:\s*([\d.]+)",        "influxdb"),
+    # CouchDB
+    (r'Server:\s*CouchDB/([\d.]+)',            "couchdb"),
+    # RabbitMQ
+    (r"RabbitMQ ([\d.]+)",                     "rabbitmq"),
+    # HAProxy
+    (r"HAProxy/([\d.]+)",                      "haproxy"),
+    (r"via:.*haproxy[/ ]([\d.]+)",             "haproxy"),
+    # Lighttpd
+    (r"lighttpd/([\d.]+)",                     "lighttpd"),
+    # WebLogic
+    (r"WebLogic Server ([\d.]+)",              "weblogic"),
+    (r"BEA WebLogic/([\d.]+)",                 "weblogic"),
+    # JBoss/WildFly
+    (r"JBoss[/ ]([\d.]+)",                     "jboss"),
+    (r"WildFly/([\d.]+)",                      "wildfly"),
+    # GlassFish
+    (r"GlassFish(?:[^/]*)/([\d.]+)",           "glassfish"),
+    # ColdFusion
+    (r"ColdFusion[/ ]([\d.]+)",                "coldfusion"),
+    (r"X-Powered-By:.*ColdFusion",             "coldfusion"),
+    # phpMyAdmin
+    (r'content="phpMyAdmin ([\d.]+)',           "phpmyadmin"),
+    # Microsoft Exchange
+    (r"X-OWA-Version:\s*([\d.]+)",             "exchange"),
+    (r"X-FEServer:",                           "exchange"),
+    # Microsoft SharePoint
+    (r"MicrosoftSharePointTeamServices:\s*([\d.]+)", "sharepoint"),
+    # VNC protocol version
+    (r"RFB (\d{3})\.(\d{3})",                  "vnc"),
+    # Samba/SMB banner
+    (r"Samba ([\d.]+)",                        "samba"),
+    # OpenLDAP
+    (r"OpenLDAP/([\d.]+)",                     "openldap"),
+    # Apache Solr
+    (r'"solr-spec-version"\s*:\s*"([\d.]+)"',  "solr"),
+    # MinIO
+    (r"MinIO Object Storage",                  "minio"),
+    # Splunk
+    (r"X-Splunk-Request-Channel",              "splunk"),
+    # Nagios
+    (r"Nagios/([\d.]+)",                       "nagios"),
+    # Zabbix
+    (r"Zabbix ([\d.]+)",                       "zabbix"),
+    # Prometheus
+    (r"Prometheus/([\d.]+)",                   "prometheus"),
+    # Roundcube
+    (r"Roundcube Webmail ([\d.]+)",            "roundcube"),
+    # VMware vCenter
+    (r"VMware vCenter Server ([\d.]+)",        "vcenter"),
+    # Sendmail
+    (r"Sendmail ([\d.]+)",                     "sendmail"),
+    # PHP additional
+    (r"X-Powered-By:\s*PHP/([\d.]+)",          "php"),
+    # WordPress generator meta
+    (r'content="WordPress ([\d.]+)',           "wordpress"),
+    # Drupal generator meta
+    (r'content="Drupal ([\d.]+)',              "drupal"),
+    # Exim additional
+    (r"Exim ([\d.]+)",                         "exim"),
+    # Dovecot version
+    (r"Dovecot (?:ready|IMAP|POP3).{0,30}? ([\d.]+)", "dovecot"),
     # Generic version extraction fallback — service name + nearby version
     (r"([\d]+\.[\d]+\.[\d]+)",           None),  # pure version, no product
 ]
@@ -269,6 +404,9 @@ def _nvd_to_cve(nvd: NVDCve) -> CVE:
             parts.append(f"{op} {nvd.version_end}")
         ver_range = ", ".join(parts)
 
+    has_msf  = nvd.has_metasploit  or (nvd.id in METASPLOIT_CVE_IDS)
+    has_pub  = nvd.has_public_exploit or (nvd.id in PUBLIC_EXPLOIT_CVE_IDS)
+
     return CVE(
         id=nvd.id,
         description=nvd.description,
@@ -277,10 +415,13 @@ def _nvd_to_cve(nvd: NVDCve) -> CVE:
         vector=nvd.vector,
         published=nvd.published,
         references=nvd.references,
-        exploit_available=nvd.kev,
+        exploit_available=nvd.kev or has_msf,
         kev=nvd.kev,
         cwe=nvd.cwe,
         version_range=ver_range,
+        has_metasploit=has_msf,
+        has_public_exploit=has_pub,
+        exploit_refs=nvd.exploit_refs,
     )
 
 
@@ -313,6 +454,8 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
     offline_by_port: dict[int, VulnMatch] = {}
 
     for port_result in ports:
+        if getattr(port_result, 'state', 'open') != 'open':
+            continue
         port    = port_result.port
         service = getattr(port_result, 'service', '') or ''
         banner  = getattr(port_result, 'banner', None)
@@ -325,7 +468,14 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
             version = None
         if not product:
             product = infer_product_from_service(service, port)
-        
+
+        if banner and product and version:
+            _confidence = "HIGH"
+        elif banner and product:
+            _confidence = "MEDIUM"
+        else:
+            _confidence = "LOW"
+
         # User requirement: Only show actual vulnerabilities based on exact version matches.
         # Do not 'guess' or show baseline CVEs if we don't know the specific version running.
         if not product or not version:
@@ -342,7 +492,9 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
             matched_offline.append(CVE(
                 id=cve_id, description=desc, cvss_score=cvss,
                 severity=sev, vector=vec, published="",
-                exploit_available=(cvss >= 9.0),
+                exploit_available=(cve_id in PUBLIC_EXPLOIT_CVE_IDS or cvss >= 9.0),
+                has_metasploit=(cve_id in METASPLOIT_CVE_IDS),
+                has_public_exploit=(cve_id in PUBLIC_EXPLOIT_CVE_IDS),
             ))
 
         if matched_offline:
@@ -353,7 +505,7 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
             offline_by_port[port] = VulnMatch(
                 port=port, service=service, product=product, version=version,
                 cves=matched_offline, risk_score=calculate_risk(matched_offline),
-                notes=notes, source="offline",
+                notes=notes, source="offline", detection_confidence=_confidence,
             )
 
     # ── Step 2: if NVD is reachable, query and merge per port ────────────────
@@ -371,6 +523,14 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
                 version = None
             if not product:
                 product = infer_product_from_service(service, port)
+
+            if banner and product and version:
+                _confidence = "HIGH"
+            elif banner and product:
+                _confidence = "MEDIUM"
+            else:
+                _confidence = "LOW"
+
             if not product or not version:
                 if verbose and product:
                     print(f"  [NVD] {port}/{service} → {product} (version unknown)... skipping (no exact version)", file=sys.stderr)
@@ -400,6 +560,8 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
                 existing.cves.sort(key=lambda c: c.cvss_score, reverse=True)
                 existing.risk_score = calculate_risk(existing.cves)
                 existing.source = "nvd+offline"
+                if _confidence == "HIGH" and existing.detection_confidence != "HIGH":
+                    existing.detection_confidence = _confidence
                 if any(c.kev for c in existing.cves):
                     kev_ids = [c.id for c in existing.cves if c.kev]
                     kev_note = f"★ CISA KEV: {', '.join(kev_ids[:3])} — actively exploited in the wild"
@@ -416,7 +578,7 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
                 offline_by_port[port] = VulnMatch(
                     port=port, service=service, product=product, version=version,
                     cves=nvd_converted, risk_score=calculate_risk(nvd_converted),
-                    notes=notes, source="nvd",
+                    notes=notes, source="nvd", detection_confidence=_confidence,
                 )
 
     results = list(offline_by_port.values())
@@ -623,6 +785,62 @@ OFFLINE_SIGS = [
     ("windows",  lambda v: True,                 "CVE-2019-1040",  9.8, "CRITICAL", "", "Microsoft NTLM MIC bypass (Drop the MIC) enabling NTLM relay over SMB."),
     ("windows",  lambda v: True,                 "CVE-2022-30190", 7.8, "HIGH",     "", "Follina — Microsoft Support Diagnostic Tool RCE (reachable via HTTP handlers)."),
     ("iis",      lambda v: True,                 "CVE-2017-7269",  9.8, "CRITICAL", "", "IIS 6.0 WebDAV buffer overflow RCE (ExplodingCan)."),
+
+    # Grafana
+    ("grafana",  lambda v: _ver_lt(v, "9.2.4"),  "CVE-2021-43798", 7.5, "HIGH",     "", "Grafana unauthenticated path traversal — read arbitrary files on the server."),
+    ("grafana",  lambda v: _ver_lt(v, "8.3.10"), "CVE-2022-21703", 8.8, "HIGH",     "", "Grafana CSRF → RCE via datasource configuration."),
+    ("grafana",  lambda v: _ver_lt(v, "7.5.15"), "CVE-2022-31097", 8.8, "HIGH",     "", "Grafana stored XSS via AlertManager Matcher."),
+    # Kibana
+    ("kibana",   lambda v: _ver_lt(v, "6.6.1"),  "CVE-2019-7609",  10.0,"CRITICAL", "", "Kibana Timelion prototype pollution RCE (unauthenticated, widely exploited)."),
+    ("kibana",   lambda v: _ver_lt(v, "7.17.9"), "CVE-2022-23708", 4.3, "MEDIUM",   "", "Kibana ReDoS denial of service."),
+    # HashiCorp Vault
+    ("vault",    lambda v: _ver_lt(v, "1.9.4"),  "CVE-2022-40186", 9.8, "CRITICAL", "", "HashiCorp Vault JWT/OIDC auth method allows authentication bypass."),
+    ("vault",    lambda v: _ver_lt(v, "1.7.2"),  "CVE-2021-3024",  5.3, "MEDIUM",   "", "HashiCorp Vault SSRF via sys/wrapping/lookup endpoint."),
+    # HashiCorp Consul
+    ("consul",   lambda v: _ver_lt(v, "1.10.1"), "CVE-2021-37219", 8.8, "HIGH",     "", "HashiCorp Consul Raft RPC bypass → arbitrary code execution."),
+    # etcd
+    ("etcd",     lambda v: _ver_lt(v, "3.3.23"), "CVE-2020-15106", 6.5, "MEDIUM",   "", "etcd WAL parser can cause OOM via malformed entries."),
+    ("etcd",     lambda v: _ver_lt(v, "3.4.10"), "CVE-2020-15112", 6.5, "MEDIUM",   "", "etcd DoS via nil derference in Raft code."),
+    # RabbitMQ
+    ("rabbitmq", lambda v: _ver_lt(v, "3.12.7"), "CVE-2023-46118", 4.9, "MEDIUM",   "", "RabbitMQ DoS via very large message body from authenticated user."),
+    ("rabbitmq", lambda v: _ver_lt(v, "3.8.0"),  "CVE-2019-11291", 4.3, "MEDIUM",   "", "RabbitMQ reflected XSS in management UI."),
+    # InfluxDB
+    ("influxdb", lambda v: _ver_lt(v, "1.7.7"),  "CVE-2019-20933", 9.8, "CRITICAL", "", "InfluxDB authentication bypass — JWT shared secret default allows forged tokens."),
+    # Apache CouchDB
+    ("couchdb",  lambda v: _ver_lt(v, "3.2.3"),  "CVE-2022-24706", 9.8, "CRITICAL", "", "Apache CouchDB cookie erlang term deserialization — unauthenticated RCE."),
+    ("couchdb",  lambda v: _ver_lt(v, "2.3.0"),  "CVE-2018-17188", 8.8, "HIGH",     "", "Apache CouchDB privilege escalation via _users endpoint."),
+    # Apache Solr
+    ("solr",     lambda v: _ver_lt(v, "8.3.1"),  "CVE-2019-17558", 8.8, "HIGH",     "", "Apache Solr Velocity template injection RCE (ConfigAPI)."),
+    ("solr",     lambda v: _ver_lt(v, "8.2.0"),  "CVE-2019-0193",  9.8, "CRITICAL", "", "Apache Solr DataImportHandler command injection RCE."),
+    ("solr",     lambda v: _ver_lt(v, "7.1.0"),  "CVE-2017-12629", 9.8, "CRITICAL", "", "Apache Solr XML External Entity (XXE) → SSRF/RCE."),
+    # MinIO
+    ("minio",    lambda v: _ver_lt(v, "2023-03-13"), "CVE-2023-28432", 7.5,"HIGH",  "", "MinIO information disclosure — /minio/health/cluster leaks access+secret keys."),
+    # Prometheus
+    ("prometheus",lambda v: _ver_lt(v, "2.1.0"), "CVE-2019-3826",  8.1, "HIGH",     "", "Prometheus path traversal in web UI."),
+    # Splunk
+    ("splunk",   lambda v: _ver_lt(v, "9.1.1"),  "CVE-2023-46214", 8.0, "HIGH",     "", "Splunk XSLT injection RCE — authenticated but exploitable post-compromise."),
+    ("splunk",   lambda v: _ver_lt(v, "8.2.0"),  "CVE-2022-32158", 9.0, "CRITICAL", "", "Splunk Enterprise peer-to-peer communication allows RCE."),
+    # Nagios
+    ("nagios",   lambda v: _ver_lt(v, "4.4.7"),  "CVE-2020-13977", 7.7, "HIGH",     "", "Nagios Core RCE via injected cron entries."),
+    ("nagios",   lambda v: _ver_lt(v, "4.4.6"),  "CVE-2021-37344", 8.8, "HIGH",     "", "Nagios SQLi in nagios_check_command → OS command execution."),
+    # Apache Zookeeper
+    ("zookeeper",lambda v: _ver_lt(v, "3.5.5"),  "CVE-2019-0201",  5.9, "MEDIUM",   "", "Apache ZooKeeper admin interface exposes sensitive data without auth."),
+    # Docker
+    ("docker",   lambda v: _ver_lt(v, "20.10.24"),"CVE-2019-5736", 8.6, "HIGH",     "", "runc container escape — malicious image overwrites host runc binary."),
+    ("docker",   lambda v: _ver_lt(v, "20.10.9"), "CVE-2021-41091", 6.3,"MEDIUM",   "", "Docker moby rootless container access to host filesystem."),
+    # Kubernetes
+    ("kubernetes",lambda v: _ver_lt(v, "1.16.0"),"CVE-2018-1002105",9.8,"CRITICAL","", "Kubernetes privilege escalation via aggregated API server connection upgrade."),
+    ("kubernetes",lambda v: _ver_lt(v, "1.24.0"),"CVE-2022-3294",  6.0, "MEDIUM",   "", "Kubernetes node IP address bypass via hostname routing."),
+    # Grafana additional
+    ("grafana",  lambda v: _ver_lt(v, "10.0.0"), "CVE-2023-1410",  6.8, "MEDIUM",   "", "Grafana stored XSS in Graphite annotations."),
+    # phpMyAdmin
+    ("phpmyadmin",lambda v: _ver_lt(v, "5.1.2"), "CVE-2022-23807", 4.3, "MEDIUM",   "", "phpMyAdmin two-factor auth bypass via brute force."),
+    ("phpmyadmin",lambda v: _ver_lt(v, "4.8.4"), "CVE-2018-19968", 8.8, "HIGH",     "", "phpMyAdmin local file inclusion leading to RCE."),
+    # Roundcube
+    ("roundcube",lambda v: _ver_lt(v, "1.6.1"),  "CVE-2023-43770", 6.1, "MEDIUM",   "", "Roundcube persistent XSS in HTML message handling."),
+    ("roundcube",lambda v: _ver_lt(v, "1.5.4"),  "CVE-2022-37393", 8.8, "HIGH",     "", "Roundcube shell injection via malicious email header in managesieve plugin."),
+    # ManageEngine (additional product variants)
+    ("manageengine",lambda v: _ver_lt(v, "10.5"),"CVE-2021-44515", 9.8, "CRITICAL", "", "ManageEngine Desktop Central unauthenticated RCE via /client-manager endpoint."),
 
 ]
 

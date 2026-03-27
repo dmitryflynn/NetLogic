@@ -267,7 +267,7 @@ def _fetch(url: str, payload: str = None, timeout: float = 8.0) -> tuple[dict, s
 
 # ─── WAF Detection ────────────────────────────────────────────────────────────
 
-def detect_waf(target: str, headers: dict, body: str, status: int) -> WAFDetection:
+def detect_waf(target: str, headers: dict, body: str, status: int, scheme: str = "https") -> WAFDetection:
     """
     First check normal response headers/body, then probe with a
     malicious-looking payload to trigger WAF block pages.
@@ -291,7 +291,7 @@ def detect_waf(target: str, headers: dict, body: str, status: int) -> WAFDetecti
             return result
 
     # Phase 2: active probe — send XSS/SQLi payload, check for block
-    probe_url = f"https://{target}/?id=1'%20OR%20'1'='1&q=<script>alert(1)</script>"
+    probe_url = f"{scheme}://{target}/?id=1'%20OR%20'1'='1&q=<script>alert(1)</script>"
     ph, pb, ps = _fetch(probe_url, timeout=5)
     all_headers = {**headers, **ph}
     combined_body = body + pb
@@ -466,11 +466,13 @@ def fingerprint_stack(target: str, port: int = 443) -> StackResult:
     result = StackResult(target=target)
     scheme = "https" if port in (443, 8443) else "http"
     url = f"{scheme}://{target}/"
+    actual_scheme = scheme
 
     # Fetch main page
     headers, body, status = _fetch(url)
     if not headers and scheme == "https":
         headers, body, status = _fetch(f"http://{target}/")
+        actual_scheme = "http"
 
     if not headers:
         return result
@@ -493,7 +495,7 @@ def fingerprint_stack(target: str, port: int = 443) -> StackResult:
     result.cdn, result.cloud_provider = detect_cdn_cloud(headers, body)
 
     # WAF
-    result.waf = detect_waf(target, headers, body, status)
+    result.waf = detect_waf(target, headers, body, status, actual_scheme)
 
     # WordPress extra checks
     is_wp = any(t.name == "WordPress" for t in result.technologies)

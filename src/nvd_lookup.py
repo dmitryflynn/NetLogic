@@ -26,7 +26,6 @@ import re
 import json
 import time
 import hashlib
-import requests
 from datetime import datetime, timezone
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -41,7 +40,7 @@ KEV_URL      = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_v
 CACHE_DIR    = os.path.join(os.path.expanduser("~"), ".netlogic", "nvd_cache")
 KEV_CACHE    = os.path.join(CACHE_DIR, "kev.json")
 CACHE_TTL    = 86400        # 24 hours
-MAX_RESULTS  = 20           # CVEs to fetch per product query
+MAX_RESULTS  = 50           # CVEs to fetch per product query
 RATE_DELAY   = 6.1          # seconds between requests (public: 5 req/30s)
 RATE_DELAY_KEYED = 0.7      # with API key: 50 req/30s
 
@@ -69,6 +68,9 @@ class NVDCve:
     version_start: Optional[str] = None
     version_end: Optional[str] = None
     version_end_including: bool = False
+    has_metasploit: bool = False
+    has_public_exploit: bool = False
+    exploit_refs: list[str] = field(default_factory=list)
 
 
 # ─── Cache ───────────────────────────────────────────────────────────────────
@@ -127,14 +129,14 @@ def _load_kev():
 
         # Fetch live
         try:
-            resp = requests.get(KEV_URL, headers={"User-Agent": "NetLogic/2.0"}, timeout=10)
-            if resp.status_code == 200:
-                raw = resp.json()
-                _kev_ids = {v["cveID"] for v in raw.get("vulnerabilities", [])}
-                os.makedirs(CACHE_DIR, exist_ok=True)
-                with open(KEV_CACHE, "w") as f:
-                    json.dump({"ids": list(_kev_ids), "cached_at": time.time()}, f)
-                _kev_loaded = True
+            req = urllib.request.Request(KEV_URL, headers={"User-Agent": "NetLogic/2.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = json.loads(resp.read())
+            _kev_ids = {v["cveID"] for v in raw.get("vulnerabilities", [])}
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            with open(KEV_CACHE, "w") as f:
+                json.dump({"ids": list(_kev_ids), "cached_at": time.time()}, f)
+            _kev_loaded = True
         except Exception:
             _kev_loaded = True   # Don't retry on failure
 
@@ -175,32 +177,37 @@ def _nvd_request(params: dict) -> Optional[dict]:
         headers["apiKey"] = api_key
 
     url = NVD_API_URL + "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers=headers)
     try:
-        resp = requests.get(url, headers=headers, timeout=15)
-        if resp.status_code == 200:
-            return resp.json()
-        elif resp.status_code == 429:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
             # Rate limited — wait and retry once
             time.sleep(30)
-            resp = requests.get(url, headers=headers, timeout=15)
-            if resp.status_code == 200:
-                return resp.json()
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    return json.loads(resp.read())
+            except Exception:
+                return None
         return None
-    except requests.exceptions.RequestException:
+    except urllib.error.URLError:
         # Network unreachable / DNS failure — stop trying for this session
         _nvd_unavailable = True
+        return None
+    except Exception:
         return None
 
 
 def nvd_is_available() -> bool:
     """Quick connectivity check."""
     try:
-        resp = requests.get(
+        req = urllib.request.Request(
             "https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=1",
             headers={"User-Agent": "NetLogic/2.0"},
-            timeout=5
         )
-        return resp.status_code == 200
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status == 200
     except Exception:
         return False
 
@@ -244,6 +251,25 @@ def _parse_nvd_item(item: dict) -> NVDCve:
     # References
     refs = [r.get("url", "") for r in cve.get("references", [])[:5] if r.get("url")]
 
+    # Exploit reference detection
+    exploit_refs = []
+    has_metasploit = False
+    has_public_exploit = False
+    for ref in cve.get("references", []):
+        url = ref.get("url", "")
+        if not url:
+            continue
+        url_lower = url.lower()
+        if "rapid7.com/db" in url_lower or "metasploit" in url_lower:
+            has_metasploit = True
+            exploit_refs.append(url)
+        elif ("exploit-db.com" in url_lower or "exploitdb.com" in url_lower or
+              "packetstormsecurity.com" in url_lower or
+              "github.com" in url_lower and any(k in url_lower for k in
+                  ("exploit", "/poc", "proof-of-concept", "rce", "/lpe", "nuclei-templates"))):
+            has_public_exploit = True
+            exploit_refs.append(url)
+
     # Affected products (CPE) + version range extraction
     affected = []
     ver_start, ver_end = None, None
@@ -284,6 +310,9 @@ def _parse_nvd_item(item: dict) -> NVDCve:
         version_start=ver_start,
         version_end=ver_end,
         version_end_including=ver_end_inc,
+        has_metasploit=has_metasploit,
+        has_public_exploit=has_public_exploit,
+        exploit_refs=exploit_refs[:5],
     )
 
 
@@ -386,7 +415,6 @@ PRODUCT_KEYWORD_MAP = {
     "openvpn":      "OpenVPN",
     "libssl":       "OpenSSL",
     "libcrypto":    "OpenSSL",
-    "samba":        "Samba",
     "smb":          "Samba",
     "microsoft-ds": "Samba",
     "netbios-ssn":  "Samba",
@@ -397,9 +425,53 @@ PRODUCT_KEYWORD_MAP = {
     "snmpd":        "Net-SNMP",
     "snmp":         "Net-SNMP",
     "rpcbind":      "rpcbind",
-    "openldap":     "OpenLDAP",
     "nfs":          "nfs-utils",
     "cups":         "CUPS",
+    "jboss":          "JBoss Application Server",
+    "wildfly":        "WildFly",
+    "weblogic":       "Oracle WebLogic Server",
+    "websphere":      "IBM WebSphere Application Server",
+    "glassfish":      "GlassFish",
+    "coldfusion":     "Adobe ColdFusion",
+    "exchange":       "Microsoft Exchange Server",
+    "sharepoint":     "Microsoft SharePoint",
+    "confluence":     "Atlassian Confluence",
+    "jira":           "Atlassian Jira",
+    "bitbucket":      "Atlassian Bitbucket",
+    "haproxy":        "HAProxy",
+    "lighttpd":       "lighttpd",
+    "traefik":        "Traefik",
+    "vault":          "HashiCorp Vault",
+    "consul":         "HashiCorp Consul",
+    "etcd":           "etcd",
+    "rabbitmq":       "RabbitMQ",
+    "influxdb":       "InfluxDB",
+    "couchdb":        "Apache CouchDB",
+    "solr":           "Apache Solr",
+    "cassandra":      "Apache Cassandra",
+    "neo4j":          "Neo4j",
+    "minio":          "MinIO",
+    "prometheus":     "Prometheus",
+    "grafana":        "Grafana",
+    "kibana":         "Kibana",
+    "sendmail":       "Sendmail",
+    "cups":           "CUPS",
+    "nagios":         "Nagios",
+    "splunk":         "Splunk",
+    "zabbix":         "Zabbix",
+    "roundcube":      "Roundcube",
+    "phpmyadmin":     "phpMyAdmin",
+    "manageengine":   "ManageEngine",
+    "vcenter":        "VMware vCenter Server",
+    "vmware":         "VMware",
+    "paloalto":       "Palo Alto Networks PAN-OS",
+    "fortigate":      "Fortinet FortiOS",
+    "sonicwall":      "SonicWall",
+    "citrix":         "Citrix NetScaler",
+    "pulse":          "Ivanti Pulse Secure",
+    "f5":             "F5 BIG-IP",
+    "cisco":          "Cisco IOS",
+    "zimbra":         "Zimbra Collaboration Suite",
     "http":         None,    # Too generic — skip
     "https":        None,
     "ftp":          None,
@@ -416,10 +488,7 @@ def _build_keyword(product: str, version: str = None) -> Optional[str]:
     mapped = PRODUCT_KEYWORD_MAP.get(product_lower)
     if mapped is None:
         return None   # Skip generic/unknown products
-    if mapped:
-        kw = mapped
-    else:
-        kw = product
+    kw = mapped
 
     # Don't append version — NVD keyword search is for product name only
     # Version filtering is done on the results via CPE ranges
@@ -452,7 +521,7 @@ def query_nvd_for_product(product: str, version: str = None,
     params = {
         "keywordSearch":    keyword,
         "keywordExactMatch": "false",
-        "resultsPerPage":   min(max_results, 20),
+        "resultsPerPage":   min(max_results, 50),
         "startIndex":       0,
     }
 
@@ -554,7 +623,7 @@ def clear_cache():
         print(f"[!] Cache clear failed: {e}")
 
 
-def preload_cache(products: list[str]):
+def preload_cache(products: list[str] = None):
     """
     Pre-populate cache for common products.
     Run once with: python -c "from src.nvd_lookup import preload_cache; preload_cache()"

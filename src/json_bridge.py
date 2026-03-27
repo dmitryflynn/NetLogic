@@ -27,7 +27,8 @@ def run_streaming_scan(target: str, ports: list, timeout: float,
                        threads: int, do_osint: bool, cidr: bool,
                        do_tls: bool = False, do_headers: bool = False,
                        do_stack: bool = False, do_dns: bool = False,
-                       do_full: bool = False, min_cvss: float = 4.0):
+                       do_full: bool = False, do_probe: bool = False,
+                       min_cvss: float = 4.0):
     """Execute a scan and stream results as JSON events."""
 
     emit("progress", {"percent": 5, "status": f"Resolving {target}..."})
@@ -84,7 +85,7 @@ def run_streaming_scan(target: str, ports: list, timeout: float,
     emit("progress", {"percent": 60, "status": f"Found {len(result.ports)} open ports, correlating CVEs..."})
 
     # CVE correlation
-    vuln_matches = correlate(result.ports, min_cvss=4.0, verbose=False)
+    vuln_matches = correlate(result.ports, min_cvss=min_cvss, verbose=False)
     emit("progress", {"percent": 75, "status": f"Found {len(vuln_matches)} vulnerability findings..."})
     for vm in vuln_matches:
         emit("vuln", {"target": result.ip, **_vuln_to_dict(vm)})
@@ -158,6 +159,22 @@ def run_streaming_scan(target: str, ports: list, timeout: float,
             })
         except Exception as e:
             emit("log", {"text": f"OSINT: {e}", "level": "warn"})
+
+    # Active Service & Vulnerability Probing
+    if (do_probe or do_full) and result.ports:
+        emit("progress", {"percent": 94, "status": "Running active service and vulnerability probes..."})
+        try:
+            from src.service_prober import probe_services
+            svc_result = probe_services(target, result.ports, timeout=timeout)
+            emit("service_probes", _asdict(svc_result))
+        except Exception as e:
+            emit("log", {"text": f"ServiceProbe: {e}", "level": "warn"})
+        try:
+            from src.vuln_prober import probe_web_vulnerabilities
+            vuln_p = probe_web_vulnerabilities(target, result.ports, timeout=timeout)
+            emit("vuln_probes", _asdict(vuln_p))
+        except Exception as e:
+            emit("log", {"text": f"VulnProbe: {e}", "level": "warn"})
 
     emit("progress", {"percent": 100, "status": "Scan complete."})
     emit("done", {

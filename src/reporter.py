@@ -94,6 +94,8 @@ def print_terminal_report(host_result, vuln_matches, osint_result=None):
                     label += f" {vm.version}"
                 label += ")"
             print(f"\n  {C.BOLD}{C.WHITE}{label}{C.RESET}")
+            conf = getattr(vm, 'detection_confidence', 'LOW')
+            print(f"  {_confidence_badge(conf)}")
             print(f"  Risk Score: {_risk_color(vm.risk_score)}")
 
             if vm.notes:
@@ -106,8 +108,17 @@ def print_terminal_report(host_result, vuln_matches, osint_result=None):
                 badge = SEV_BADGE.get(sev, sev)
                 print(f"\n    {color}{C.BOLD}{badge}{C.RESET}  {C.BOLD}{cve.id}{C.RESET}  CVSS {cve.cvss_score}")
                 print(f"    {C.DIM}{cve.description[:100]}{'…' if len(cve.description) > 100 else ''}{C.RESET}")
-                if cve.exploit_available:
-                    print(f"    {C.RED}⚡ Known exploit available{C.RESET}")
+                has_msf = getattr(cve, 'has_metasploit', False)
+                has_pub = getattr(cve, 'has_public_exploit', False)
+                if has_msf:
+                    print(f"    {C.RED}⚡ Metasploit module available{C.RESET}")
+                elif has_pub:
+                    print(f"    {C.ORANGE}⚡ Public exploit / PoC available{C.RESET}")
+                elif cve.exploit_available:
+                    print(f"    {C.RED}⚡ Actively exploited (CISA KEV){C.RESET}")
+                refs = getattr(cve, 'exploit_refs', [])
+                for ref in refs[:2]:
+                    print(f"    {C.DIM}   → {ref}{C.RESET}")
 
     # OSINT Summary
     if osint_result:
@@ -134,6 +145,62 @@ def print_terminal_report(host_result, vuln_matches, osint_result=None):
     print(f"  {C.DIM}NetLogic — For authorized use only. Always obtain permission.{C.RESET}\n")
 
 
+def print_service_probe_results(probe_result, no_color: bool = False):
+    """Print service misconfiguration findings from service_prober."""
+    if not probe_result or not probe_result.findings:
+        return
+    R  = C.RESET  if not no_color else ""
+    Bo = C.BOLD   if not no_color else ""
+    D  = C.DIM    if not no_color else ""
+    Cy = C.CYAN   if not no_color else ""
+
+    print(f"\n{'─'*70}")
+    print(f"  SERVICE MISCONFIGURATION FINDINGS  "
+          f"({len(probe_result.findings)} issue(s), {probe_result.probes_run} probes run)")
+    print(f"{'─'*70}")
+
+    for f in probe_result.findings:
+        sev = f.severity.upper()
+        color = SEV_COLOR.get(sev, C.DIM) if not no_color else ""
+        badge = SEV_BADGE.get(sev, sev)
+        print(f"\n  {color}{Bo}{badge}{R}  {Bo}{f.title}{R}")
+        print(f"  {D}Port {f.port} / {f.service}{R}")
+        print(f"  {f.detail[:130]}{'…' if len(f.detail)>130 else ''}")
+        if f.evidence:
+            print(f"  {D}Evidence   : {f.evidence[:100]}{R}")
+        if f.remediation:
+            print(f"  {Cy}Remediation: {f.remediation[:110]}{'…' if len(f.remediation)>110 else ''}{R}")
+
+
+def print_vuln_probe_results(probe_result, no_color: bool = False):
+    """Print CVE-specific active probe findings from vuln_prober."""
+    if not probe_result or not probe_result.confirmed:
+        return
+    R  = C.RESET  if not no_color else ""
+    Bo = C.BOLD   if not no_color else ""
+    D  = C.DIM    if not no_color else ""
+    Cy = C.CYAN   if not no_color else ""
+    G  = C.GREEN  if not no_color else ""
+
+    print(f"\n{'─'*70}")
+    print(f"  ACTIVE VULNERABILITY PROBES  "
+          f"({len(probe_result.confirmed)} confirmed, {probe_result.probes_run} probes run)")
+    print(f"{'─'*70}")
+
+    for f in probe_result.confirmed:
+        sev = f.severity.upper()
+        color = SEV_COLOR.get(sev, C.DIM) if not no_color else ""
+        badge = SEV_BADGE.get(sev, sev)
+        confirmed_str = f"{G}[CONFIRMED]{R}" if f.confirmed else f"{C.YELLOW if not no_color else ''}[POSSIBLE]{R}"
+        print(f"\n  {color}{Bo}{badge}{R}  {Bo}{f.title}{R}  {confirmed_str}")
+        print(f"  {D}{f.cve_id}{R}")
+        print(f"  {f.detail[:130]}{'…' if len(f.detail)>130 else ''}")
+        if f.evidence:
+            print(f"  {D}Evidence   : {f.evidence[:100]}{R}")
+        if f.remediation:
+            print(f"  {Cy}Remediation: {f.remediation[:110]}{'…' if len(f.remediation)>110 else ''}{R}")
+
+
 def _risk_color(score: float) -> str:
     if score >= 9.0:
         return f"{C.BOLD}{C.RED}{score:.1f}/10{C.RESET}"
@@ -144,6 +211,14 @@ def _risk_color(score: float) -> str:
     return f"{C.GREEN}{score:.1f}/10{C.RESET}"
 
 
+def _confidence_badge(conf: str) -> str:
+    if conf == "HIGH":
+        return f"{C.GREEN}[✓ version confirmed]{C.RESET}"
+    if conf == "MEDIUM":
+        return f"{C.YELLOW}[~ product detected, version unknown]{C.RESET}"
+    return f"{C.DIM}[? port-based guess]{C.RESET}"
+
+
 # ─── JSON Report ─────────────────────────────────────────────────────────────────
 
 def generate_json_report(host_result, vuln_matches, osint_result=None) -> dict:
@@ -151,7 +226,7 @@ def generate_json_report(host_result, vuln_matches, osint_result=None) -> dict:
     report = {
         "meta": {
             "tool": "NetLogic",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         },
         "host": asdict(host_result),
@@ -166,6 +241,7 @@ def generate_json_report(host_result, vuln_matches, osint_result=None) -> dict:
             "product":    vm.product,
             "version":    vm.version,
             "risk_score": vm.risk_score,
+            "detection_confidence": vm.detection_confidence,
             "notes":      vm.notes,
             "cves": [
                 {
@@ -177,8 +253,13 @@ def generate_json_report(host_result, vuln_matches, osint_result=None) -> dict:
                     "published":        c.published,
                     "exploit_available": c.exploit_available,
                     "references":       c.references,
+                    "has_metasploit":   getattr(c, 'has_metasploit', False),
+                    "has_public_exploit": getattr(c, 'has_public_exploit', False),
+                    "exploit_refs":     getattr(c, 'exploit_refs', []),
+                    "kev":              getattr(c, 'kev', False),
+                    "cwe":              getattr(c, 'cwe', ""),
                 }
-                for c in c.cves
+                for c in vm.cves
             ] if hasattr(vm, "cves") else [],
         })
 

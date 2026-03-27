@@ -48,7 +48,7 @@ Unicode True
 !define MUI_FINISHPAGE_LINK_LOCATION "${APP_URL}"
 
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE     "LICENSE"
+!insertmacro MUI_PAGE_LICENSE     "LICENSE.txt"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
@@ -84,7 +84,7 @@ Section "NetLogic Core" SecCore
   
   ; Documentation
   File "README.md"
-  File "LICENSE"
+  File "LICENSE.txt"
   
   ; Write uninstaller
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -163,7 +163,7 @@ Section "Uninstall"
   ; Remove files
   Delete "$INSTDIR\netlogic.exe"
   Delete "$INSTDIR\README.md"
-  Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\LICENSE.txt"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir  "$INSTDIR"
   
