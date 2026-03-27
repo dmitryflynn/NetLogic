@@ -57,6 +57,12 @@ SERVICE_MAP = {
     6379: "redis", 8080: "http-alt", 8443: "https-alt",
     9200: "elasticsearch", 27017: "mongodb", 11211: "memcached",
     2181: "zookeeper", 6443: "k8s-api", 2376: "docker",
+    2375: "docker-api", 2379: "etcd", 2380: "etcd",
+    3000: "grafana",    5601: "kibana", 5672: "amqp",
+    5984: "couchdb",    7474: "neo4j-http", 8200: "vault",
+    8300: "consul-rpc", 8500: "consul-http", 8983: "solr",
+    9090: "prometheus", 9092: "kafka", 9300: "elasticsearch",
+    15672: "rabbitmq-mgmt",
 }
 
 PROBES = {
@@ -70,6 +76,19 @@ PROBES = {
     "mysql":   None,
     "mongodb": b"\x41\x00\x00\x00\xd4\x07\x00\x00\x00\x00\x00\x00\xd4\x07\x00\x00\x00\x00\x00\x00"
                b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+    "docker-api":      b"GET /version HTTP/1.0\r\nHost: {host}\r\n\r\n",
+    "etcd":            b"GET /version HTTP/1.0\r\nHost: {host}\r\n\r\n",
+    "kibana":          b"GET /api/status HTTP/1.0\r\nHost: {host}\r\n\r\n",
+    "grafana":         b"GET /api/health HTTP/1.0\r\nHost: {host}\r\n\r\n",
+    "vault":           b"GET /v1/sys/health HTTP/1.0\r\nHost: {host}\r\n\r\n",
+    "consul-http":     b"GET /v1/status/leader HTTP/1.0\r\nHost: {host}\r\n\r\n",
+    "couchdb":         b"GET / HTTP/1.0\r\nHost: {host}\r\n\r\n",
+    "prometheus":      b"GET /-/healthy HTTP/1.0\r\nHost: {host}\r\n\r\n",
+    "rabbitmq-mgmt":   b"GET /api/overview HTTP/1.0\r\nHost: {host}\r\n\r\n",
+    "solr":            b"GET /solr/admin/info/system?wt=json HTTP/1.0\r\nHost: {host}\r\n\r\n",
+    "neo4j-http":      b"GET / HTTP/1.0\r\nHost: {host}\r\n\r\n",
+    "memcached":       b"version\r\n",
+    "http-alt":        b"GET / HTTP/1.0\r\nHost: {host}\r\n\r\n",
 }
 
 VERSION_PATTERNS = [
@@ -112,8 +131,8 @@ def tls_probe(host: str, port: int, timeout: float = 3.0):
                 cert = tls_sock.getpeercert()
                 cn = None
                 if cert:
-                    for field in cert.get("subject", []):
-                        for key, val in field:
+                    for entry in cert.get("subject", []):
+                        for key, val in entry:
                             if key == "commonName":
                                 cn = val
                 return True, cn
@@ -148,17 +167,21 @@ def probe_port(host: str, port: int, timeout: float = 2.0) -> PortResult:
         if raw_banner:
             result.banner = parse_banner(raw_banner.decode("utf-8", errors="replace"), service_name)
 
-        # TLS detection
-        if port in (443, 8443, 993, 995, 465) or (not raw_banner and port > 0):
-            tls_ok, cn = tls_probe(host, port)
-            if tls_ok:
-                result.tls = True
-                result.tls_cert_cn = cn
-
     except (ConnectionRefusedError, OSError):
         result.state = "closed"
-    except socket.timeout:
+    except (socket.timeout, TimeoutError):
         result.state = "filtered"
+
+    # TLS detection - only for open ports that might have TLS
+    if result.state == "open":
+        if port in (443, 8443, 993, 995, 465, 636, 5671, 5986):
+            try:
+                tls_ok, cn = tls_probe(host, port, timeout=timeout)
+                if tls_ok:
+                    result.tls = True
+                    result.tls_cert_cn = cn
+            except Exception:
+                pass
 
     return result
 
@@ -199,7 +222,9 @@ def ping_host(host: str, timeout: float = 2.0) -> Optional[int]:
 COMMON_PORTS = [
     21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 443, 445,
     993, 995, 1433, 1521, 3306, 3389, 5432, 5900,
-    6379, 8080, 8443, 9200, 27017, 11211, 2181, 6443, 2376,
+    5601, 5672, 5984, 6379, 6443, 7474, 8080, 8200, 8443, 8500, 8983,
+    9090, 9200, 9300, 9092, 11211, 15672, 2181, 2375, 2376, 2379, 3000,
+    27017,
 ]
 
 EXTENDED_PORTS = COMMON_PORTS + list(range(8000, 8010)) + [4443, 9000, 9090, 9300, 10250]

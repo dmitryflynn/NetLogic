@@ -375,10 +375,15 @@ def check_zone_transfer(domain: str) -> tuple[bool, list[str]]:
             response = sock.recv(4096)
             sock.close()
 
-            # If response is longer than a typical error, zone transfer may have worked
-            if len(response) > 100:
-                records.append(f"Possible zone transfer from {ns} ({ip}) — {len(response)} bytes returned")
-                return True, records
+            # TCP DNS: 2-byte length prefix, then 12-byte DNS header.
+            # Bytes 8-9 (offset 8) = ANCOUNT, bytes 10-11 = NSCOUNT, byte 5 low nibble = RCODE.
+            if len(response) >= 14:
+                rcode = response[5] & 0x0F
+                ancount = struct.unpack(">H", response[8:10])[0]
+                nscount = struct.unpack(">H", response[10:12])[0]
+                if rcode == 0 and (ancount + nscount) > 5:
+                    records.append(f"Vulnerable to zone transfer via {ns} ({ip}) — {ancount} records returned")
+                    return True, records
         except Exception:
             pass
 

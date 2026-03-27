@@ -11,9 +11,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.scanner        import scan_host, scan_cidr, COMMON_PORTS, EXTENDED_PORTS
 from src.cve_correlator import correlate
 from src.osint          import run_osint
+from src.nvd_lookup     import clear_cache, preload_cache, cache_stats
 from src.reporter       import (
     print_terminal_report, generate_json_report,
     generate_html_report, save_json_report, save_html_report, C,
+    print_service_probe_results, print_vuln_probe_results,
 )
 
 VERSION = "2.0.0"
@@ -32,7 +34,7 @@ BANNER = f"""
 
 def parse_args():
     p = argparse.ArgumentParser(description="NetLogic — network recon and vulnerability correlation")
-    p.add_argument("target", help="Host, IP, or CIDR range to scan")
+    p.add_argument("target", nargs="?", default=None, help="Host, IP, or CIDR range to scan")
     p.add_argument("--ports",     default="quick",
                    help="quick|full|custom=21,22,80,443  (default: quick)")
     p.add_argument("--tls",       action="store_true", help="Deep SSL/TLS analysis")
@@ -41,6 +43,8 @@ def parse_args():
     p.add_argument("--osint",     action="store_true", help="Run passive OSINT recon")
     p.add_argument("--stack",     action="store_true", help="Technology stack + WAF fingerprinting")
     p.add_argument("--dns",       action="store_true", help="DNS/email security (SPF, DKIM, DMARC, DNSSEC)")
+    p.add_argument("--probe",     action="store_true",
+                   help="Active service probing: unauthenticated access, default creds, CVE-specific checks")
     p.add_argument("--full",      action="store_true", help="Run ALL checks")
     p.add_argument("--report",    default="terminal",
                    choices=["terminal", "json", "html", "all"])
@@ -377,7 +381,7 @@ def run_single(target, args):
     # ── Stack Fingerprint ──
     stack_result = None
     do_stack = args.full or getattr(args, 'stack', False) or do_headers
-    if do_stack or do_headers:
+    if do_stack:
         from src.stack_fingerprint import fingerprint_stack
         http_port2 = next((p.port for p in host_result.ports
                           if p.service in ("http","https","http-alt","https-alt")), 443)
@@ -398,6 +402,19 @@ def run_single(target, args):
         print(f"[*] Running passive OSINT…")
         osint_result = run_osint(target, ip=host_result.ip)
 
+    # ── Service Misconfiguration Probing ──
+    service_probe_result = None
+    vuln_probe_result = None
+    do_probe = args.full or getattr(args, 'probe', False)
+    if do_probe and host_result.ports:
+        from src.service_prober import probe_services
+        from src.vuln_prober    import probe_web_vulnerabilities
+        print(f"[*] Running active service probes (misconfigs, default creds, CVE checks)…")
+        service_probe_result = probe_services(target, host_result.ports, timeout=args.timeout)
+        vuln_probe_result    = probe_web_vulnerabilities(target, host_result.ports, timeout=args.timeout)
+        total_issues = len(service_probe_result.findings) + len(vuln_probe_result.confirmed)
+        print(f"[+] Probe complete — {total_issues} issue(s) found.")
+
     # ── Output ──
     if args.report in ("terminal", "all"):
         print_terminal_report(host_result, vuln_matches, osint_result)
@@ -406,6 +423,8 @@ def run_single(target, args):
         print_stack_results(stack_result, no_color)
         print_dns_results(dns_result, no_color)
         print_takeover_results(takeover_result, no_color)
+        print_service_probe_results(service_probe_result, no_color)
+        print_vuln_probe_results(vuln_probe_result, no_color)
 
     safe_name = target.replace("/","_").replace(":","_")
     ts = time.strftime("%Y%m%d_%H%M%S")
@@ -423,6 +442,12 @@ def run_single(target, args):
         if takeover_result:
             from dataclasses import asdict
             report["takeover"] = asdict(takeover_result)
+        if service_probe_result:
+            from dataclasses import asdict
+            report["service_probes"] = asdict(service_probe_result)
+        if vuln_probe_result:
+            from dataclasses import asdict
+            report["vuln_probes"] = asdict(vuln_probe_result)
         save_json_report(report, os.path.join(args.out, f"netlogic_{safe_name}_{ts}.json"))
 
     if args.report in ("html", "all"):
@@ -450,6 +475,19 @@ def run_cidr(cidr, args):
 def main():
     args = parse_args()
 
+    if args.clear_cache:
+        clear_cache()
+        if not args.target:
+            return
+    if args.preload_cache:
+        preload_cache()
+        if not args.target:
+            return
+
+    if not args.target:
+        print("error: target is required", file=sys.stderr)
+        sys.exit(1)
+
     if hasattr(args, 'json_stream') and args.json_stream:
         from src.json_bridge import run_streaming_scan, emit
         ports = resolve_ports(args.ports)
@@ -463,6 +501,7 @@ def main():
                 do_headers=(args.headers or args.full),
                 do_stack=(getattr(args, 'stack', False) or args.full),
                 do_dns=(getattr(args, 'dns', False) or args.full),
+                do_probe=(getattr(args, 'probe', False) or args.full),
                 do_full=args.full,
                 min_cvss=getattr(args, 'min_cvss', 4.0),
             )

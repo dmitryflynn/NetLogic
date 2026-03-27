@@ -143,7 +143,7 @@ def lookup_asn(ip: str) -> Optional[ASNInfo]:
             asn=data.get("org", "").split(" ")[0],
             org=" ".join(data.get("org", "").split(" ")[1:]),
             country=data.get("country", ""),
-            cidr=data.get("region", ""),   # best we get without paid key
+            cidr="",   # Not available from ipinfo.io free tier
         )
     except Exception:
         return None

@@ -116,12 +116,13 @@ def probe_protocols(host: str, port: int) -> tuple[list[str], list[str]]:
 
     for name, min_v, max_v in probes:
         if min_v is None:
+            deprecated.append(f"{name} (could not test: missing constants in ssl module)")
             continue
         sock = _try_connect(host, port, min_v, max_v)
         if sock:
             supported.append(name)
             sock.close()
-            if name in ("TLSv1.0", "TLSv1.1"):
+            if name in ("TLSv1.1", "TLSv1.0"):
                 deprecated.append(name)
 
     return supported, deprecated
@@ -185,7 +186,8 @@ def parse_cert(sock: ssl.SSLSocket, host: str) -> CertInfo:
     is_expired = False
     try:
         exp = datetime.datetime.strptime(not_after_str, "%b %d %H:%M:%S %Y %Z")
-        days_left = (exp - datetime.datetime.utcnow()).days
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        days_left = (exp - now).days
         is_expired = days_left < 0
     except Exception:
         pass
@@ -379,7 +381,9 @@ def analyze_tls(host: str, port: int = 443, timeout: float = 5.0) -> TLSResult:
         if cert.san_domains and host not in cert.san_domains:
             # Check wildcard coverage
             covered = any(
-                (s.startswith("*.") and host.endswith(s[1:]))
+                s.startswith("*.") and
+                host.endswith(s[1:]) and
+                "." not in host[:-len(s[1:])]
                 for s in cert.san_domains
             )
             if not covered and host not in (cert.subject_cn or ""):

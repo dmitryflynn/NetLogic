@@ -66,11 +66,13 @@ def fetch_headers(url: str, timeout: float = 8.0) -> tuple[dict, int]:
     req = urllib.request.Request(url, headers={
         "User-Agent": "Mozilla/5.0 (compatible; NetLogic/1.0; Security Scanner)",
         "Accept": "text/html,application/xhtml+xml,*/*",
+        "Origin": "https://evil.bad",
     })
 
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             headers = dict(resp.headers)
+            headers["_request_origin"] = "https://evil.bad"
             return {k.lower(): v for k, v in headers.items()}, resp.status
     except urllib.error.HTTPError as e:
         headers = dict(e.headers) if e.headers else {}
@@ -261,28 +263,40 @@ def check_permissions_policy(headers: dict) -> Optional[HeaderFinding]:
 def check_cors(headers: dict) -> Optional[HeaderFinding]:
     acao = headers.get("access-control-allow-origin", "")
     acac = headers.get("access-control-allow-credentials", "").lower()
+    req_origin = headers.get("_request_origin", "")
 
-    if acao == "*" and acac == "true":
+    # Reflected Origin + Credentials (CRITICAL)
+    if acao == req_origin and acac == "true":
         return HeaderFinding(
             severity="CRITICAL", cvss=9.1,
             header="Access-Control-Allow-Origin",
-            title="CORS Misconfiguration: Wildcard + Credentials",
-            detail="Access-Control-Allow-Origin: * combined with Allow-Credentials: true "
-                   "is invalid per spec but some servers implement it. This allows any "
-                   "origin to make credentialed cross-origin requests — full account takeover.",
-            recommendation="Never combine wildcard ACAO with credentials. "
-                           "Use an explicit allowlist of trusted origins.",
+            title="CORS Misconfiguration: Reflected Origin",
+            detail=f"The server reflects the request Origin header ('{req_origin}') into ACAO "
+                   "and permits credentials. Any site can force a user's browser to make "
+                   "requests to this application and read private data — session theft.",
+            recommendation="Do not reflect Origin. Use a static allowlist or disable credentials.",
             present=True
         )
+
+    if acao == "*" and acac == "true":
+        return HeaderFinding(
+            severity="HIGH", cvss=7.5,
+            header="Access-Control-Allow-Origin",
+            title="CORS: Wildcard + Credentials",
+            detail="ACAO: * with Credentials: true is generally ignored by modern browsers "
+                   "but indicates a permissive security mindset. Spec-invalid.",
+            recommendation="Never combine wildcard ACAO with credentials.",
+            present=True
+        )
+    
     if acao == "*":
         return HeaderFinding(
             severity="MEDIUM", cvss=5.3,
             header="Access-Control-Allow-Origin",
             title="CORS: Wildcard Origin Allowed",
             detail="Any website can make cross-origin requests to this server and read "
-                   "responses. Acceptable for fully public APIs, dangerous for APIs "
-                   "that use cookie-based auth.",
-            recommendation="Restrict to known origins: Access-Control-Allow-Origin: https://yourdomain.com",
+                   "responses. Acceptable for public APIs, dangerous for private data.",
+            recommendation="Restrict to trusted origins.",
             present=True
         )
     return None

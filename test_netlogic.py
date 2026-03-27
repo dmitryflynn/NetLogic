@@ -2,7 +2,7 @@
 NetLogic unit tests — no network required
 """
 import sys, os, unittest
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.scanner       import parse_banner, guess_os_from_ttl, ServiceBanner, PortResult
 from src.cve_correlator import (
