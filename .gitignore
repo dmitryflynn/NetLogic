@@ -56,6 +56,11 @@ desktop.ini
 .vscode/
 *.code-workspace
 
+# ─── Research / private documents ───────────────────────────────────────────
+*.docx
+*.doc
+*.pdf
+
 # ─── Scratch / test files ────────────────────────────────────────────────────
 test_write.txt
 NetLogic-Research_test.txt
