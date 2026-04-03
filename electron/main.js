@@ -35,6 +35,24 @@ function getPythonPath() {
     path.join(path.dirname(app.getPath('exe')), 'resources'),
   ];
 
+  // In development mode, we prefer the local python script over any bundled binary
+  if (IS_DEV) {
+    const scriptPath = path.join(__dirname, '..', 'netlogic.py');
+    if (fs.existsSync(scriptPath)) {
+      for (const candidate of ['python', 'python3', 'py']) {
+        try {
+          const result = require('child_process').spawnSync(
+            candidate, ['--version'], { timeout: 2000 }
+          );
+          if (result.status === 0) {
+            console.log(`[python] (dev) using system ${candidate} with script: ${scriptPath}`);
+            return { exe: candidate, script: scriptPath };
+          }
+        } catch { }
+      }
+    }
+  }
+
   for (const dir of candidateDirs) {
     const enginePath = path.join(dir, engineName);
     console.log(`[python] checking: ${enginePath}`);
