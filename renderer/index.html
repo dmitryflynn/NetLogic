@@ -707,11 +707,15 @@
       border: 1px solid var(--border);
       border-radius: var(--radius-lg);
       overflow: hidden;
-      transition: border-color 0.2s;
+      transition: all 0.2s;
+      cursor: pointer;
+      margin-bottom: 12px;
     }
 
     .vuln-card:hover {
-      border-color: var(--text-dim);
+      border-color: var(--medium);
+      background: rgba(255, 255, 255, 0.02);
+      transform: translateY(-1px);
     }
 
     .vuln-card-header {
@@ -1455,6 +1459,29 @@
   <div id="toast-container"></div>
 
   <script>
+    function toast(msg, type = 'info') {
+      const container = document.getElementById('toast-container');
+      const el = document.createElement('div');
+      el.className = `toast ${type}`;
+      el.textContent = msg;
+      container.appendChild(el);
+      setTimeout(() => el.remove(), 3000);
+    }
+
+    async function copyToClipboard(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        toast('Copied to clipboard!', 'success');
+      } catch (err) {
+        toast('Failed to copy.', 'error');
+      }
+    }
+
+    function copyCard(el) {
+      const text = el.getAttribute('data-copy-text');
+      if (text) copyToClipboard(text);
+    }
+
     /* ═══════════════════════════════════════════════════════════════
        NETLOGIC RENDERER — App Logic
     ═══════════════════════════════════════════════════════════════ */
@@ -1809,8 +1836,9 @@
         const exploit = cve.exploit_available ? '<span class="exploit-tag">⚡ EXPLOIT</span>' : '';
         const cvss = cve.cvss_score ? cve.cvss_score.toFixed(1) : '?';
         const vec = cve.vector ? `<span>Vector: ${escHtml(cve.vector)}</span>` : '';
+        const copyText = `${cve.id} [${sev} / ${cvss}]\n${cve.description}\nRemediation: ${cve.remediation || 'Apply security updates.'}`;
         return `
-    <div class="vuln-card">
+    <div class="vuln-card" data-copy-text="${escHtml(copyText)}" onclick="copyCard(this)">
       <div class="vuln-card-header">
         <span class="sev-badge sev-${sev}">${sev}</span>
         <span class="cve-id">${escHtml(cve.id || '–')}</span>
@@ -1855,8 +1883,10 @@
       }
       section.style.display = 'block';
 
-      const cards = state.audit.map(f => `
-    <div class="vuln-card" style="border-left: 4px solid var(--info)">
+      const cards = state.audit.map(f => {
+        const copyText = `${f.title} [${f.severity}]\n${f.detail}\nRemediation: ${f.remediation}`;
+        return `
+    <div class="vuln-card" style="border-left: 4px solid var(--info)" data-copy-text="${escHtml(copyText)}" onclick="copyCard(this)">
       <div class="vuln-card-header" style="background: rgba(102, 170, 255, 0.05)">
         <span class="sev-badge" style="background: var(--bg-elevated); color: var(--info)">${f.type}</span>
         <span class="cve-id">${escHtml(f.title)}</span>
@@ -1868,7 +1898,8 @@
           <strong>Remediation:</strong> ${escHtml(f.remediation)}
         </div>
       </div>
-    </div>`).join('');
+    </div>`;
+      }).join('');
 
       section.innerHTML = `
     <div class="section-header" style="margin-top: 24px">
