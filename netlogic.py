@@ -6,6 +6,12 @@ import sys
 import os
 import time
 import concurrent.futures
+import io
+
+# Ensure UTF-8 output on Windows consoles to prevent UnicodeEncodeError for emojis/symbols
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.scanner        import scan_host, scan_cidr, COMMON_PORTS, EXTENDED_PORTS
