@@ -214,6 +214,8 @@ function buildPythonArgs(config, scriptPath) {
   if (config.headers) args.push('--headers');
   if (config.dns) args.push('--dns');
   if (config.stack) args.push('--stack');
+  if (config.takeover) args.push('--takeover');
+  if (config.probe) args.push('--probe');
   if (config.cidr) args.push('--cidr');
   if (config.timeout) args.push('--timeout', String(config.timeout));
   if (config.threads) args.push('--threads', String(config.threads));

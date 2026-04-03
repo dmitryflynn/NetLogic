@@ -1312,6 +1312,24 @@
                 <label class="toggle-item">
                   <input type="checkbox" id="opt-osint"> OSINT
                 </label>
+                <label class="toggle-item">
+                  <input type="checkbox" id="opt-stack"> Stack/WAF
+                </label>
+                <label class="toggle-item">
+                  <input type="checkbox" id="opt-tls"> TLS
+                </label>
+                <label class="toggle-item">
+                  <input type="checkbox" id="opt-headers"> Headers
+                </label>
+                <label class="toggle-item">
+                  <input type="checkbox" id="opt-dns"> DNS/Email
+                </label>
+                <label class="toggle-item">
+                  <input type="checkbox" id="opt-takeover"> Takeover
+                </label>
+                <label class="toggle-item">
+                  <input type="checkbox" id="opt-probe"> Active Probes
+                </label>
                 <label class="toggle-item"
                   title="Automatically map and scan all connected devices on the local /24 subnet">
                   <input type="checkbox" id="opt-cidr"> Map Subnet
@@ -1478,10 +1496,12 @@
         osint: fullScan || document.getElementById('opt-osint').checked,
         cidr: document.getElementById('opt-cidr').checked,
         full: fullScan,
-        tls: fullScan,
-        headers: fullScan,
-        dns: fullScan,
-        stack: fullScan,
+        tls: fullScan || document.getElementById('opt-tls').checked,
+        headers: fullScan || document.getElementById('opt-headers').checked,
+        dns: fullScan || document.getElementById('opt-dns').checked,
+        stack: fullScan || document.getElementById('opt-stack').checked,
+        takeover: fullScan || document.getElementById('opt-takeover').checked,
+        probe: fullScan || document.getElementById('opt-probe').checked,
         threads: 100,
       };
 
