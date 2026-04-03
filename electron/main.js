@@ -24,61 +24,39 @@ const IS_MAC = process.platform === 'darwin';
 function getPythonPath() {
   const engineName = IS_WIN ? 'netlogic_engine.exe' : 'netlogic_engine';
 
-  // All possible locations for the bundled engine
+  // 1. High Priority: System Python + netlogic.py script (ensure latest code)
+  const scriptPath = path.join(__dirname, '..', 'netlogic.py');
+  if (fs.existsSync(scriptPath)) {
+    for (const candidate of ['python', 'python3', 'py']) {
+      try {
+        const result = require('child_process').spawnSync(
+          candidate, ['--version'], { timeout: 2000 }
+        );
+        if (result.status === 0) {
+          console.log(`[python] Using system ${candidate} with script: ${scriptPath}`);
+          return { exe: candidate, script: scriptPath };
+        }
+      } catch { }
+    }
+  }
+
+  // 2. Low Priority: Bundled engine (fallback for standalone production installs)
   const candidateDirs = [
-    process.resourcesPath,                          // installed app: resources/
-    path.join(process.resourcesPath, 'python_dist'),// resources/python_dist/
-    path.join(__dirname, '..', 'python_dist'),      // dev: project/python_dist/
-    path.join(__dirname, '..'),                     // dev: project root
-    path.dirname(app.getPath('exe')),               // next to the exe
+    process.resourcesPath,
+    path.join(process.resourcesPath, 'python_dist'),
+    path.join(__dirname, '..', 'python_dist'),
+    path.join(__dirname, '..'),
+    path.dirname(app.getPath('exe')),
     path.join(path.dirname(app.getPath('exe')), 'resources', 'python_dist'),
     path.join(path.dirname(app.getPath('exe')), 'resources'),
   ];
 
-  // In development mode, we prefer the local python script over any bundled binary
-  if (IS_DEV) {
-    const scriptPath = path.join(__dirname, '..', 'netlogic.py');
-    if (fs.existsSync(scriptPath)) {
-      for (const candidate of ['python', 'python3', 'py']) {
-        try {
-          const result = require('child_process').spawnSync(
-            candidate, ['--version'], { timeout: 2000 }
-          );
-          if (result.status === 0) {
-            console.log(`[python] (dev) using system ${candidate} with script: ${scriptPath}`);
-            return { exe: candidate, script: scriptPath };
-          }
-        } catch { }
-      }
-    }
-  }
-
   for (const dir of candidateDirs) {
     const enginePath = path.join(dir, engineName);
-    console.log(`[python] checking: ${enginePath}`);
     if (fs.existsSync(enginePath)) {
-      console.log(`[python] found engine at: ${enginePath}`);
+      console.log(`[python] Using bundled engine at: ${enginePath}`);
       return { exe: enginePath, script: null };
     }
-  }
-
-  // Fall back to system Python + script
-  const scriptPaths = [
-    path.join(process.resourcesPath, 'netlogic.py'),
-    path.join(__dirname, '..', 'netlogic.py'),
-  ];
-  const scriptPath = scriptPaths.find(p => fs.existsSync(p)) || scriptPaths[1];
-
-  for (const candidate of ['python', 'python3', 'py']) {
-    try {
-      const result = require('child_process').spawnSync(
-        candidate, ['--version'], { timeout: 2000 }
-      );
-      if (result.status === 0) {
-        console.log(`[python] using system ${candidate} with script: ${scriptPath}`);
-        return { exe: candidate, script: scriptPath };
-      }
-    } catch { }
   }
 
   return null;
