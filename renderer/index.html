@@ -51,6 +51,44 @@
       --font-display: 'Syne', sans-serif;
       --font-body: 'JetBrains Mono', monospace;
     }
+    
+    #toast-container {
+      position: fixed;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 9999;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .toast {
+      background: var(--accent);
+      color: #000;
+      padding: 8px 24px;
+      border-radius: 20px;
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4), 0 0 10px var(--accent);
+      animation: toast-in 0.3s ease-out, toast-out 0.3s ease-in 1.5s forwards;
+      pointer-events: auto;
+    }
+
+    @keyframes toast-in {
+      from { transform: translateY(20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    @keyframes toast-out {
+      from { transform: translateY(0); opacity: 1; }
+      to { transform: translateY(-20px); opacity: 0; }
+    }
 
     /* ═══════════════════════════════════════════════════
    RESET & BASE
@@ -1862,6 +1900,9 @@
           ${cve.product ? `<span>${escHtml(cve.product)} ${escHtml(cve.version || '')}</span>` : ''}
           ${vec}
           ${cve.published ? `<span>${escHtml(cve.published)}</span>` : ''}
+          <div style="font-size: 11px; color: var(--medium); border-top: 1px dotted var(--border); padding-top: 10px; margin-top: 10px;">
+            <strong>Remediation:</strong> ${escHtml(cve.remediation || 'Upgrade to the latest stable version and apply vendor security patches.')}
+          </div>
         </div>
       </div>
     </div>`;
@@ -1967,6 +2008,7 @@
         scan_duration_s: state.hostInfo?.scan_duration_s,
         ports: state.ports,
         vulnerabilities: state.vulns,
+        audit: state.audit,
       };
     }
 
