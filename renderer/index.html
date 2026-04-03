@@ -1518,6 +1518,12 @@
       window.netlogic.onScanPort(d => handlePort(d));
       window.netlogic.onScanVuln(d => handleVuln(d));
       window.netlogic.onScanOSINT(d => handleOSINT(d));
+      window.netlogic.onScanTLS(d => handleTLS(d));
+      window.netlogic.onScanHeaders(d => handleHeaders(d));
+      window.netlogic.onScanStack(d => handleStack(d));
+      window.netlogic.onScanDNS(d => handleDNS(d));
+      window.netlogic.onScanTakeover(d => handleTakeover(d));
+      window.netlogic.onScanServiceProber(d => handleServiceProber(d));
       window.netlogic.onScanProgress(d => handleProgress(d));
       window.netlogic.onScanLog(d => appendLog(d.text, d.level || 'info'));
       window.netlogic.onScanDone(d => finalizeScan(d));
@@ -1603,6 +1609,61 @@
       const sub = (d.subdomains || []).length;
       const dns = (d.dns_records || []).length;
       if (sub || dns) appendLog(`OSINT: ${sub} subdomains, ${dns} DNS records`, 'ok');
+    }
+
+    function handleTLS(d) {
+      if (d.error) return;
+      appendLog(`TLS: Certificate for ${d.common_name || 'host'} is ${d.expired ? 'EXPIRED' : 'valid'}.`, d.expired ? 'warn' : 'ok');
+    }
+
+    function handleHeaders(d) {
+      const missing = (d.missing || []).length;
+      if (missing > 0) appendLog(`Headers: ${missing} security headers missing on port ${d.port}.`, 'info');
+    }
+
+    function handleStack(d) {
+      if (d.waf) appendLog(`Stack: WAF detected: ${d.waf}`, 'warn');
+      if (d.cms) appendLog(`Stack: CMS detected: ${d.cms}`, 'ok');
+    }
+
+    function handleDNS(d) {
+      if (d.dmarc && !d.dmarc.valid) appendLog(`DNS: DMARC misconfiguration detected!`, 'warn');
+      if (d.spf && !d.spf.valid) appendLog(`DNS: SPF misconfiguration detected!`, 'warn');
+    }
+
+    function handleTakeover(d) {
+      if (!d.vulnerable && (!d.findings || d.findings.length === 0)) return;
+      const findings = d.findings || [];
+      findings.forEach(f => {
+        handleVuln({
+          port: 0,
+          service: 'dns',
+          cve_id: 'TAKEOVER',
+          cves: [{
+            id: 'Subdomain Takeover',
+            severity: 'CRITICAL',
+            cvss_score: 9.0,
+            description: `Dangling CNAME/DNS record for ${f.subdomain} points to ${f.provider}. An attacker can claim this resource.`
+          }]
+        });
+      });
+    }
+
+    function handleServiceProber(d) {
+      if (!d.findings || d.findings.length === 0) return;
+      d.findings.forEach(f => {
+        handleVuln({
+          port: f.port,
+          service: f.service,
+          cve_id: 'MISCONFIG',
+          cves: [{
+            id: f.title,
+            severity: f.severity,
+            cvss_score: f.severity === 'CRITICAL' ? 9.8 : f.severity === 'HIGH' ? 8.5 : 5.0,
+            description: f.detail + ' (Evidence: ' + f.evidence + ')'
+          }]
+        });
+      });
     }
 
     function handleProgress(d) {
