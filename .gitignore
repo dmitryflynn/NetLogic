@@ -1,0 +1,62 @@
+# ─── OpenWolf / AI Agent files ──────────────────────────────────────────────
+.wolf/
+.claude/
+CLAUDE.md
+OPENWOLF.md
+
+# ─── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+*.spec.bak
+.eggs/
+
+# ─── Virtual environments ────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env.local
+
+# ─── Node / Electron ─────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+
+# ─── Distribution / build output ─────────────────────────────────────────────
+python_dist/
+out/
+release/
+*.exe
+*.msi
+*.dmg
+*.AppImage
+
+# ─── NVD cache ───────────────────────────────────────────────────────────────
+~/.netlogic/
+
+# ─── Scan reports (local output) ─────────────────────────────────────────────
+netlogic_*.json
+netlogic_*.html
+
+# ─── OS / editor noise ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# ─── Scratch / test files ────────────────────────────────────────────────────
+test_write.txt
+NetLogic-Research_test.txt
+setup_netlogic_research.py
