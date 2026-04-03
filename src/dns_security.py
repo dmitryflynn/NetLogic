@@ -24,6 +24,14 @@ from typing import Optional
 import concurrent.futures
 
 
+@dataclass
+class AuditFinding:
+    title: str
+    description: str
+    remediation: str
+    severity: str  # INFO, LOW, MEDIUM, HIGH, CRITICAL
+    category: str  # DNS, SPF, DMARC, etc.
+
 # ─── Data Models ────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -34,14 +42,14 @@ class SPFResult:
     mechanism_count: int = 0
     all_mechanism: str = ""    # +all / -all / ~all / ?all
     includes: list[str] = field(default_factory=list)
-    issues: list[str] = field(default_factory=list)
+    findings: list[AuditFinding] = field(default_factory=list)
 
 @dataclass
 class DKIMResult:
     checked_selectors: list[str] = field(default_factory=list)
     found_selectors: list[str] = field(default_factory=list)
     records: dict = field(default_factory=dict)
-    issues: list[str] = field(default_factory=list)
+    findings: list[AuditFinding] = field(default_factory=list)
 
 @dataclass
 class DMARCResult:
@@ -52,7 +60,7 @@ class DMARCResult:
     pct: int = 100
     rua: list[str] = field(default_factory=list)
     ruf: list[str] = field(default_factory=list)
-    issues: list[str] = field(default_factory=list)
+    findings: list[AuditFinding] = field(default_factory=list)
 
 @dataclass
 class MXRecord:
@@ -143,11 +151,23 @@ def check_spf(domain: str) -> SPFResult:
     spf_records = [t for t in txts if t.startswith("v=spf1")]
 
     if not spf_records:
-        result.issues.append("No SPF record — domain is spoofable via email")
+        result.findings.append(AuditFinding(
+            title="Missing SPF Record",
+            description="The domain lacks an SPF record, allowing unauthorized servers to send email on its behalf.",
+            remediation="Implement a v=spf1 record. Example: v=spf1 include:_spf.google.com ~all",
+            severity="HIGH",
+            category="SPF"
+        ))
         return result
 
     if len(spf_records) > 1:
-        result.issues.append(f"Multiple SPF records ({len(spf_records)}) — only one is valid, causes failures")
+        result.findings.append(AuditFinding(
+            title="Multiple SPF Records",
+            description=f"Multiple SPF records ({len(spf_records)}) found. Only one record is allowed; multiple records cause validation to fail.",
+            remediation="Merge your SPF records into a single v=spf1 record.",
+            severity="HIGH",
+            category="SPF"
+        ))
 
     result.present = True
     result.record = spf_records[0]
@@ -162,14 +182,38 @@ def check_spf(domain: str) -> SPFResult:
     result.all_mechanism = all_mech or ""
 
     if not all_mech:
-        result.issues.append("No 'all' mechanism — SPF result undefined for unlisted senders")
+        result.findings.append(AuditFinding(
+            title="Missing SPF All Mechanism",
+            description="The SPF record lacks an 'all' mechanism, leaving behavior for unlisted senders undefined.",
+            remediation="Add ~all or -all to the end of the record.",
+            severity="MEDIUM",
+            category="SPF"
+        ))
     elif all_mech in ("+all", "all"):
-        result.issues.append("'+all' allows ANY server to send as this domain — completely ineffective")
+        result.findings.append(AuditFinding(
+            title="Insecure SPF All Policy",
+            description=f"Policy '{all_mech}' explicitly permits EVERY server on the internet to send as this domain.",
+            remediation="Replace +all with -all (fail) or ~all (softfail).",
+            severity="CRITICAL",
+            category="SPF"
+        ))
         result.valid = False
     elif all_mech == "?all":
-        result.issues.append("'?all' neutral result — provides no spam protection")
+        result.findings.append(AuditFinding(
+            title="Neutral SPF Policy",
+            description="Policy '?all' provides no instruction to receiving servers, offering no protection against spoofing.",
+            remediation="Use -all or ~all for policy enforcement.",
+            severity="MEDIUM",
+            category="SPF"
+        ))
     elif all_mech == "~all":
-        result.issues.append("'~all' softfail — emails from unlisted servers may still be delivered")
+        result.findings.append(AuditFinding(
+            title="Weak SPF Policy (Softfail)",
+            description="The domain uses a softfail policy (~all), which asks servers to accept but mark suspicious mail. Spoofed mail may still reach users.",
+            remediation="Switch to a hard fail policy (-all) for maximum protection.",
+            severity="LOW",
+            category="SPF"
+        ))
         result.valid = True   # Accepted by many analysts but technically weak
     elif all_mech == "-all":
         result.valid = True   # Correct
@@ -179,11 +223,23 @@ def check_spf(domain: str) -> SPFResult:
     result.includes = includes
     lookup_count = len([p for p in parts if p.startswith(("include:", "a:", "mx:", "exists:", "redirect="))])
     if lookup_count > 10:
-        result.issues.append(f"SPF lookup count ({lookup_count}) exceeds RFC 7208 limit of 10 — causes PermError")
+        result.findings.append(AuditFinding(
+            title="Excessive SPF Lookups",
+            description=f"SPF record triggers {lookup_count} DNS lookups, exceeding the RFC 7208 limit of 10. Servers may ignore the record.",
+            remediation="Flatten your SPF record or use SPF mechanisms like 'ip4' to reduce external lookups.",
+            severity="HIGH",
+            category="SPF"
+        ))
 
     # ptr mechanism deprecated
     if "ptr" in result.record:
-        result.issues.append("'ptr' mechanism is deprecated (RFC 7208) — remove it")
+        result.findings.append(AuditFinding(
+            title="Deprecated SPF PTR Mechanism",
+            description="The 'ptr' mechanism is deprecated and inefficient. Many mail servers ignore it.",
+            remediation="Remove the 'ptr' mechanism and replace it with 'a' or 'mx' if needed.",
+            severity="LOW",
+            category="SPF"
+        ))
 
     return result
 
@@ -254,7 +310,13 @@ def check_dmarc(domain: str) -> DMARCResult:
             dmarc_records = [t for t in txts2 if t.startswith("v=DMARC1")]
 
     if not dmarc_records:
-        result.issues.append("No DMARC record — no policy enforcement for spoofed emails")
+        result.findings.append(AuditFinding(
+            title="Missing DMARC Record",
+            description="The domain lacks a DMARC policy, allowing attackers to spoof its identity without consequence.",
+            remediation="Implement a DMARC record: v=DMARC1; p=quarantine; rua=mailto:admin@domain.com",
+            severity="HIGH",
+            category="DMARC"
+        ))
         return result
 
     result.present = True
@@ -269,7 +331,13 @@ def check_dmarc(domain: str) -> DMARCResult:
         result.pct = int(tags.get("pct", "100").strip())
     except ValueError:
         result.pct = 100
-        result.issues.append("pct= tag has non-integer value — defaulting to 100")
+        result.findings.append(AuditFinding(
+            title="Invalid DMARC pct Tag",
+            description="The pct= tag contains a non-integer value. Defaulting to 100%.",
+            remediation="Use an integer between 0 and 100 for the pct tag.",
+            severity="LOW",
+            category="DMARC"
+        ))
 
     rua = tags.get("rua", "")
     result.rua = [r.strip() for r in rua.split(",") if r.strip()]
@@ -281,29 +349,48 @@ def check_dmarc(domain: str) -> DMARCResult:
         result.valid = True
 
     if result.policy == "none":
-        result.issues.append(
-            "DMARC policy is 'none' — monitoring only, no emails are rejected or quarantined. "
-            "Domain can still be spoofed."
-        )
+        result.findings.append(AuditFinding(
+            title="DMARC Policy is 'None'",
+            description="Policy 'p=none' is for monitoring only and does not block spoofed emails. Attacks will still be delivered.",
+            remediation="Transition to 'p=quarantine' or 'p=reject' to enforce security.",
+            severity="HIGH",
+            category="DMARC"
+        ))
     elif result.policy == "quarantine":
-        result.issues.append(
-            "DMARC policy is 'quarantine' — spoofed emails go to spam but are not rejected outright."
-        )
+        result.findings.append(AuditFinding(
+            title="DMARC Policy is 'Quarantine'",
+            description=f"Policy 'p=quarantine' directs spoofed mail to recipients' spam folders but does not outright reject them.",
+            remediation="Consider moving to 'p=reject' to fully block unauthorized mail.",
+            severity="LOW",
+            category="DMARC"
+        ))
 
     if result.pct < 100:
-        result.issues.append(
-            f"DMARC pct={result.pct} — policy only applies to {result.pct}% of messages"
-        )
+        result.findings.append(AuditFinding(
+            title="DMARC Percentage is Reduced",
+            description=f"Only {result.pct}% of emails are subject to the DMARC policy. This allows some spoofing bypass.",
+            remediation="Increase pct= to 100 for full policy enforcement.",
+            severity="MEDIUM",
+            category="DMARC"
+        ))
 
     if result.subdomain_policy == "none" and result.policy != "none":
-        result.issues.append(
-            "Subdomain policy (sp=none) weaker than domain policy — subdomains can still be spoofed"
-        )
+        result.findings.append(AuditFinding(
+            title="Weak DMARC Subdomain Policy",
+            description=f"Policy sp=none permits attackers to spoof subdomains even if the main domain is protected.",
+            remediation="Set sp= to match the main domain policy (sp=quarantine or sp=reject).",
+            severity="HIGH",
+            category="DMARC"
+        ))
 
     if not result.rua:
-        result.issues.append(
-            "No rua= reporting address — you're not receiving aggregate DMARC failure reports"
-        )
+        result.findings.append(AuditFinding(
+            title="Missing DMARC Reporting (RUA)",
+            description="DMARC record does not list a rua= address. You will not receive reports on spoofing attempts.",
+            remediation="Add an aggregate reporting email: rua=mailto:dmarc-reports@domain.com.",
+            severity="MEDIUM",
+            category="DMARC"
+        ))
 
     return result
 
