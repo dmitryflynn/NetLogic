@@ -480,7 +480,8 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
 
         # User requirement: Only show actual vulnerabilities based on exact version matches.
         # Do not 'guess' or show baseline CVEs if we don't know the specific version running.
-        if not product or not version:
+        # If version is missing, we still allow matches for signatures that don't depend on it (e.g. 'lambda v: True')
+        if not product:
             continue
 
         matched_offline = []
@@ -598,11 +599,13 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
 
 def _ver_lt(v: str, threshold: str) -> bool:
     """Legacy helper kept for any external callers."""
+    if not v:
+        return False
     from src.nvd_lookup import _parse_ver
     try:
         return _parse_ver(v) < _parse_ver(threshold)
     except Exception:
-        return True
+        return False
 
 
 def _ver_in_range(v: str, low: str, high: str) -> bool:
@@ -877,7 +880,7 @@ def _offline_correlate(ports, min_cvss: float = 4.0) -> list[VulnMatch]:
             product, version = extract_product_version(banner)
         if not product:
             product = infer_product_from_service(service, port)
-        if not product or not version:
+        if not product:
             continue
 
         matched = []
