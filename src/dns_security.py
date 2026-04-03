@@ -264,7 +264,11 @@ def check_dmarc(domain: str) -> DMARCResult:
 
     result.policy = tags.get("p", "none").strip()
     result.subdomain_policy = tags.get("sp", result.policy).strip()
-    result.pct = int(tags.get("pct", "100").strip())
+    try:
+        result.pct = int(tags.get("pct", "100").strip())
+    except ValueError:
+        result.pct = 100
+        result.issues.append("pct= tag has non-integer value — defaulting to 100")
 
     rua = tags.get("rua", "")
     result.rua = [r.strip() for r in rua.split(",") if r.strip()]
@@ -345,35 +349,34 @@ def check_zone_transfer(domain: str) -> tuple[bool, list[str]]:
         try:
             ip = socket.gethostbyname(ns)
             # Raw TCP DNS AXFR request
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            sock.connect((ip, 53))
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(5)
+                sock.connect((ip, 53))
 
-            # Build AXFR query
-            import struct
-            query_id = b'\xaa\xbb'
-            flags = b'\x00\x00'
-            qdcount = b'\x00\x01'
-            ancount = b'\x00\x00'
-            nscount = b'\x00\x00'
-            arcount = b'\x00\x00'
-            header = query_id + flags + qdcount + ancount + nscount + arcount
+                # Build AXFR query
+                import struct
+                query_id = b'\xaa\xbb'
+                flags = b'\x00\x00'
+                qdcount = b'\x00\x01'
+                ancount = b'\x00\x00'
+                nscount = b'\x00\x00'
+                arcount = b'\x00\x00'
+                header = query_id + flags + qdcount + ancount + nscount + arcount
 
-            # Encode domain name
-            qname = b""
-            for label in domain.split("."):
-                qname += bytes([len(label)]) + label.encode()
-            qname += b"\x00"
+                # Encode domain name
+                qname = b""
+                for label in domain.split("."):
+                    qname += bytes([len(label)]) + label.encode()
+                qname += b"\x00"
 
-            qtype = b'\x00\xfc'   # AXFR
-            qclass = b'\x00\x01'  # IN
+                qtype = b'\x00\xfc'   # AXFR
+                qclass = b'\x00\x01'  # IN
 
-            query = header + qname + qtype + qclass
-            length_prefix = struct.pack(">H", len(query))
-            sock.sendall(length_prefix + query)
+                query = header + qname + qtype + qclass
+                length_prefix = struct.pack(">H", len(query))
+                sock.sendall(length_prefix + query)
 
-            response = sock.recv(4096)
-            sock.close()
+                response = sock.recv(4096)
 
             # TCP DNS: 2-byte length prefix, then 12-byte DNS header.
             # Bytes 8-9 (offset 8) = ANCOUNT, bytes 10-11 = NSCOUNT, byte 5 low nibble = RCODE.
@@ -444,11 +447,9 @@ def check_caa(domain: str) -> CAAResult:
 def check_wildcard_dns(domain: str) -> bool:
     """Check if *.domain resolves (wildcard DNS — major subdomain takeover risk)."""
     test_host = f"this-should-not-exist-{hash(domain) % 99999}.{domain}"
-    try:
-        socket.gethostbyname(test_host)
-        return True
-    except socket.gaierror:
-        return False
+    # Use DoH for consistency — avoids local resolver caching and VPN/split-horizon issues
+    answers = _doh(test_host, "A")
+    return bool(answers)
 
 
 # ─── Spoofability Scoring ────────────────────────────────────────────────────

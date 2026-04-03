@@ -291,7 +291,9 @@ def detect_waf(target: str, headers: dict, body: str, status: int, scheme: str =
             return result
 
     # Phase 2: active probe — send XSS/SQLi payload, check for block
-    probe_url = f"{scheme}://{target}/?id=1'%20OR%20'1'='1&q=<script>alert(1)</script>"
+    # Bracket IPv6 addresses in the URL
+    _t = f"[{target}]" if ":" in target else target
+    probe_url = f"{scheme}://{_t}/?id=1'%20OR%20'1'='1&q=<script>alert(1)</script>"
     ph, pb, ps = _fetch(probe_url, timeout=5)
     all_headers = {**headers, **ph}
     combined_body = body + pb
@@ -359,13 +361,16 @@ def detect_from_body(body: str) -> list[TechFinding]:
                 seen.add(key)
                 # Try to extract version from nearby text
                 version = None
-                ver_match = re.search(
-                    pattern.split(r"|")[0].rstrip(r"\/\|") + r'[^\d]*([\d]+\.[\d]+(?:\.[\d]+)?)',
-                    body, re.IGNORECASE
-                )
-                if ver_match:
-                    try: version = ver_match.group(1)
-                    except: pass
+                try:
+                    ver_match = re.search(
+                        pattern.split(r"|")[0].rstrip(r"\/\|") + r'[^\d]*([\d]+\.[\d]+(?:\.[\d]+)?)',
+                        body, re.IGNORECASE
+                    )
+                    if ver_match:
+                        try: version = ver_match.group(1)
+                        except: pass
+                except re.error:
+                    pass
                 findings.append(TechFinding(
                     category=category, name=name, version=version,
                     confidence="MEDIUM",
@@ -433,7 +438,7 @@ def detect_cdn_cloud(headers: dict, body: str) -> tuple[Optional[str], Optional[
 
 # ─── WordPress Deep Scan ─────────────────────────────────────────────────────
 
-def wordpress_deep_scan(target: str) -> list[TechFinding]:
+def wordpress_deep_scan(target: str, scheme: str = "https") -> list[TechFinding]:
     """Extra checks specifically for WordPress sites."""
     findings = []
     checks = [
@@ -445,7 +450,7 @@ def wordpress_deep_scan(target: str) -> list[TechFinding]:
         ("/readme.html",          "WordPress readme.html exposes version"),
     ]
     for path, description in checks:
-        url = f"https://{target}{path}"
+        url = f"{scheme}://{target}{path}"
         _, body, status = _fetch(url, timeout=5)
         if status in (200, 301, 302):
             sev_note = "⚠ HIGH RISK" if "config" in path or ".env" in path else "ℹ INFO"
@@ -500,6 +505,6 @@ def fingerprint_stack(target: str, port: int = 443) -> StackResult:
     # WordPress extra checks
     is_wp = any(t.name == "WordPress" for t in result.technologies)
     if is_wp:
-        result.technologies.extend(wordpress_deep_scan(target))
+        result.technologies.extend(wordpress_deep_scan(target, scheme=actual_scheme))
 
     return result

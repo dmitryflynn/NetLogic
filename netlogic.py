@@ -70,9 +70,17 @@ def resolve_ports(ports_arg):
     if ports_arg == "quick":  return COMMON_PORTS
     if ports_arg == "full":   return EXTENDED_PORTS
     if ports_arg.startswith("custom="):
-        return [int(p) for p in ports_arg[7:].split(",") if p.strip().isdigit()]
+        port_list = [int(p) for p in ports_arg[7:].split(",") if p.strip().isdigit()]
+        if not port_list:
+            print(f"[!] No valid ports in --ports: {ports_arg}", file=sys.stderr)
+            sys.exit(1)
+        return port_list
     try:
-        return [int(p) for p in ports_arg.split(",") if p.strip().isdigit()]
+        port_list = [int(p) for p in ports_arg.split(",") if p.strip().isdigit()]
+        if not port_list:
+            print(f"[!] No valid ports in --ports: {ports_arg}", file=sys.stderr)
+            sys.exit(1)
+        return port_list
     except Exception:
         print(f"[!] Invalid --ports: {ports_arg}", file=sys.stderr)
         sys.exit(1)
@@ -380,7 +388,7 @@ def run_single(target, args):
 
     # ── Stack Fingerprint ──
     stack_result = None
-    do_stack = args.full or getattr(args, 'stack', False) or do_headers
+    do_stack = args.full or getattr(args, 'stack', False)
     if do_stack:
         from src.stack_fingerprint import fingerprint_stack
         http_port2 = next((p.port for p in host_result.ports
@@ -483,6 +491,12 @@ def main():
         preload_cache()
         if not args.target:
             return
+    if args.cache_stats:
+        stats = cache_stats()
+        print(f"  NVD cache: {stats.get('entries', 0)} entries, "
+              f"{stats.get('size_bytes', 0) // 1024} KB")
+        if not args.target:
+            return
 
     if not args.target:
         print("error: target is required", file=sys.stderr)
@@ -502,6 +516,7 @@ def main():
                 do_stack=(getattr(args, 'stack', False) or args.full),
                 do_dns=(getattr(args, 'dns', False) or args.full),
                 do_probe=(getattr(args, 'probe', False) or args.full),
+                do_takeover=(getattr(args, 'takeover', False) or args.full),
                 do_full=args.full,
                 min_cvss=getattr(args, 'min_cvss', 4.0),
             )

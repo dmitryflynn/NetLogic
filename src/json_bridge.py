@@ -28,6 +28,7 @@ def run_streaming_scan(target: str, ports: list, timeout: float,
                        do_tls: bool = False, do_headers: bool = False,
                        do_stack: bool = False, do_dns: bool = False,
                        do_full: bool = False, do_probe: bool = False,
+                       do_takeover: bool = False,
                        min_cvss: float = 4.0):
     """Execute a scan and stream results as JSON events."""
 
@@ -160,6 +161,16 @@ def run_streaming_scan(target: str, ports: list, timeout: float,
         except Exception as e:
             emit("log", {"text": f"OSINT: {e}", "level": "warn"})
 
+    # Subdomain Takeover Detection
+    if do_takeover or do_full:
+        emit("progress", {"percent": 93, "status": "Checking subdomains for takeover..."})
+        try:
+            from src.takeover import discover_and_check
+            takeover_result = discover_and_check(target)
+            emit("takeover", _asdict(takeover_result))
+        except Exception as e:
+            emit("log", {"text": f"Takeover: {e}", "level": "warn"})
+
     # Active Service & Vulnerability Probing
     if (do_probe or do_full) and result.ports:
         emit("progress", {"percent": 94, "status": "Running active service and vulnerability probes..."})
@@ -222,7 +233,7 @@ def _scan_streaming(target, ports, threads, timeout):
 
     result.ports.sort(key=lambda p: p.port)
     result.scan_duration_s = round(time.time() - start, 2)
-    result.os_guess = guess_os_from_ttl(result.ttl)
+    result.os_guess = guess_os_from_ttl(getattr(result, 'ttl', None))
     return result
 
 

@@ -277,12 +277,14 @@ def resolve_cname_chain(hostname: str, max_depth: int = 8) -> list[str]:
 
 
 def check_nxdomain(hostname: str) -> bool:
-    """Returns True if the hostname resolves to NXDOMAIN (doesn't exist)."""
+    """Returns True if the hostname fails to resolve (NXDOMAIN or equivalent)."""
     try:
         socket.gethostbyname(hostname)
         return False
-    except socket.gaierror as e:
-        return "Name or service not known" in str(e) or "No address" in str(e)
+    except socket.gaierror:
+        # Treat any resolution failure as NXDOMAIN.
+        # Windows and Linux use different error strings, so we catch the exception type.
+        return True
 
 
 # ─── HTTP Fingerprint Check ───────────────────────────────────────────────────────
@@ -412,7 +414,11 @@ def check_subdomain_takeovers(target: str, subdomains: list[str],
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as exe:
         futures = {exe.submit(analyze_subdomain, sub): sub for sub in subdomains}
         for future in concurrent.futures.as_completed(futures):
-            finding = future.result()
+            try:
+                finding = future.result()
+            except Exception:
+                result.safe += 1
+                continue
             if finding is None:
                 result.safe += 1
             elif finding.vulnerable:
