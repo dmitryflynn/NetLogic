@@ -1467,6 +1467,7 @@
       history: [],
       ports: [],
       vulns: [],
+      audit: [],
       hostInfo: null,
     };
 
@@ -1488,6 +1489,7 @@
       clearResults();
       state.ports = [];
       state.vulns = [];
+      state.audit = [];
       state.hostInfo = null;
       state.scanning = true;
 
@@ -1617,21 +1619,68 @@
     function handleTLS(d) {
       if (d.error) return;
       appendLog(`TLS: Certificate for ${d.common_name || 'host'} is ${d.expired ? 'EXPIRED' : 'valid'}.`, d.expired ? 'warn' : 'ok');
+      state.audit.push({
+        type: 'TLS',
+        severity: d.expired ? 'CRITICAL' : 'INFO',
+        title: d.expired ? 'Expired TLS Certificate' : 'TLS Configuration',
+        detail: `The host ${d.common_name} is using a certificate ${d.expired ? 'that has EXPIRED' : 'that is currently valid'}. Issuer: ${d.issuer}.`,
+        remediation: d.expired ? 'Renew the SSL/TLS certificate immediately to prevent MITM attacks and browser warnings.' : 'No action required.'
+      });
+      renderAuditCards();
     }
 
     function handleHeaders(d) {
-      const missing = (d.missing || []).length;
-      if (missing > 0) appendLog(`Headers: ${missing} security headers missing on port ${d.port}.`, 'info');
+      const missing = d.missing || [];
+      if (missing.length === 0) return;
+      appendLog(`Headers: ${missing.length} security headers missing on port ${d.port}.`, 'info');
+      state.audit.push({
+        type: 'Header',
+        severity: 'MEDIUM',
+        port: d.port,
+        title: 'Missing Security Headers',
+        detail: `The application on port ${d.port} is missing protective HTTP headers: ${missing.join(', ')}.`,
+        remediation: 'Configure your web server (Nginx/Apache) to send CSP, HSTS, X-Frame-Options, and X-Content-Type-Options headers.'
+      });
+      renderAuditCards();
     }
 
     function handleStack(d) {
-      if (d.waf) appendLog(`Stack: WAF detected: ${d.waf}`, 'warn');
+      if (d.waf) {
+        appendLog(`Stack: WAF detected: ${d.waf}`, 'warn');
+        state.audit.push({
+          type: 'WAF',
+          severity: 'INFO',
+          title: 'WAF/CDN Detected',
+          detail: `The target appears to be protected by ${d.waf}. This confirms defensive layering.`,
+          remediation: 'Ensure the WAF rules are regularly updated and monitoring is active.'
+        });
+      }
       if (d.cms) appendLog(`Stack: CMS detected: ${d.cms}`, 'ok');
+      renderAuditCards();
     }
 
     function handleDNS(d) {
-      if (d.dmarc && !d.dmarc.valid) appendLog(`DNS: DMARC misconfiguration detected!`, 'warn');
-      if (d.spf && !d.spf.valid) appendLog(`DNS: SPF misconfiguration detected!`, 'warn');
+      if (d.dmarc && !d.dmarc.valid) {
+        appendLog(`DNS: DMARC misconfiguration detected!`, 'warn');
+        state.audit.push({
+          type: 'DNS',
+          severity: 'HIGH',
+          title: 'DMARC Misconfiguration',
+          detail: `DMARC record is missing or invalid: ${d.dmarc.error || 'No record found'}. This allows domain spoofing and phishing attacks.`,
+          remediation: 'Implement a DMARC TXT record with a policy of v=DMARC1; p=quarantine; or p=reject;.'
+        });
+      }
+      if (d.spf && !d.spf.valid) {
+        appendLog(`DNS: SPF misconfiguration detected!`, 'warn');
+        state.audit.push({
+          type: 'DNS',
+          severity: 'HIGH',
+          title: 'SPF Misconfiguration',
+          detail: `SPF policy is missing or permits excessive IP ranges. Error: ${d.spf.error || 'Weak policy'}.`,
+          remediation: 'Create a strict SPF record listing only authorized mail servers, ending with -all (hard fail).'
+        });
+      }
+      renderAuditCards();
     }
 
     function handleTakeover(d) {
@@ -1790,6 +1839,42 @@
     </div>
     ${notes}
     ${cards || '<div style="color:var(--low);font-size:12px;padding:8px 0">✓ No known CVEs matched.</div>'}`;
+    }
+
+    function renderAuditCards() {
+      let section = document.getElementById('audit-section');
+      if (!section) {
+        section = document.createElement('div');
+        section.id = 'audit-section';
+        document.getElementById('results-main').appendChild(section);
+      }
+      if (state.audit.length === 0) {
+        section.style.display = 'none';
+        return;
+      }
+      section.style.display = 'block';
+
+      const cards = state.audit.map(f => `
+    <div class="vuln-card" style="border-left: 4px solid var(--info)">
+      <div class="vuln-card-header" style="background: rgba(102, 170, 255, 0.05)">
+        <span class="sev-badge" style="background: var(--bg-elevated); color: var(--info)">${f.type}</span>
+        <span class="cve-id">${escHtml(f.title)}</span>
+        <span class="cvss-score">${f.severity}</span>
+      </div>
+      <div class="vuln-card-body">
+        <div class="vuln-desc">${escHtml(f.detail)}</div>
+        <div style="font-size: 11px; margin-top: 8px; color: var(--low)">
+          <strong>Remediation:</strong> ${escHtml(f.remediation)}
+        </div>
+      </div>
+    </div>`).join('');
+
+      section.innerHTML = `
+    <div class="section-header" style="margin-top: 24px">
+      <span class="section-title">Security & Config Audit</span>
+      <span class="section-count" style="background: var(--info); color: #000">${state.audit.length}</span>
+    </div>
+    ${cards}`;
     }
 
     function updateRiskScore() {
