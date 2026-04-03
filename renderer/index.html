@@ -1623,8 +1623,8 @@
         type: 'TLS',
         severity: d.expired ? 'CRITICAL' : 'INFO',
         title: d.expired ? 'Expired TLS Certificate' : 'TLS Configuration',
-        detail: `The host ${d.common_name} is using a certificate ${d.expired ? 'that has EXPIRED' : 'that is currently valid'}. Issuer: ${d.issuer}.`,
-        remediation: d.expired ? 'Renew the SSL/TLS certificate immediately to prevent MITM attacks and browser warnings.' : 'No action required.'
+        detail: `Host: ${d.common_name}.\nIssuer: ${d.issuer}.\nValid From: ${d.not_before}\nValid Until: ${d.not_after}`,
+        remediation: d.expired ? 'Renew the SSL/TLS certificate immediately.' : 'No action required.'
       });
       renderAuditCards();
     }
@@ -1638,21 +1638,22 @@
         severity: 'MEDIUM',
         port: d.port,
         title: 'Missing Security Headers',
-        detail: `The application on port ${d.port} is missing protective HTTP headers: ${missing.join(', ')}.`,
-        remediation: 'Configure your web server (Nginx/Apache) to send CSP, HSTS, X-Frame-Options, and X-Content-Type-Options headers.'
+        detail: `The application is missing protective headers: ${missing.join(', ')}. Found Server: ${d.server_header || 'hidden'}`,
+        remediation: 'Configure your web server to send CSP, HSTS, X-Frame-Options, and X-Content-Type-Options.'
       });
       renderAuditCards();
     }
 
     function handleStack(d) {
-      if (d.waf) {
-        appendLog(`Stack: WAF detected: ${d.waf}`, 'warn');
+      const wafName = typeof d.waf === 'object' ? (d.waf.name || d.waf.product || 'Unknown') : d.waf;
+      if (wafName) {
+        appendLog(`Stack: WAF detected: ${wafName}`, 'warn');
         state.audit.push({
           type: 'WAF',
           severity: 'INFO',
-          title: 'WAF/CDN Detected',
-          detail: `The target appears to be protected by ${d.waf}. This confirms defensive layering.`,
-          remediation: 'Ensure the WAF rules are regularly updated and monitoring is active.'
+          title: 'WAF/CDN Protection Detected',
+          detail: `The target is protected by ${wafName}.\nEvidence: ${d.evidence || 'Header/Behavioral match'}`,
+          remediation: 'Ensure WAF bypass vulnerabilities (like direct-to-IP) are mitigated.'
         });
       }
       if (d.cms) appendLog(`Stack: CMS detected: ${d.cms}`, 'ok');
@@ -1666,8 +1667,8 @@
           type: 'DNS',
           severity: 'HIGH',
           title: 'DMARC Misconfiguration',
-          detail: `DMARC record is missing or invalid: ${d.dmarc.error || 'No record found'}. This allows domain spoofing and phishing attacks.`,
-          remediation: 'Implement a DMARC TXT record with a policy of v=DMARC1; p=quarantine; or p=reject;.'
+          detail: `DMARC record is missing or invalid.\nRaw Record: ${d.dmarc.record || 'None'}\nError: ${d.dmarc.error || 'Dangling policy'}`,
+          remediation: 'Implement a DMARC TXT record: v=DMARC1; p=quarantine;'
         });
       }
       if (d.spf && !d.spf.valid) {
@@ -1676,8 +1677,8 @@
           type: 'DNS',
           severity: 'HIGH',
           title: 'SPF Misconfiguration',
-          detail: `SPF policy is missing or permits excessive IP ranges. Error: ${d.spf.error || 'Weak policy'}.`,
-          remediation: 'Create a strict SPF record listing only authorized mail servers, ending with -all (hard fail).'
+          detail: `SPF policy is weak or permits unauthorized senders.\nRaw Record: ${d.spf.record || 'None'}\nError: ${d.spf.error || 'Policy lacks -all'}`,
+          remediation: 'Create a strict SPF record ending with -all to prevent spoofing.'
         });
       }
       renderAuditCards();
@@ -1862,8 +1863,8 @@
         <span class="cvss-score">${f.severity}</span>
       </div>
       <div class="vuln-card-body">
-        <div class="vuln-desc">${escHtml(f.detail)}</div>
-        <div style="font-size: 11px; margin-top: 8px; color: var(--low)">
+        <div class="vuln-desc" style="white-space: pre-wrap; font-family: var(--font-mono); font-size: 11px; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px; margin-bottom: 10px;">${escHtml(f.detail)}</div>
+        <div style="font-size: 11px; color: var(--low); border-top: 1px solid var(--border-dim); padding-top: 8px;">
           <strong>Remediation:</strong> ${escHtml(f.remediation)}
         </div>
       </div>
