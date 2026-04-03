@@ -259,6 +259,7 @@ def _vuln_to_dict(vm) -> dict:
                 "kev":              getattr(c, "kev", False),
                 "cwe":              getattr(c, "cwe", ""),
                 "version_range":    getattr(c, "version_range", ""),
+                "remediation":      getattr(c, "remediation", ""),
                 "references":       getattr(c, "references", []),
             }
             for c in vm.cves

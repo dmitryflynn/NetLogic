@@ -74,13 +74,13 @@ class DNSSecResult:
     enabled: bool = False
     ds_records: list[str] = field(default_factory=list)
     dnskey_found: bool = False
-    issues: list[str] = field(default_factory=list)
+    findings: list[AuditFinding] = field(default_factory=list)
 
 @dataclass
 class CAAResult:
     present: bool = False
     records: list[str] = field(default_factory=list)
-    issues: list[str] = field(default_factory=list)
+    findings: list[AuditFinding] = field(default_factory=list)
 
 @dataclass
 class DNSSecurityResult:
@@ -502,9 +502,13 @@ def check_dnssec(domain: str) -> DNSSecResult:
         result.enabled = True
 
     if not result.enabled:
-        result.issues.append(
-            "DNSSEC not enabled — DNS responses can be forged (DNS cache poisoning, BGP hijacking)"
-        )
+        result.findings.append(AuditFinding(
+            title="DNSSEC Not Enabled",
+            description="DNSSEC is not enabled. Without it, DNS responses can be forged via cache poisoning or BGP hijacking.",
+            remediation="Configure DNSSEC with your DNS host and publish the DS record at your registrar.",
+            severity="MEDIUM",
+            category="DNSSEC"
+        ))
 
     return result
 
@@ -516,10 +520,13 @@ def check_caa(domain: str) -> CAAResult:
     answers = _doh(domain, "CAA")
 
     if not answers:
-        result.issues.append(
-            "No CAA records — any Certificate Authority can issue TLS certs for this domain. "
-            "CAA records restrict which CAs are authorized."
-        )
+        result.findings.append(AuditFinding(
+            title="Missing CAA Records",
+            description="No CAA records found. Any Certificate Authority (CA) can issue certificates for this domain.",
+            remediation="Add CAA records to specify which CAs (e.g., Let's Encrypt) are allowed to issue certificates.",
+            severity="LOW",
+            category="CAA"
+        ))
         return result
 
     result.present = True
@@ -528,7 +535,13 @@ def check_caa(domain: str) -> CAAResult:
     # Check for issuewild restriction
     has_issuewild = any("issuewild" in r for r in result.records)
     if not has_issuewild:
-        result.issues.append("No 'issuewild' CAA tag — wildcard certs can be issued by any authorized CA")
+        result.findings.append(AuditFinding(
+            title="CAA Lack of 'issuewild' Restriction",
+            description="No 'issuewild' tag found. Wildcard certificates can still be issued by any authorized CA.",
+            remediation="Add 'issuewild' CAA tags to further restrict wildcard certificate issuance.",
+            severity="LOW",
+            category="CAA"
+        ))
 
     return result
 
@@ -619,10 +632,9 @@ def check_dns_security(domain: str) -> DNSSecurityResult:
             "No SPF record found. Anyone can send emails appearing to come from this domain.",
             f"Add TXT record: v=spf1 include:_spf.google.com -all"
         ))
-    elif result.spf.issues:
-        for issue in result.spf.issues:
-            result.findings.append(_finding("MEDIUM", "SPF Misconfiguration", issue,
-                "Update SPF record to use -all and fix identified issues."))
+    elif result.spf.findings:
+        for f in result.spf.findings:
+            result.findings.append(_finding(f.severity, f.title, f.description, f.remediation))
 
     if not result.dkim.found_selectors:
         result.findings.append(_finding(
