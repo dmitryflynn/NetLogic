@@ -237,6 +237,7 @@ function routeScanMessage(event, msg) {
     case 'stack': event.reply('scan:stack', msg.data); break;
     case 'dns': event.reply('scan:dns', msg.data); break;
     case 'takeover': event.reply('scan:takeover', msg.data); break;
+    case 'service_probes': event.reply('scan:service-probes', msg.data); break;
     case 'log': event.reply('scan:log', msg.data); break;
     case 'error': event.reply('scan:error', { message: msg.message }); break;
     case 'done': event.reply('scan:done', msg.data); break;
