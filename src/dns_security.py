@@ -170,6 +170,7 @@ def check_spf(domain: str) -> SPFResult:
         result.issues.append("'?all' neutral result — provides no spam protection")
     elif all_mech == "~all":
         result.issues.append("'~all' softfail — emails from unlisted servers may still be delivered")
+        result.valid = True   # Accepted by many analysts but technically weak
     elif all_mech == "-all":
         result.valid = True   # Correct
 
@@ -276,6 +277,9 @@ def check_dmarc(domain: str) -> DMARCResult:
     result.ruf = [r.strip() for r in ruf.split(",") if r.strip()]
 
     # Policy checks
+    if result.policy in ("quarantine", "reject"):
+        result.valid = True
+
     if result.policy == "none":
         result.issues.append(
             "DMARC policy is 'none' — monitoring only, no emails are rejected or quarantined. "
