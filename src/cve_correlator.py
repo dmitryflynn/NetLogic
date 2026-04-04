@@ -478,9 +478,9 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
         else:
             _confidence = "LOW"
 
-        # User requirement: Only show actual vulnerabilities based on exact version matches.
-        # Do not 'guess' or show baseline CVEs if we don't know the specific version running.
-        # If version is missing, we still allow matches for signatures that don't depend on it (e.g. 'lambda v: True')
+        # If version is missing from the banner, we show potential vulnerabilities
+        # with a 'Version unknown' note. Exact version filtering is handled
+        # in the live NVD lookup phase to ensure high precision when data is available.
         if not product:
             continue
 

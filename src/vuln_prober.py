@@ -568,9 +568,6 @@ def probe_web_vulnerabilities(target: str, ports: list,
         if listing:
             result.confirmed.append(listing)
 
-        for probe in probe_backup_files(target, port, scheme=scheme, timeout=timeout):
-            result.confirmed.append(probe)
-
         for probe in probe_php_info_exposure(target, port, scheme=scheme, timeout=timeout):
             result.confirmed.append(probe)
 

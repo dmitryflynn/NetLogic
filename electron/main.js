@@ -27,7 +27,8 @@ function getPythonPath() {
   // 1. High Priority: System Python + netlogic.py script (ensure latest code)
   const scriptPath = path.join(__dirname, '..', 'netlogic.py');
   if (fs.existsSync(scriptPath)) {
-    for (const candidate of ['python', 'python3', 'py']) {
+    // Prioritize python3 specifically (important for Linux/Mac where 'python' is often 2.7)
+    for (const candidate of ['python3', 'python', 'py']) {
       try {
         const result = require('child_process').spawnSync(
           candidate, ['--version'], { timeout: 2000 }
@@ -67,6 +68,7 @@ function getPythonPath() {
 let mainWindow = null;
 let tray = null;
 let activeScanProcess = null;
+let isStoppingManual = false;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -78,7 +80,7 @@ function createWindow() {
     transparent: false,
     backgroundColor: '#0a0d12',
     show: false,
-    icon: path.join(__dirname, '..', 'netlogic.png'),
+    icon: path.join(__dirname, '..', 'build', 'netlogic.png'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -107,7 +109,7 @@ function createWindow() {
 }
 
 function createTray() {
-  const iconPath = path.join(__dirname, '..', 'netlogic.png');
+  const iconPath = path.join(__dirname, '..', 'build', 'netlogic.png');
   if (!fs.existsSync(iconPath)) return;
 
   tray = new Tray(iconPath);
@@ -150,6 +152,7 @@ function startScan(event, config) {
   console.log(`[scan] ${cmd} ${args.join(' ')}`);
 
   try {
+    isStoppingManual = false;
     activeScanProcess = spawn(cmd, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
@@ -186,7 +189,9 @@ function startScan(event, config) {
 
   activeScanProcess.on('close', (code) => {
     activeScanProcess = null;
-    event.reply('scan:done', { exitCode: code });
+    if (!isStoppingManual) {
+      event.reply('scan:done', { exitCode: code });
+    }
   });
 
   activeScanProcess.on('error', (err) => {
@@ -243,6 +248,7 @@ function routeScanMessage(event, msg) {
 
 function stopScan() {
   if (activeScanProcess) {
+    isStoppingManual = true;
     activeScanProcess.kill('SIGKILL');  // Aggressive kill to prevent ghost logs
     activeScanProcess = null;
     return true;
@@ -259,7 +265,7 @@ async function exportReport(event, { format, data }) {
     csv: [{ name: 'CSV', extensions: ['csv'] }],
   };
 
-  const result = await dialog.showSaveDialog(mainWindow, {
+  const result = await dialog.showSaveDialog(mainWindow || null, {
     title: 'Save NetLogic Report',
     defaultPath: `netlogic_${data.target}_${Date.now()}.${format}`,
     filters: filters[format] || filters.json,
