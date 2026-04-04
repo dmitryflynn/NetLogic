@@ -60,6 +60,9 @@ desktop.ini
 *.docx
 *.doc
 *.pdf
+*.md
+!README.md
+!SECURITY.md
 
 # ─── Scratch / test files ────────────────────────────────────────────────────
 test_write.txt

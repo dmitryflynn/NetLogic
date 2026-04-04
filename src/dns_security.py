@@ -280,16 +280,32 @@ def check_dkim(domain: str) -> DKIMResult:
                     key_b64 = p_match.group(1)
                     key_len = len(key_b64) * 6 // 8 * 8  # rough bit estimate
                     if key_len < 1024:
-                        result.issues.append(
-                            f"Selector '{sel}': RSA key appears short (<1024 bits) — vulnerable to factoring"
-                        )
+                        result.findings.append(AuditFinding(
+                            title="Weak DKIM Key Length",
+                            description=f"Selector '{sel}': RSA key appears short (<1024 bits). This makes it vulnerable to factoring attacks.",
+                            remediation="Generate a new DKIM key with at least 2048 bits.",
+                            severity="HIGH",
+                            category="DKIM"
+                        ))
 
                 # Empty p= means key revoked
                 if "p=" in (record or "") and re.search(r"p=\s*;|p=\"\"", record or ""):
-                    result.issues.append(f"Selector '{sel}': public key is empty (revoked)")
+                    result.findings.append(AuditFinding(
+                        title="Revoked DKIM Key",
+                        description=f"Selector '{sel}': public key is empty, indicating the key has been revoked.",
+                        remediation="If this is an active selector, publish a valid public key.",
+                        severity="LOW",
+                        category="DKIM"
+                    ))
 
     if not result.found_selectors:
-        result.issues.append("No DKIM selectors found from common list — DKIM may not be configured")
+        result.findings.append(AuditFinding(
+            title="No DKIM Selectors Found",
+            description="None of the common DKIM selectors were found for this domain. DKIM may not be configured or uses a custom selector.",
+            remediation="Ensure DKIM is configured and the selector is correctly published in DNS.",
+            severity="MEDIUM",
+            category="DKIM"
+        ))
 
     return result
 
@@ -625,36 +641,10 @@ def check_dns_security(domain: str) -> DNSSecurityResult:
         result.spf, result.dkim, result.dmarc
     )
 
-    # Build findings list
-    if not result.spf.present:
-        result.findings.append(_finding(
-            "HIGH", "Missing SPF Record",
-            "No SPF record found. Anyone can send emails appearing to come from this domain.",
-            f"Add TXT record: v=spf1 include:_spf.google.com -all"
-        ))
-    elif result.spf.findings:
-        for f in result.spf.findings:
+    # Propagate findings from sub-modules
+    for sub_res in [result.spf, result.dkim, result.dmarc, result.dnssec, result.caa]:
+        for f in sub_res.findings:
             result.findings.append(_finding(f.severity, f.title, f.description, f.remediation))
-
-    if not result.dkim.found_selectors:
-        result.findings.append(_finding(
-            "MEDIUM", "No DKIM Selectors Found",
-            "DKIM signing not detected. Emails cannot be cryptographically verified.",
-            "Configure DKIM signing with your mail provider and publish the public key in DNS."
-        ))
-
-    if not result.dmarc.present:
-        result.findings.append(_finding(
-            "HIGH", "Missing DMARC Record",
-            "No DMARC policy. SPF/DKIM failures are not enforced — spoofed emails may be delivered.",
-            "Add: _dmarc.domain TXT v=DMARC1; p=reject; rua=mailto:dmarc@domain.com"
-        ))
-    elif result.dmarc.policy == "none":
-        result.findings.append(_finding(
-            "MEDIUM", "DMARC Policy: none (No Enforcement)",
-            "DMARC is monitoring only. Spoofed emails are still delivered to inboxes.",
-            "Change p=none to p=quarantine or p=reject after reviewing reports."
-        ))
 
     if result.zone_transfer_vulnerable:
         result.findings.append(_finding(
@@ -670,20 +660,6 @@ def check_dns_security(domain: str) -> DNSSecurityResult:
             "*.domain resolves — any subdomain points somewhere. "
             "Increases subdomain takeover attack surface significantly.",
             "Remove wildcard DNS unless intentionally required."
-        ))
-
-    if not result.dnssec.enabled:
-        result.findings.append(_finding(
-            "LOW", "DNSSEC Not Enabled",
-            "DNS responses can be forged without DNSSEC. Enables DNS cache poisoning attacks.",
-            "Enable DNSSEC at your domain registrar and DNS provider."
-        ))
-
-    if not result.caa.present:
-        result.findings.append(_finding(
-            "LOW", "No CAA Records",
-            "Any trusted CA can issue certificates for this domain.",
-            'Add: domain CAA 0 issue "letsencrypt.org"'
         ))
 
     if result.email_spoofable:

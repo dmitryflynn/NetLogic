@@ -278,8 +278,8 @@ def print_dns_results(dns, no_color=False):
     else:
         print(f"{spf.record[:70]}")
         print(f"  {'':9}all={spf.all_mechanism or 'none'}  lookups≈{spf.mechanism_count}")
-        for issue in spf.issues:
-            print(f"  {'':9}{Y}⚠ {issue}{R}")
+        for f in spf.findings:
+            print(f"  {'':9}{Y}⚠ {f.title}: {f.description[:80]}...{R}")
 
     # DKIM
     dkim = dns.dkim
@@ -290,8 +290,8 @@ def print_dns_results(dns, no_color=False):
         print(f"Selectors found: {Cy}{', '.join(dkim.found_selectors)}{R}")
     else:
         print(f"{Rd}No selectors found (checked {len(dkim.checked_selectors)} common names){R}")
-    for issue in dkim.issues:
-        print(f"  {'':9}{Y}⚠ {issue}{R}")
+    for f in dkim.findings:
+        print(f"  {'':9}{Y}⚠ {f.title}: {f.description[:80]}...{R}")
 
     # DMARC
     dmarc = dns.dmarc
@@ -306,8 +306,8 @@ def print_dns_results(dns, no_color=False):
               f"sp={dmarc.subdomain_policy or 'inherit'}")
         if dmarc.rua:
             print(f"  {'':9}reports → {', '.join(dmarc.rua[:2])}")
-        for issue in dmarc.issues:
-            print(f"  {'':9}{Y}⚠ {issue}{R}")
+        for f in dmarc.findings:
+            print(f"  {'':9}{Y}⚠ {f.title}: {f.description[:80]}...{R}")
 
     # DNSSEC
     dnssec_icon = f"{G}✓{R}" if dns.dnssec.enabled else f"{D}–{R}"

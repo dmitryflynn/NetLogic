@@ -4,6 +4,7 @@
   "description": "Attack Surface Mapper & Vulnerability Correlator",
   "author": "Dmitry Flynn",
   "main": "electron/main.js",
+  "license": "MIT",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
@@ -15,18 +16,22 @@
     "appId": "com.netlogic.app",
     "productName": "NetLogic",
     "copyright": "Copyright © 2026 Dmitry Flynn",
-    "icon": "netlogic.ico",
+    "icon": "build/netlogic.ico",
     "directories": {
       "output": "dist",
-      "buildResources": "."
+      "buildResources": "build"
     },
+    "asarUnpack": [
+      "netlogic.py",
+      "src/**/*"
+    ],
     "files": [
       "electron/**/*",
       "renderer/**/*",
       "src/**/*",
       "netlogic.py",
-      "netlogic.png",
-      "netlogic.ico"
+      "build/netlogic.png",
+      "build/netlogic.ico"
     ],
     "extraResources": [
       {
@@ -52,17 +57,15 @@
           ]
         }
       ],
-      "icon": "netlogic.ico",
       "requestedExecutionLevel": "asInvoker",
-      "certificateFile": null,
-      "certificatePassword": null
+      "icon": "build/netlogic.ico"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "allowElevation": true,
-      "installerIcon": "netlogic.ico",
-      "uninstallerIcon": "netlogic.ico",
+      "installerIcon": "build/netlogic.ico",
+      "uninstallerIcon": "build/netlogic.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "NetLogic",
@@ -74,10 +77,7 @@
     }
   },
   "devDependencies": {
-    "electron": "^28.0.0",
-    "electron-builder": "^24.13.3"
-  },
-  "dependencies": {
-    "electron-store": "^8.1.0"
+    "electron": "^41.1.1",
+    "electron-builder": "^26.8.1"
   }
 }
