@@ -2,25 +2,46 @@
 NetLogic - JSON Stream Bridge
 Wraps the scanner to emit newline-delimited JSON events for the Electron frontend.
 Each line is a JSON object: {"type": "...", "data": {...}} or {"type": "error", "message": "..."}
+
+API mode: pass emit_callback to run_streaming_scan() to redirect events to a
+caller-supplied function instead of stdout. The callback signature is:
+    callback(event_type: str, data: dict | None, message: str | None) -> None
+This uses thread-local storage so concurrent scans in separate threads each have
+their own callback and never interfere with each other.
 """
 
 import sys
 import json
 import time
+import threading
 from dataclasses import asdict
 
 from src.scanner import scan_host, scan_cidr, COMMON_PORTS, EXTENDED_PORTS
 from src.cve_correlator import correlate
 from src.osint import run_osint
 
+# Thread-local storage: each scan thread stores its own emit callback here.
+# When None (the default), emit() writes to stdout as before.
+_tls = threading.local()
+
 
 def emit(event_type: str, data=None, message: str = None):
-    """Write a single JSON event to stdout and flush immediately."""
-    if message is not None:
-        obj = {"type": event_type, "message": message}
+    """Write a single JSON event.
+
+    In normal CLI / Electron mode (no callback registered for this thread):
+        → prints newline-delimited JSON to stdout and flushes.
+    In API mode (emit_callback registered via run_streaming_scan):
+        → calls the callback instead of printing.
+    """
+    callback = getattr(_tls, "emit_callback", None)
+    if callback is not None:
+        callback(event_type, data, message)
     else:
-        obj = {"type": event_type, "data": data}
-    print(json.dumps(obj, default=str), flush=True)
+        if message is not None:
+            obj = {"type": event_type, "message": message}
+        else:
+            obj = {"type": event_type, "data": data}
+        print(json.dumps(obj, default=str), flush=True)
 
 
 def run_streaming_scan(target: str, ports: list, timeout: float,
@@ -29,9 +50,39 @@ def run_streaming_scan(target: str, ports: list, timeout: float,
                        do_stack: bool = False, do_dns: bool = False,
                        do_full: bool = False, do_probe: bool = False,
                        do_takeover: bool = False,
-                       min_cvss: float = 4.0):
-    """Execute a scan and stream results as JSON events."""
+                       min_cvss: float = 4.0,
+                       emit_callback=None):
+    """Execute a scan and stream results as JSON events.
 
+    Args:
+        emit_callback: Optional callable(event_type, data, message) that
+            receives each event instead of stdout.  Used by the REST API layer.
+            Must be None for normal CLI / Electron usage.
+    """
+    # Register the callback in thread-local storage so every emit() call in
+    # this thread (including helpers like _scan_streaming) automatically uses it.
+    if emit_callback is not None:
+        _tls.emit_callback = emit_callback
+    try:
+        _run_streaming_scan_inner(
+            target=target, ports=ports, timeout=timeout, threads=threads,
+            do_osint=do_osint, cidr=cidr, do_tls=do_tls, do_headers=do_headers,
+            do_stack=do_stack, do_dns=do_dns, do_full=do_full, do_probe=do_probe,
+            do_takeover=do_takeover, min_cvss=min_cvss,
+        )
+    finally:
+        # Always clear the callback so the thread can be safely reused.
+        _tls.emit_callback = None
+
+
+def _run_streaming_scan_inner(target: str, ports: list, timeout: float,
+                              threads: int, do_osint: bool, cidr: bool,
+                              do_tls: bool = False, do_headers: bool = False,
+                              do_stack: bool = False, do_dns: bool = False,
+                              do_full: bool = False, do_probe: bool = False,
+                              do_takeover: bool = False,
+                              min_cvss: float = 4.0):
+    """Internal: actual scan logic. Always called after _tls is configured."""
     emit("progress", {"percent": 5, "status": f"Resolving {target}..."})
 
     if cidr:
