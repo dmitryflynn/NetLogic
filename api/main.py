@@ -27,7 +27,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 # ── Deferred imports (after path bootstrap) ───────────────────────────────────
-from api.routes import health, jobs, agents  # noqa: E402
+from api.routes import auth, health, jobs, agents  # noqa: E402
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -53,13 +53,14 @@ def create_app() -> FastAPI:
         title="NetLogic API",
         description=(
             "Cloud-Native Attack Surface Mapper & Vulnerability Correlator.\n\n"
-            "**Phase 2** — Cloud Agent Architecture.\n\n"
-            "Remote scan agents register with the controller, receive jobs via "
-            "polling, and stream events back in real-time.  The controller "
-            "exposes the same SSE streaming interface regardless of whether a "
-            "scan runs locally or on a remote agent."
+            "**Phase 3** — Multi-tenancy + JWT Auth.\n\n"
+            "Every job and agent is scoped to an organisation.  API consumers "
+            "exchange an API key for a short-lived JWT via `POST /auth/token`; "
+            "the JWT's `org_id` claim enforces data isolation across all "
+            "endpoints.  Remote scan agents continue to authenticate with their "
+            "own registration tokens on the agent-facing endpoints."
         ),
-        version="2.0.0",
+        version="3.0.0",
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
 
     # ── Routers ───────────────────────────────────────────────────────────────
     app.include_router(health.router)
+    app.include_router(auth.router)
     app.include_router(jobs.router)
     app.include_router(agents.router)
 
@@ -95,9 +97,10 @@ def create_app() -> FastAPI:
     async def root() -> dict:
         return {
             "service": "NetLogic API",
-            "version": "2.0.0",
+            "version": "3.0.0",
             "docs": "/docs",
             "health": "/health",
+            "auth": "/auth/token",
             "agents": "/agents",
         }
 

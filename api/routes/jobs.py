@@ -8,6 +8,10 @@ REST surface:
   GET    /jobs/{id}/stream  Server-Sent Events stream of live scan events
   POST   /jobs/{id}/cancel  Cancel a queued/running job
   DELETE /jobs/{id}         Remove a job from memory (cleanup)
+
+All endpoints require a valid JWT Bearer token.  The org_id embedded in the
+token scopes every operation: jobs created by one organisation are never
+visible to another.
 """
 
 from __future__ import annotations
@@ -17,9 +21,10 @@ import json
 import time
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 
+from api.auth.dependencies import require_org
 from api.jobs.executor import submit_scan
 from api.jobs.manager import ScanJob, job_manager
 from api.models.scan_request import ScanRequest
@@ -35,11 +40,15 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
     summary="Start a new scan job",
     response_description="Job ID and initial status",
 )
-async def create_job(request: ScanRequest) -> dict:
+async def create_job(
+    request: ScanRequest,
+    org_id: str = Depends(require_org),
+) -> dict:
     """
     Kick off an async scan. Returns immediately with a `job_id`.
+    The job is scoped to the caller's organisation.
     """
-    job = job_manager.create(request)
+    job = job_manager.create(request, org_id=org_id)
     await submit_scan(job)
     return _job_summary(job)
 
@@ -54,9 +63,10 @@ async def create_job(request: ScanRequest) -> dict:
 )
 async def list_jobs(
     limit: int = Query(default=20, ge=1, le=200, description="Max jobs to return"),
+    org_id: str = Depends(require_org),
 ) -> list[dict]:
-    """Return up to `limit` jobs, sorted newest-first."""
-    return [_job_summary(j) for j in job_manager.list(limit=limit)]
+    """Return up to `limit` jobs for the caller's organisation, sorted newest-first."""
+    return [_job_summary(j) for j in job_manager.list(limit=limit, org_id=org_id)]
 
 
 # ── GET /jobs/{id} ───────────────────────────────────────────────────────────
@@ -67,11 +77,15 @@ async def list_jobs(
     summary="Get job status / results",
     response_description="Full job detail",
 )
-async def get_job(job_id: str) -> dict:
+async def get_job(
+    job_id: str,
+    org_id: str = Depends(require_org),
+) -> dict:
     """
     Returns the current job state including progress and result counts.
+    Returns 404 if the job does not exist or belongs to a different organisation.
     """
-    job = _get_or_404(job_id)
+    job = _get_or_404(job_id, org_id)
     return _job_detail(job)
 
 
@@ -83,11 +97,14 @@ async def get_job(job_id: str) -> dict:
     summary="Stream job events (SSE)",
     response_description="text/event-stream of events",
 )
-async def stream_job(job_id: str) -> StreamingResponse:
+async def stream_job(
+    job_id: str,
+    org_id: str = Depends(require_org),
+) -> StreamingResponse:
     """
     Opens an SSE connection for real-time updates.
     """
-    job = _get_or_404(job_id)
+    job = _get_or_404(job_id, org_id)
     return StreamingResponse(
         _sse_generator(job),
         media_type="text/event-stream",
@@ -106,11 +123,14 @@ async def stream_job(job_id: str) -> StreamingResponse:
     "/{job_id}/cancel",
     summary="Cancel a running job",
 )
-async def cancel_job(job_id: str) -> dict:
+async def cancel_job(
+    job_id: str,
+    org_id: str = Depends(require_org),
+) -> dict:
     """
     Request cancellation of a queued or running job.
     """
-    job = _get_or_404(job_id)
+    job = _get_or_404(job_id, org_id)
     if job.status in ("completed", "failed", "cancelled"):
         return {"job_id": job_id, "status": job.status, "cancelled": False,
                 "detail": "Job already in terminal state."}
@@ -124,7 +144,7 @@ async def cancel_job(job_id: str) -> dict:
     job.status = "cancelled"
     job.completed_at = time.time()
     job.error = "Cancelled by user request."
-    
+
     # Notify consumers
     job.push_event({"type": "error", "message": job.error})
     job.push_sentinel()
@@ -143,18 +163,21 @@ async def cancel_job(job_id: str) -> dict:
     summary="Delete a job (manual cleanup)",
     status_code=204,
 )
-async def delete_job(job_id: str):
+async def delete_job(
+    job_id: str,
+    org_id: str = Depends(require_org),
+):
     """
     Remove a job from the in-memory registry. If the job is running, it will be cancelled first.
     """
-    job = job_manager.get(job_id)
+    job = job_manager.get(job_id, org_id=org_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     # Best-effort cancellation if still running
     if job.status in ("queued", "running") and job._task:
         job._task.cancel()
-        
+
     job_manager.delete(job_id)
     return Response(status_code=204)
 
@@ -197,7 +220,7 @@ async def _sse_generator(job: ScanJob) -> AsyncGenerator[str, None]:
             yield 'data: {"type":"ping"}\n\n'
             continue
         except asyncio.CancelledError:
-            return # Client disconnected
+            return  # Client disconnected
 
         # 4. Sentinel received: scan thread is finished
         if signal is None:
@@ -206,15 +229,15 @@ async def _sse_generator(job: ScanJob) -> AsyncGenerator[str, None]:
                 idx += 1
                 yield f"data: {json.dumps(event, default=str)}\n\n"
             return
-        
+
         # 5. Signal received: loop back to Phase 1 to drain the new event(s)
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
 
-def _get_or_404(job_id: str) -> ScanJob:
-    job = job_manager.get(job_id)
+def _get_or_404(job_id: str, org_id: str = "") -> ScanJob:
+    job = job_manager.get(job_id, org_id=org_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     return job
@@ -224,9 +247,10 @@ def _job_summary(job: ScanJob) -> dict:
     # Calculate counts from events
     ports_count = sum(1 for e in job.events if e.get("type") == "port")
     vulns_count = sum(1 for e in job.events if e.get("type") == "vuln")
-    
+
     return {
         "job_id": job.job_id,
+        "org_id": job.org_id,
         "status": job.status,
         "progress": job.progress,
         "target": job.config.target,
