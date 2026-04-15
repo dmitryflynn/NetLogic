@@ -17,6 +17,7 @@ Design notes
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import os
 import time
@@ -48,8 +49,11 @@ class ScanJob:
 
     # ── Event store (capped history) ──────────────────────────────────────────
     # All emitted events are stored here so late-connecting SSE clients can
-    # replay from the beginning.
-    events: list = field(default_factory=list)
+    # replay from the beginning.  deque(maxlen) gives O(1) append+cap vs O(n)
+    # list.pop(0) on the previous implementation.
+    events: collections.deque = field(
+        default_factory=lambda: collections.deque(maxlen=ScanJob.EVENT_CAP)
+    )
 
     # ── Async wakeup channel ──────────────────────────────────────────────────
     _queue: Optional[asyncio.Queue] = field(default=None, repr=False, compare=False)
@@ -71,7 +75,7 @@ class ScanJob:
             "started_at": self.started_at,
             "completed_at": self.completed_at,
             "error": self.error,
-            "events": self.events,
+            "events": list(self.events),  # deque → list for JSON serialisation
         }
 
     @classmethod
@@ -86,7 +90,7 @@ class ScanJob:
             started_at=data.get("started_at"),
             completed_at=data.get("completed_at"),
             error=data.get("error"),
-            events=data.get("events", []),
+            events=collections.deque(data.get("events", []), maxlen=ScanJob.EVENT_CAP),
         )
         # Only if we reload a job that was still actively running/queued, mark it as failed (zombie)
         if job.status in ("queued", "running"):
@@ -107,10 +111,8 @@ class ScanJob:
                 except (TypeError, ValueError):
                     pass
 
-        # 2. Enforce event cap (sliding window)
+        # 2. Append — deque enforces the cap automatically via maxlen
         self.events.append(event)
-        if len(self.events) > self.EVENT_CAP:
-            self.events.pop(0)
 
         # 3. Signal SSE consumers
         if self._loop and self._queue:
