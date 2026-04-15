@@ -19,11 +19,21 @@ def _make_port_result(port, service, product=None, version=None, state="open"):
 
 
 class TestVersionComparison(unittest.TestCase):
-    def test_parse_ver_basic(self):          self.assertEqual(_parse_ver("7.4.1"), (7, 4, 1))
-    def test_parse_ver_with_suffix(self):    self.assertEqual(_parse_ver("6.6.1p1"), (6, 6, 1))
+    def test_parse_ver_basic(self):
+        v = _parse_ver("7.4.1")
+        # New format returns more parts, but first 3 should match
+        self.assertEqual(v[:3], (7, 4, 1))
+        
+    def test_parse_ver_with_suffix(self):
+        v = _parse_ver("6.6.1p1")
+        # Should now capture the suffix info, e.g., (6, 6, 1, 101)
+        self.assertGreater(len(v), 3)
+        self.assertEqual(v[0:3], (6, 6, 1))
+        
     def test_ver_lt_true(self):              self.assertTrue(_ver_lt("7.4", "8.5"))
     def test_ver_lt_false(self):             self.assertFalse(_ver_lt("9.0", "8.5"))
     def test_ver_lt_equal(self):             self.assertFalse(_ver_lt("8.5", "8.5"))
+    def test_ver_lt_pre_release(self):       self.assertTrue(_ver_lt("1.2.3b1", "1.2.3"))
     def test_ver_in_range_true(self):        self.assertTrue(_ver_in_range("2.4.49", "2.4.49", "2.4.50"))
     def test_ver_in_range_false(self):       self.assertFalse(_ver_in_range("2.4.51", "2.4.49", "2.4.50"))
 

@@ -26,21 +26,17 @@ _tls = threading.local()
 
 
 def emit(event_type: str, data=None, message: str = None):
-    """Write a single JSON event.
-
-    In normal CLI / Electron mode (no callback registered for this thread):
-        → prints newline-delimited JSON to stdout and flushes.
-    In API mode (emit_callback registered via run_streaming_scan):
-        → calls the callback instead of printing.
-    """
+    """Write a single JSON event."""
     callback = getattr(_tls, "emit_callback", None)
     if callback is not None:
         callback(event_type, data, message)
     else:
+        # Standard JSON output for CLI/Electron
+        obj = {"type": event_type}
         if message is not None:
-            obj = {"type": event_type, "message": message}
-        else:
-            obj = {"type": event_type, "data": data}
+            obj["message"] = message
+        if data is not None:
+            obj["data"] = data
         print(json.dumps(obj, default=str), flush=True)
 
 

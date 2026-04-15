@@ -26,6 +26,7 @@ import re
 import json
 import time
 import hashlib
+import sys
 from datetime import datetime, timezone
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -180,7 +181,9 @@ def _nvd_request(params: dict) -> Optional[dict]:
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read())
+            raw_body = resp.read()
+            # print(f"DEBUG: NVD Response for {params.get('keywordSearch')}: {len(raw_body)} bytes", file=sys.stderr)
+            return json.loads(raw_body)
     except urllib.error.HTTPError as e:
         if e.code == 429:
             # Rate limited — wait and retry once
@@ -191,8 +194,9 @@ def _nvd_request(params: dict) -> Optional[dict]:
             except Exception:
                 return None
         return None
-    except urllib.error.URLError:
+    except urllib.error.URLError as e:
         # Network unreachable / DNS failure — stop trying for this session
+        print(f"DEBUG: NVD API URLError: {e}", file=sys.stderr)
         _nvd_unavailable = True
         return None
     except Exception:
@@ -318,27 +322,99 @@ def _parse_nvd_item(item: dict) -> NVDCve:
 
 # ─── Version Matching ─────────────────────────────────────────────────────────
 
+try:
+    from packaging.version import Version, InvalidVersion
+except ImportError:
+    Version = None
+    class InvalidVersion(Exception): pass
+
 def _parse_ver(v: str) -> tuple:
-    """Parse version string into comparable tuple."""
-    parts = re.split(r"[.\-_]", str(v).strip())
+    """
+    Parse version string into a comparable tuple.
+    Extracts all numeric parts and normalizes suffixes.
+    Used as a fallback for semantic versioning.
+    """
+    if not v:
+        return (0,)
+    
+    v_str = str(v).strip().lower()
+    
+    # Fallback for non-standard versions (e.g., 1.10-patch2, 8.2p1)
+    # Tokenize by splitting on non-alphanumeric boundaries
+    parts = re.split(r"([.\-_])", v_str)
     result = []
+    
     for p in parts:
-        m = re.match(r"(\d+)", p)
-        result.append(int(m.group(1)) if m else 0)
+        if not p or p in ".-_":
+            continue
+            
+        # Try to find a leading number
+        m = re.match(r"(\d+)(.*)", p)
+        if m:
+            num_part = int(m.group(1))
+            suffix = m.group(2)
+            result.append(num_part)
+            
+            if suffix:
+                if suffix.startswith('p'): # patch
+                    p_val = re.search(r"\d+", suffix)
+                    result.append(100 + (int(p_val.group(0)) if p_val else 0))
+                elif suffix.startswith('rc'):
+                    result.append(-1)
+                elif suffix.startswith('b'):
+                    result.append(-2)
+                elif suffix.startswith('a'):
+                    result.append(-3)
+        else:
+            # Suffix-only part
+            if 'rc' in p: result.append(-1)
+            elif 'beta' in p or p.startswith('b'): result.append(-2)
+            elif 'alpha' in p or p.startswith('a'): result.append(-3)
+            elif 'patch' in p or p.startswith('p'):
+                p_val = re.search(r"\d+", p)
+                result.append(100 + (int(p_val.group(0)) if p_val else 0))
+            else:
+                result.append(0)
+                
     return tuple(result)
 
 
 def _ver_lte(a: str, b: str) -> bool:
-    try: return _parse_ver(a) <= _parse_ver(b)
-    except: return True
+    if not a or not b: return True
+    try:
+        v1, v2 = str(a).strip(), str(b).strip()
+        try:
+            if Version is None:
+                raise TypeError("packaging not installed")
+            return Version(v1) <= Version(v2)
+        except (InvalidVersion, TypeError):
+            return _parse_ver(v1) <= _parse_ver(v2)
+    except Exception:
+        return True
 
 def _ver_lt(a: str, b: str) -> bool:
-    try: return _parse_ver(a) < _parse_ver(b)
-    except: return True
+    if not a or not b: return True
+    try:
+        v1, v2 = str(a).strip(), str(b).strip()
+        try:
+            return Version(v1) < Version(v2)
+        except InvalidVersion:
+            return _parse_ver(v1) < _parse_ver(v2)
+    except Exception:
+        return True
 
 def _ver_gte(a: str, b: str) -> bool:
-    try: return _parse_ver(a) >= _parse_ver(b)
-    except: return True
+    if not a or not b: return True
+    try:
+        v1, v2 = str(a).strip(), str(b).strip()
+        try:
+            if Version is None:
+                raise TypeError("packaging not installed")
+            return Version(v1) >= Version(v2)
+        except (InvalidVersion, TypeError):
+            return _parse_ver(v1) >= _parse_ver(v2)
+    except Exception:
+        return True
 
 
 def version_is_affected(detected_version: str, cve: NVDCve) -> bool:
@@ -373,57 +449,57 @@ def version_is_affected(detected_version: str, cve: NVDCve) -> bool:
 
 # Maps internal service/product names → better NVD search terms
 PRODUCT_KEYWORD_MAP = {
-    "openssh":      "OpenSSH",
-    "ssh":          "OpenSSH",
-    "apache":       "Apache HTTP Server",
-    "httpd":        "Apache HTTP Server",
+    "openssh":      "openssh",
+    "ssh":          "openssh",
+    "apache":       "apache server",
+    "httpd":        "apache server",
     "nginx":        "nginx",
-    "iis":          "Microsoft IIS",
-    "tomcat":       "Apache Tomcat",
-    "php":          "PHP",
-    "mysql":        "MySQL",
-    "mariadb":      "MariaDB",
-    "postgresql":   "PostgreSQL",
-    "postgres":     "PostgreSQL",
-    "mssql":        "Microsoft SQL Server",
-    "redis":        "Redis",
-    "mongodb":      "MongoDB",
-    "elasticsearch":"Elasticsearch",
-    "memcached":    "Memcached",
+    "iis":          "internet information services",
+    "tomcat":       "tomcat",
+    "php":          "php",
+    "mysql":        "mysql",
+    "mariadb":      "mariadb",
+    "postgresql":   "postgresql",
+    "postgres":     "postgresql",
+    "mssql":        "sql server",
+    "redis":        "redis",
+    "mongodb":      "mongodb",
+    "elasticsearch":"elasticsearch",
+    "memcached":    "memcached",
     "vsftpd":       "vsftpd",
-    "proftpd":      "ProFTPD",
-    "exim":         "Exim",
-    "postfix":      "Postfix",
-    "dovecot":      "Dovecot",
-    "samba":        "Samba",
-    "openssl":      "OpenSSL",
-    "wordpress":    "WordPress",
-    "drupal":       "Drupal",
-    "joomla":       "Joomla",
-    "spring":       "Spring Framework",
-    "log4j":        "Apache Log4j",
-    "struts":       "Apache Struts",
-    "jenkins":      "Jenkins",
-    "gitlab":       "GitLab",
-    "grafana":      "Grafana",
-    "kibana":       "Kibana",
-    "docker":       "Docker",
-    "kubernetes":   "Kubernetes",
-    "openldap":     "OpenLDAP",
-    "bind":         "ISC BIND",
-    "unbound":      "Unbound DNS",
-    "openvpn":      "OpenVPN",
-    "libssl":       "OpenSSL",
-    "libcrypto":    "OpenSSL",
-    "smb":          "Samba",
-    "microsoft-ds": "Samba",
-    "netbios-ssn":  "Samba",
-    "rdp":          "Microsoft Remote Desktop",
-    "ms-wbt-server":"Microsoft Remote Desktop",
+    "proftpd":      "proftpd",
+    "exim":         "exim",
+    "postfix":      "postfix",
+    "dovecot":      "dovecot",
+    "samba":        "samba",
+    "openssl":      "openssl",
+    "wordpress":    "wordpress",
+    "drupal":       "drupal",
+    "joomla":       "joomla",
+    "spring":       "spring framework",
+    "log4j":        "log4j",
+    "struts":       "struts",
+    "jenkins":      "jenkins",
+    "gitlab":       "gitlab",
+    "grafana":      "grafana",
+    "kibana":       "kibana",
+    "docker":       "docker",
+    "kubernetes":   "kubernetes",
+    "openldap":     "openldap",
+    "bind":         "bind",
+    "unbound":      "unbound",
+    "openvpn":      "openvpn",
+    "libssl":       "openssl",
+    "libcrypto":    "openssl",
+    "smb":          "samba",
+    "microsoft-ds": "samba",
+    "netbios-ssn":  "samba",
+    "rdp":          "remote desktop",
+    "ms-wbt-server":"remote desktop",
     "telnet":       "telnet",
-    "vnc":          "RealVNC",
-    "snmpd":        "Net-SNMP",
-    "snmp":         "Net-SNMP",
+    "vnc":          "vnc",
+    "snmpd":        "net-snmp",
+    "snmp":         "net-snmp",
     "rpcbind":      "rpcbind",
     "nfs":          "nfs-utils",
     "cups":         "CUPS",
@@ -480,19 +556,17 @@ PRODUCT_KEYWORD_MAP = {
 }
 
 
-def _build_keyword(product: str, version: str = None) -> Optional[str]:
+def _build_keyword(product: str, version: str = None) -> str:
     """Build NVD search keyword from product name."""
     product_lower = (product or "").lower().strip()
 
     # Try direct map first
     mapped = PRODUCT_KEYWORD_MAP.get(product_lower)
-    if mapped is None:
-        return None   # Skip generic/unknown products
-    kw = mapped
+    if mapped:
+        return mapped
 
-    # Don't append version — NVD keyword search is for product name only
-    # Version filtering is done on the results via CPE ranges
-    return kw
+    # Fallback to the provided product name
+    return product_lower
 
 
 # ─── Main Lookup Function ─────────────────────────────────────────────────────
@@ -503,7 +577,8 @@ def query_nvd_for_product(product: str, version: str = None,
     Query NVD for CVEs affecting a product, optionally filtered by version.
     Results are cached to disk for 24 hours.
     """
-    keyword = _build_keyword(product, version)
+    product_clean = (product or "").strip().lower()
+    keyword = _build_keyword(product_clean, version) or product_clean
     if not keyword:
         return []
 
@@ -527,22 +602,31 @@ def query_nvd_for_product(product: str, version: str = None,
 
     data = _nvd_request(params)
     if not data:
+        print("DEBUG: No data from _nvd_request", file=sys.stderr)
         return []
 
+    vulns = data.get("vulnerabilities", [])
+    print(f"DEBUG: API returned {len(vulns)} vulnerabilities", file=sys.stderr)
     cves = []
-    for item in data.get("vulnerabilities", []):
+    for item in vulns:
         try:
-            cves.append(_parse_nvd_item(item))
-        except Exception:
-            pass
+            cve_obj = _parse_nvd_item(item)
+            if cve_obj:
+                cves.append(cve_obj)
+        except Exception as e:
+            print(f"DEBUG: Parse error: {e}", file=sys.stderr)
+            continue
+
+    print(f"DEBUG: Parsed {len(cves)} total CVEs", file=sys.stderr)
 
     # Sort by CVSS score descending
     cves.sort(key=lambda c: c.cvss_score, reverse=True)
 
-    # Cache the full product results (before version filtering)
-    _cache_write(cache_key, {"cves": [asdict(c) for c in cves]})
+    # Cache the results
+    if cves:
+        _cache_write(cache_key, {"cves": [asdict(c) for c in cves]})
 
-    # Filter to version if provided
+    # Filter by version if provided
     if version:
         return [c for c in cves if version_is_affected(version, c)]
 
@@ -626,13 +710,15 @@ def clear_cache():
 def preload_cache(products: list[str] = None):
     """
     Pre-populate cache for common products.
-    Run once with: python -c "from src.nvd_lookup import preload_cache; preload_cache()"
     """
     common = products or list(set(PRODUCT_KEYWORD_MAP.values()) - {None})
     print(f"[*] Pre-loading NVD cache for {len(common)} products...")
     for i, product in enumerate(common):
-        print(f"  [{i+1}/{len(common)}] {product}...", end=" ", flush=True)
-        cves = query_nvd_for_product(product)
+        # Normalize keyword for consistent cache hits
+        product_clean = product.strip().lower()
+        print(f"  [{i+1}/{len(common)}] {product_clean}...", end=" ", flush=True)
+        
+        cves = query_nvd_for_product(product_clean)
         print(f"{len(cves)} CVEs")
     print("[+] Cache preload complete.")
 

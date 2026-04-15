@@ -70,15 +70,26 @@ class ScanRequest(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("target cannot be empty")
-        # Guard against shell-injection characters.  The engine never shells
-        # out, but reject these defensively at the API boundary.
+        
+        # Guard against shell-injection characters.
         forbidden = set(';|&`$\n\r<>')
         bad = forbidden & set(v)
         if bad:
             raise ValueError(
                 f"target contains disallowed character(s): {', '.join(sorted(bad))}"
             )
-        return v
+
+        # Basic format check: IP, CIDR, or Domain
+        import re
+        # IP/CIDR pattern (very loose, just for basic structure)
+        if re.match(r"^[\d\./]+$", v):
+            return v
+        
+        # Domain pattern
+        if re.match(r"^[a-zA-Z0-9\-\.]+$", v):
+            return v
+            
+        raise ValueError("invalid target format — must be a hostname, IP, or CIDR block")
 
     @field_validator("ports")
     @classmethod
