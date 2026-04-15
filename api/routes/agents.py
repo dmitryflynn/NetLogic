@@ -17,12 +17,15 @@ Management (called by the dashboard / operator)
 
 Authentication
 ──────────────
-All agent-facing endpoints (heartbeat, tasks, events, complete) require a
-Bearer token issued at registration time:
-    Authorization: Bearer <token>
+Agent-facing endpoints (heartbeat, tasks, events, complete) require the Bearer
+token issued at registration time:
+    Authorization: Bearer <agent-token>
 
-Management endpoints (list, get, delete) are unauthenticated in Phase 2;
-Phase 3 will add operator JWT authentication.
+Registration and management endpoints (list, get, delete) require a signed JWT:
+    Authorization: Bearer <jwt>
+
+Phase 3: org_id embedded in the JWT scopes agent visibility.  An agent
+registered by org A is not visible to org B.
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from api.agents.registry import Agent, agent_registry
+from api.auth.dependencies import require_org
 from api.jobs.manager import job_manager
 from api.models.agent import AgentRegistration, AgentTaskComplete
 
@@ -41,14 +45,21 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 _bearer = HTTPBearer(auto_error=False)
 
 
-# ── Authentication dependency ─────────────────────────────────────────────────
+# ── Agent-token authentication dependency ─────────────────────────────────────
 
 
 def _auth_agent(
     agent_id: str,
     creds: Annotated[Optional[HTTPAuthorizationCredentials], Depends(_bearer)],
 ) -> Agent:
-    """Resolve agent_id + Bearer token → verified Agent, or raise 401/404."""
+    """Resolve agent_id + Bearer token → verified Agent, or raise 401/404.
+
+    Note: this dependency uses the agent's own registration token, NOT a JWT.
+    It intentionally does NOT apply org scoping here — the agent is already
+    identified by its unique agent_id; org cross-checks are enforced on the
+    job-level operations (events, complete).
+    """
+    # Use unfiltered get (no org_id) because we authenticate by token, not JWT.
     agent = agent_registry.get(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
@@ -66,23 +77,29 @@ def _auth_agent(
     summary="Register a new agent",
     response_description="Agent ID and one-time secret token",
 )
-async def register_agent(payload: AgentRegistration) -> dict:
+async def register_agent(
+    payload: AgentRegistration,
+    org_id: str = Depends(require_org),
+) -> dict:
     """
     Called by the agent process on first startup.
 
-    Returns an `agent_id` and a one-time `token`.  The token must be stored
-    securely by the agent and included as a Bearer credential in all
-    subsequent requests.  **It is shown only once and cannot be recovered.**
+    Requires a valid JWT so the new agent is scoped to the caller's
+    organisation.  Returns an `agent_id` and a one-time `token`.  The token
+    must be stored securely by the agent and included as a Bearer credential
+    in all subsequent agent-facing requests.
     """
     agent_id, secret = agent_registry.register(
         hostname=payload.hostname,
         capabilities=payload.capabilities,
         version=payload.version,
         tags=payload.tags,
+        org_id=org_id,
     )
     return {
         "agent_id": agent_id,
         "token": secret,
+        "org_id": org_id,
         "message": "Agent registered. Store the token securely — it is shown only once.",
     }
 
@@ -102,9 +119,6 @@ async def agent_heartbeat(
     """
     Agent calls this every 30 s to signal it is alive.  The controller uses
     the last heartbeat timestamp to compute online/offline status.
-
-    The response may include controller commands in future phases
-    (e.g. config updates, forced disconnects).
     """
     agent_registry.heartbeat(agent_id)
     return {"status": "ok", "server_time": time.time()}
@@ -168,15 +182,14 @@ async def submit_events(
 
     Each event is forwarded into the job's event store and wakes any SSE
     consumers watching `GET /jobs/{id}/stream` on the controller in real-time.
-
-    Recommended batch size: 10–50 events.  The controller enforces the
-    per-job EVENT_CAP (10 000 events) automatically.
     """
     job = job_manager.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     if job.config.agent_id != agent_id:
         raise HTTPException(status_code=403, detail="Job does not belong to this agent.")
+    if agent.org_id and job.org_id and agent.org_id != job.org_id:
+        raise HTTPException(status_code=403, detail="Cross-organisation access denied.")
 
     for event in events:
         job.push_event(event)
@@ -203,14 +216,14 @@ async def complete_task(
 
     * If `error` is null/omitted → job is marked `completed`.
     * If `error` is set → job is marked `failed` with the error message.
-
-    After this call the agent should clear `current_job_id` and resume polling.
     """
     job = job_manager.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     if job.config.agent_id != agent_id:
         raise HTTPException(status_code=403, detail="Job does not belong to this agent.")
+    if agent.org_id and job.org_id and agent.org_id != job.org_id:
+        raise HTTPException(status_code=403, detail="Cross-organisation access denied.")
 
     if payload.error:
         job.status = "failed"
@@ -237,9 +250,11 @@ async def complete_task(
     summary="List all registered agents",
     response_description="Array of agent summaries with live status",
 )
-async def list_agents() -> list[dict]:
-    """Return status summary for every registered agent."""
-    return [_agent_summary(a) for a in agent_registry.list()]
+async def list_agents(
+    org_id: str = Depends(require_org),
+) -> list[dict]:
+    """Return status summary for every agent belonging to the caller's organisation."""
+    return [_agent_summary(a) for a in agent_registry.list(org_id=org_id)]
 
 
 # ── GET /agents/{id} ─────────────────────────────────────────────────────────
@@ -250,9 +265,12 @@ async def list_agents() -> list[dict]:
     summary="Get agent details",
     response_description="Single agent summary",
 )
-async def get_agent(agent_id: str) -> dict:
-    """Inspect a single agent by ID."""
-    agent = agent_registry.get(agent_id)
+async def get_agent(
+    agent_id: str,
+    org_id: str = Depends(require_org),
+) -> dict:
+    """Inspect a single agent by ID.  Returns 404 if it belongs to a different org."""
+    agent = agent_registry.get(agent_id, org_id=org_id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     return _agent_summary(agent)
@@ -266,13 +284,18 @@ async def get_agent(agent_id: str) -> dict:
     status_code=204,
     summary="Deregister an agent",
 )
-async def deregister_agent(agent_id: str) -> Response:
+async def deregister_agent(
+    agent_id: str,
+    org_id: str = Depends(require_org),
+) -> Response:
     """
-    Remove an agent from the registry.  Any in-progress jobs assigned to
-    this agent will stall; cancel them separately via `POST /jobs/{id}/cancel`.
+    Remove an agent from the registry.  Returns 404 if the agent does not
+    exist or belongs to a different organisation.
     """
-    if not agent_registry.deregister(agent_id):
+    agent = agent_registry.get(agent_id, org_id=org_id)
+    if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    agent_registry.deregister(agent_id)
     return Response(status_code=204)
 
 
@@ -282,6 +305,7 @@ async def deregister_agent(agent_id: str) -> Response:
 def _agent_summary(agent: Agent) -> dict:
     return {
         "agent_id":       agent.agent_id,
+        "org_id":         agent.org_id,
         "hostname":       agent.hostname,
         "capabilities":   agent.capabilities,
         "version":        agent.version,

@@ -40,6 +40,9 @@ class ScanJob:
     # Cap event history per job to 10,000 events to prevent OOM on long scans.
     EVENT_CAP = 10000
 
+    # ── Multi-tenancy ─────────────────────────────────────────────────────────
+    org_id: str = ""                 # owning organisation — empty string = no tenant
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
     status: str = "queued"          # queued | running | completed | failed | cancelled
     progress: float = 0.0           # 0.0 to 100.0
@@ -79,6 +82,7 @@ class ScanJob:
         return {
             "job_id": self.job_id,
             "config": self.config.model_dump(),
+            "org_id": self.org_id,
             "status": self.status,
             "progress": self.progress,
             "created_at": self.created_at,
@@ -94,6 +98,7 @@ class ScanJob:
         job = cls(
             job_id=data["job_id"],
             config=ScanRequest(**data["config"]),
+            org_id=data.get("org_id", ""),
             status=data["status"],
             progress=data.get("progress", 0.0),
             created_at=data["created_at"],
@@ -208,10 +213,10 @@ class JobManager:
 
     # ── Create ────────────────────────────────────────────────────────────────
 
-    def create(self, config: ScanRequest) -> ScanJob:
+    def create(self, config: ScanRequest, org_id: str = "") -> ScanJob:
         """Allocate a new job, register it, and return it."""
         self._maybe_evict()
-        job = ScanJob(job_id=str(uuid.uuid4()), config=config)
+        job = ScanJob(job_id=str(uuid.uuid4()), config=config, org_id=org_id)
         self._jobs[job.job_id] = job
         # Save initial metadata
         self.persist_job(job)
@@ -219,13 +224,21 @@ class JobManager:
 
     # ── Query ─────────────────────────────────────────────────────────────────
 
-    def get(self, job_id: str) -> Optional[ScanJob]:
-        return self._jobs.get(job_id)
+    def get(self, job_id: str, org_id: str = "") -> Optional[ScanJob]:
+        """Return the job if it exists and belongs to org_id (or org_id is unset)."""
+        job = self._jobs.get(job_id)
+        if job is None:
+            return None
+        if org_id and job.org_id != org_id:
+            return None  # treat as not found — prevents cross-org enumeration
+        return job
 
-    def list(self, limit: int = 50) -> list[ScanJob]:
-        """Return up to `limit` jobs, newest first."""
+    def list(self, limit: int = 50, org_id: str = "") -> list[ScanJob]:
+        """Return up to `limit` jobs, newest first, optionally filtered by org."""
         self._maybe_evict()
         jobs = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
+        if org_id:
+            jobs = [j for j in jobs if j.org_id == org_id]
         return jobs[:limit]
 
     # ── Delete ────────────────────────────────────────────────────────────────
