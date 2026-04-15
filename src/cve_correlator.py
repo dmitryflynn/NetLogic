@@ -618,9 +618,9 @@ OFFLINE_SIGS = [
     ("tomcat",  lambda v: _ver_lt(v, "9.0.31"),"CVE-2020-1938",  9.8, "CRITICAL", "", "Ghostcat: Tomcat AJP file read/include — RCE if file upload possible."),
     ("tomcat",  lambda v: _ver_lt(v, "8.5.23"),"CVE-2017-12615", 9.8, "CRITICAL", "", "Tomcat JSP Upload Bypass RCE via HTTP PUT (Windows only)."),
     ("tomcat",  lambda v: _ver_lt(v, "7.0.100"),"CVE-2020-9484", 9.8, "CRITICAL", "", "Tomcat deserialization RCE via PersistentManager + FileStore."),
-    ("iis",     lambda v: True,                "CVE-2022-21907", 9.8, "CRITICAL", "", "IIS HTTP Protocol Stack wormable pre-auth RCE (Windows Server 2022)."),
-    ("iis",     lambda v: True,                "CVE-2015-1635",  10.0,"CRITICAL", "", "MS15-034: IIS HTTP.sys remote code execution via Range header."),
-    ("iis",     lambda v: True,                "CVE-2021-31166", 9.8, "CRITICAL", "", "IIS HTTP.sys UAF Remote Code Execution / Blue Screen DoS."),
+    ("iis",     lambda v: v and v.startswith("10."), "CVE-2022-21907", 9.8, "CRITICAL", "", "IIS HTTP Protocol Stack wormable pre-auth RCE (Windows Server 2019/2022)."),
+    ("iis",     lambda v: _ver_lt(v, "8.6"),        "CVE-2015-1635",  10.0,"CRITICAL", "", "MS15-034: IIS HTTP.sys remote code execution via Range header (IIS ≤ 8.5)."),
+    ("iis",     lambda v: v and v.startswith("10."), "CVE-2021-31166", 9.8, "CRITICAL", "", "IIS HTTP.sys UAF Remote Code Execution / Blue Screen DoS (IIS 10.0)."),
     ("drupal",  lambda v: _ver_lt(v, "8.9"),   "CVE-2018-7600",  9.8, "CRITICAL", "", "Drupalgeddon2 — unauthenticated RCE. Full Metasploit module, widely exploited."),
     ("drupal",  lambda v: _ver_lt(v, "7.32"),  "CVE-2014-3704",  9.8, "CRITICAL", "", "Drupalgeddon — SQL Injection via database abstraction API."),
     ("wordpress",lambda v: _ver_lt(v, "6.4.2"),"CVE-2024-21726", 9.8, "CRITICAL", "", "WordPress < 6.4.2 PHP object injection in WP_HTML_Token — unauthenticated RCE."),
@@ -763,7 +763,7 @@ OFFLINE_SIGS = [
     ("windows",  lambda v: True,                 "CVE-2020-1472",  10.0,"CRITICAL", "", "Zerologon — Netlogon privilege escalation to Domain Admin via MS-NRPC."),
     ("windows",  lambda v: True,                 "CVE-2019-1040",  9.8, "CRITICAL", "", "Microsoft NTLM MIC bypass (Drop the MIC) enabling NTLM relay over SMB."),
     ("windows",  lambda v: True,                 "CVE-2022-30190", 7.8, "HIGH",     "", "Follina — Microsoft Support Diagnostic Tool RCE (reachable via HTTP handlers)."),
-    ("iis",      lambda v: True,                 "CVE-2017-7269",  9.8, "CRITICAL", "", "IIS 6.0 WebDAV buffer overflow RCE (ExplodingCan)."),
+    ("iis",      lambda v: v and v.startswith("6."), "CVE-2017-7269",  9.8, "CRITICAL", "", "IIS 6.0 WebDAV buffer overflow RCE (ExplodingCan)."),
 
     # Grafana
     ("grafana",  lambda v: _ver_lt(v, "9.2.4"),  "CVE-2021-43798", 7.5, "HIGH",     "", "Grafana unauthenticated path traversal — read arbitrary files on the server."),

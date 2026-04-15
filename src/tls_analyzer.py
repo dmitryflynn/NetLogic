@@ -154,9 +154,18 @@ def analyze_cipher(cipher_name: str) -> list[tuple]:
 
 # ─── Certificate Parser ──────────────────────────────────────────────────────────
 
-def parse_cert(sock: ssl.SSLSocket, host: str) -> CertInfo:
-    raw = sock.getpeercert()
-    der = sock.getpeercert(binary_form=True)
+def parse_cert(raw: dict, der: Optional[bytes], chain_valid: bool, host: str) -> CertInfo:
+    """Parse a TLS certificate from the structured dict returned by getpeercert().
+
+    Parameters
+    ----------
+    raw         : dict returned by ssl.SSLSocket.getpeercert() — empty when the
+                  connection used CERT_NONE.
+    der         : DER-encoded certificate bytes — used for fingerprint only.
+    chain_valid : True when the cert was accepted by the system CA store.
+                  False means untrusted/self-signed/expired.
+    host        : Target hostname (for SAN coverage check).
+    """
 
     def _get(field_list, key):
         for group in (field_list or []):
@@ -192,8 +201,16 @@ def parse_cert(sock: ssl.SSLSocket, host: str) -> CertInfo:
     except Exception:
         pass
 
-    # Self-signed
-    is_self = (cn == iss_cn) or (org and org == iss_org)
+    # Self-signed / untrusted:
+    # • If chain_valid=False — the system CA store rejected it; flag as untrusted.
+    # • If we have parsed fields and CN matches issuer CN — explicitly self-signed.
+    # Guard against the None==None false positive when raw was empty (CERT_NONE).
+    if not chain_valid and der:
+        is_self = True
+    elif cn is not None and iss_cn is not None and cn == iss_cn:
+        is_self = True
+    else:
+        is_self = False
 
     # Wildcard
     is_wild = any(s.startswith("*.") for s in sans) or (cn or "").startswith("*.")
@@ -295,21 +312,23 @@ def calculate_grade(findings: list[TLSFinding], deprecated: list[str],
 def analyze_tls(host: str, port: int = 443, timeout: float = 5.0) -> TLSResult:
     result = TLSResult(host=host, port=port)
 
-    # First, get the current connection details
+    # ── Connection 1: CERT_NONE ───────────────────────────────────────────────
+    # Accept any certificate so we can analyse cipher/protocol data even for
+    # self-signed or expired certs.  getpeercert() returns {} here, so we
+    # collect only the DER binary form for the fingerprint.
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
 
+    der: Optional[bytes] = None
     try:
-        raw = socket.create_connection((host, port), timeout=timeout)
-        tls = ctx.wrap_socket(raw, server_hostname=host)
+        raw_sock = socket.create_connection((host, port), timeout=timeout)
+        tls = ctx.wrap_socket(raw_sock, server_hostname=host)
         result.tls_supported = True
         result.cipher_suite = tls.cipher()[0] if tls.cipher() else None
+        der = tls.getpeercert(binary_form=True)
 
-        # Parse certificate
-        result.cert = parse_cert(tls, host)
-
-        # CRIME check
+        # CRIME check (needs live socket)
         crime = check_crime(tls)
         if crime:
             result.findings.append(crime)
@@ -324,6 +343,27 @@ def analyze_tls(host: str, port: int = 443, timeout: float = 5.0) -> TLSResult:
         ))
         result.grade = "?"
         return result
+
+    # ── Connection 2: system CA verification ─────────────────────────────────
+    # Use the default CA store to get the structured cert dict AND determine
+    # whether the cert chain is trusted.  check_hostname=False lets us see the
+    # cert even when the CN/SAN doesn't match the host we scanned.
+    cert_raw: dict = {}
+    chain_valid = False
+    try:
+        ctx2 = ssl.create_default_context()
+        ctx2.check_hostname = False   # verify CA chain but allow CN mismatch
+        raw_sock2 = socket.create_connection((host, port), timeout=timeout)
+        tls2 = ctx2.wrap_socket(raw_sock2, server_hostname=host)
+        cert_raw = tls2.getpeercert() or {}
+        chain_valid = True
+        tls2.close()
+    except ssl.SSLCertVerificationError:
+        chain_valid = False           # untrusted / self-signed / expired
+    except Exception:
+        chain_valid = False
+
+    result.cert = parse_cert(cert_raw, der, chain_valid, host)
 
     # Protocol version probing
     result.protocols_supported, result.protocols_deprecated = probe_protocols(host, port)
