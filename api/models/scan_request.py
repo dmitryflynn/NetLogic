@@ -7,6 +7,8 @@ full Pydantic v2 validation.  All fields are optional except `target`.
 
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
@@ -58,6 +60,17 @@ class ScanRequest(BaseModel):
     nvd_key: str = Field(
         "",
         description="Optional NVD API key for higher rate limits.",
+    )
+
+    # ── Agent routing ─────────────────────────────────────────────────────────
+    agent_id: Optional[str] = Field(
+        None,
+        description=(
+            "ID of a registered remote agent to run this scan. "
+            "If omitted the scan executes locally on the controller (Phase 1 behaviour). "
+            "If set, the job is queued in the agent's task list and will run "
+            "on the agent's local network when the agent next polls."
+        ),
     )
 
     # ─────────────────────────────────────────────────────────────────────────
