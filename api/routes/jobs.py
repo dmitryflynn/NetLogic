@@ -115,6 +115,9 @@ async def cancel_job(job_id: str) -> dict:
         return {"job_id": job_id, "status": job.status, "cancelled": False,
                 "detail": "Job already in terminal state."}
 
+    # Signal the scan thread first so it exits at its next emit_callback().
+    job._stop_flag.set()
+
     if job._task and not job._task.done():
         job._task.cancel()
 

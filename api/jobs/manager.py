@@ -20,6 +20,7 @@ import asyncio
 import collections
 import json
 import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -61,6 +62,15 @@ class ScanJob:
         default=None, repr=False, compare=False
     )
     _task: Optional[asyncio.Task] = field(default=None, repr=False, compare=False)
+
+    # ── Cooperative cancellation flag ─────────────────────────────────────────
+    # Set by cancel_job(); checked by emit_callback() in the scan thread.
+    # Python cannot force-kill an OS thread, but raising inside emit_callback
+    # unwinds the scan stack at the next event emission — typically within
+    # milliseconds on an active scan.
+    _stop_flag: threading.Event = field(
+        default_factory=threading.Event, repr=False, compare=False
+    )
 
     # ─────────────────────────────────────────────────────────────────────────
 
