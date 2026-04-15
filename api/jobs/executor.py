@@ -82,16 +82,41 @@ def _get_semaphore() -> asyncio.Semaphore:
 async def submit_scan(job: ScanJob) -> None:
     """Schedule `job` for execution.  Returns immediately (non-blocking).
 
-    The job's _queue and _loop are configured here (synchronously, before the
-    task starts) so that the SSE generator can begin waiting on the queue even
-    before the first scan event is emitted.
+    The job's _queue and _loop are always configured here so SSE consumers
+    can start waiting before the first event arrives — regardless of whether
+    the scan runs locally or on a remote agent.
+
+    Remote agent path (job.config.agent_id is set):
+      The job is pushed onto the agent's pending task queue.  The agent will
+      pick it up the next time it polls GET /agents/{id}/tasks, run the scan
+      locally, and stream events back via POST /agents/{id}/tasks/{id}/events.
+
+    Local execution path (no agent_id):
+      The scan runs in a ThreadPoolExecutor on the controller (Phase 1 behaviour).
     """
     loop = asyncio.get_running_loop()
     job._loop = loop
-    # maxsize=1000: if consumers are slow we still store ≤1000 wake signals;
-    # the cursor-based replay always recovers the full event list.
     job._queue = asyncio.Queue(maxsize=1000)
 
+    if job.config.agent_id:
+        # ── Remote agent dispatch ─────────────────────────────────────────
+        from api.agents.registry import agent_registry  # avoid circular import
+        agent = agent_registry.get(job.config.agent_id)
+        if agent is None or agent.status == "offline":
+            job.status = "failed"
+            job.error = (
+                f"Agent '{job.config.agent_id}' is not available "
+                f"(not registered or offline)."
+            )
+            job.completed_at = time.time()
+            job.push_event({"type": "error", "message": job.error})
+            job.push_sentinel()
+            return
+        agent_registry.assign_task(job.config.agent_id, job.job_id)
+        # Job remains "queued" — the agent drives it from here.
+        return
+
+    # ── Local execution ───────────────────────────────────────────────────
     task = asyncio.create_task(_run_async(job, loop))
     job._task = task
     _live_tasks.add(task)

@@ -27,7 +27,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 # ── Deferred imports (after path bootstrap) ───────────────────────────────────
-from api.routes import health, jobs  # noqa: E402
+from api.routes import health, jobs, agents  # noqa: E402
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -53,10 +53,13 @@ def create_app() -> FastAPI:
         title="NetLogic API",
         description=(
             "Cloud-Native Attack Surface Mapper & Vulnerability Correlator.\n\n"
-            "Phase 1 REST layer — wraps the NetLogic scan engine as a stateless "
-            "HTTP service with Server-Sent Events streaming."
+            "**Phase 2** — Cloud Agent Architecture.\n\n"
+            "Remote scan agents register with the controller, receive jobs via "
+            "polling, and stream events back in real-time.  The controller "
+            "exposes the same SSE streaming interface regardless of whether a "
+            "scan runs locally or on a remote agent."
         ),
-        version="1.0.0",
+        version="2.0.0",
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
@@ -85,15 +88,17 @@ def create_app() -> FastAPI:
     # ── Routers ───────────────────────────────────────────────────────────────
     app.include_router(health.router)
     app.include_router(jobs.router)
+    app.include_router(agents.router)
 
     # ── Root redirect ─────────────────────────────────────────────────────────
     @app.get("/", include_in_schema=False)
     async def root() -> dict:
         return {
             "service": "NetLogic API",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "docs": "/docs",
             "health": "/health",
+            "agents": "/agents",
         }
 
     return app

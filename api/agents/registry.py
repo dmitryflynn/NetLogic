@@ -1,0 +1,144 @@
+"""
+NetLogic — Cloud Agent Registry
+
+Tracks all registered remote scan agents.  Each agent:
+  • Has a unique agent_id (UUID) and a secret token (SHA-256 hashed for storage)
+  • Reports a heartbeat every ≤30 s — considered offline after HEARTBEAT_TIMEOUT
+  • Holds a pending_tasks queue: job_ids dispatched but not yet picked up
+  • Reports its current_job_id while actively running a scan
+
+Design notes
+────────────
+• In-memory only (Phase 2).  Phase 4 will add a Postgres/Redis backend.
+• token_hash — SHA-256 of the plaintext secret; plaintext is never retained.
+• status is computed dynamically from last_heartbeat so there is no stale state.
+• verify_token uses hmac.compare_digest for constant-time comparison (no timing attacks).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Optional
+
+# Agent is considered offline after this many seconds without a heartbeat.
+HEARTBEAT_TIMEOUT = 60.0
+
+
+@dataclass
+class Agent:
+    agent_id: str
+    hostname: str
+    capabilities: list[str]
+    version: str
+    tags: dict[str, str]
+    token_hash: str              # SHA-256 hex of the secret — never stored plaintext
+    registered_at: float = field(default_factory=time.time)
+    last_heartbeat: Optional[float] = None
+    current_job_id: Optional[str] = None
+    pending_tasks: list = field(default_factory=list)  # job_ids queued for this agent
+
+    @property
+    def status(self) -> str:
+        """Dynamically computed: online | busy | offline."""
+        if self.last_heartbeat is None:
+            return "offline"
+        if time.time() - self.last_heartbeat > HEARTBEAT_TIMEOUT:
+            return "offline"
+        if self.current_job_id:
+            return "busy"
+        return "online"
+
+    def verify_token(self, secret: str) -> bool:
+        """Constant-time comparison — no timing side-channel."""
+        expected = hashlib.sha256(secret.encode()).hexdigest()
+        return hmac.compare_digest(self.token_hash, expected)
+
+
+class AgentRegistry:
+    """Process-wide singleton: in-memory registry of all remote agents."""
+
+    def __init__(self) -> None:
+        self._agents: dict[str, Agent] = {}
+
+    # ── Registration ──────────────────────────────────────────────────────────
+
+    def register(
+        self,
+        hostname: str,
+        capabilities: list[str],
+        version: str,
+        tags: dict[str, str],
+    ) -> tuple[str, str]:
+        """
+        Create a new agent record.
+        Returns (agent_id, plaintext_secret) — secret shown only once to caller.
+        """
+        agent_id   = str(uuid.uuid4())
+        secret     = str(uuid.uuid4())
+        token_hash = hashlib.sha256(secret.encode()).hexdigest()
+        self._agents[agent_id] = Agent(
+            agent_id=agent_id,
+            hostname=hostname,
+            capabilities=capabilities,
+            version=version,
+            tags=tags,
+            token_hash=token_hash,
+        )
+        return agent_id, secret
+
+    def deregister(self, agent_id: str) -> bool:
+        if agent_id in self._agents:
+            del self._agents[agent_id]
+            return True
+        return False
+
+    # ── Query ─────────────────────────────────────────────────────────────────
+
+    def get(self, agent_id: str) -> Optional[Agent]:
+        return self._agents.get(agent_id)
+
+    def list(self) -> list[Agent]:
+        return list(self._agents.values())
+
+    # ── Heartbeat ─────────────────────────────────────────────────────────────
+
+    def heartbeat(self, agent_id: str) -> bool:
+        agent = self._agents.get(agent_id)
+        if not agent:
+            return False
+        agent.last_heartbeat = time.time()
+        return True
+
+    # ── Task dispatch ─────────────────────────────────────────────────────────
+
+    def assign_task(self, agent_id: str, job_id: str) -> bool:
+        """Push a job_id onto the agent's pending queue."""
+        agent = self._agents.get(agent_id)
+        if not agent:
+            return False
+        agent.pending_tasks.append(job_id)
+        return True
+
+    def get_pending_tasks(self, agent_id: str) -> list[str]:
+        """Atomically drain and return the agent's pending task queue."""
+        agent = self._agents.get(agent_id)
+        if not agent:
+            return []
+        tasks = list(agent.pending_tasks)
+        agent.pending_tasks.clear()
+        return tasks
+
+    def find_idle_agent(self) -> Optional[Agent]:
+        """Return the first online/idle agent, or None if all are offline or busy."""
+        for agent in self._agents.values():
+            if agent.status == "online":
+                return agent
+        return None
+
+
+# Process-wide singleton — imported by executor and routes.
+agent_registry = AgentRegistry()
