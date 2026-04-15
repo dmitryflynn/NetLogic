@@ -36,6 +36,7 @@ class Agent:
     version: str
     tags: dict[str, str]
     token_hash: str              # SHA-256 hex of the secret — never stored plaintext
+    org_id: str = ""             # owning organisation — empty string = no tenant
     registered_at: float = field(default_factory=time.time)
     last_heartbeat: Optional[float] = None
     current_job_id: Optional[str] = None
@@ -72,6 +73,7 @@ class AgentRegistry:
         capabilities: list[str],
         version: str,
         tags: dict[str, str],
+        org_id: str = "",
     ) -> tuple[str, str]:
         """
         Create a new agent record.
@@ -87,6 +89,7 @@ class AgentRegistry:
             version=version,
             tags=tags,
             token_hash=token_hash,
+            org_id=org_id,
         )
         return agent_id, secret
 
@@ -98,11 +101,21 @@ class AgentRegistry:
 
     # ── Query ─────────────────────────────────────────────────────────────────
 
-    def get(self, agent_id: str) -> Optional[Agent]:
-        return self._agents.get(agent_id)
+    def get(self, agent_id: str, org_id: str = "") -> Optional[Agent]:
+        """Return the agent if it exists and belongs to org_id (or org_id is unset)."""
+        agent = self._agents.get(agent_id)
+        if agent is None:
+            return None
+        if org_id and agent.org_id != org_id:
+            return None  # treat as not found — prevents cross-org enumeration
+        return agent
 
-    def list(self) -> list[Agent]:
-        return list(self._agents.values())
+    def list(self, org_id: str = "") -> list[Agent]:
+        """Return all agents, optionally filtered to a single organisation."""
+        agents = list(self._agents.values())
+        if org_id:
+            agents = [a for a in agents if a.org_id == org_id]
+        return agents
 
     # ── Heartbeat ─────────────────────────────────────────────────────────────
 
