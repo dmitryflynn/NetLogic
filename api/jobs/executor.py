@@ -144,11 +144,12 @@ async def _run_async(job: ScanJob, loop: asyncio.AbstractEventLoop) -> None:
         job.error = f"Scan timed out after {GLOBAL_SCAN_TIMEOUT}s."
         job.push_event({"type": "error", "message": job.error})
     except asyncio.CancelledError:
-        # Client cancelled the job
+        # Signal the scan thread to exit at its next emit_callback() call.
+        # The thread cannot be force-killed, but it will raise InterruptedError
+        # on the next event and unwind cleanly — typically within milliseconds.
+        job._stop_flag.set()
         job.status = "cancelled"
         job.error = "Scan cancelled by user."
-        # We cannot kill the OS thread in the pool immediately, but we can
-        # mark the job as failed and stop streaming.
         job.push_event({"type": "error", "message": job.error})
         raise
     except Exception as e:
@@ -173,11 +174,14 @@ def _run_scan_thread(job: ScanJob) -> None:
     job.started_at = time.time()
 
     def emit_callback(event_type: str, data, message: str | None) -> None:
-        """Called by emit() inside the scan engine (on this OS thread)."""
-        # If the task has been cancelled, we should stop processing events
-        # from the engine, even if the thread is still technically running.
-        if job.status == "failed" and "cancelled" in (job.error or "").lower():
-            return
+        """Called by emit() inside the scan engine (on this OS thread).
+
+        Checks the cooperative stop flag on every event.  When set, raises
+        InterruptedError which unwinds run_streaming_scan() and exits the
+        thread cleanly — the fastest safe way to stop a Python OS thread.
+        """
+        if job._stop_flag.is_set():
+            raise InterruptedError("Scan cancelled by user.")
 
         event: dict = {"type": event_type}
         if message is not None:
