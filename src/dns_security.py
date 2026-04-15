@@ -280,16 +280,32 @@ def check_dkim(domain: str) -> DKIMResult:
                     key_b64 = p_match.group(1)
                     key_len = len(key_b64) * 6 // 8 * 8  # rough bit estimate
                     if key_len < 1024:
-                        result.issues.append(
-                            f"Selector '{sel}': RSA key appears short (<1024 bits) — vulnerable to factoring"
-                        )
+                        result.findings.append(AuditFinding(
+                            title="Weak DKIM Key Length",
+                            description=f"Selector '{sel}': RSA key appears short (<1024 bits) — vulnerable to factoring",
+                            remediation="Generate a new 2048-bit or larger RSA key pair for DKIM signing.",
+                            severity="HIGH",
+                            category="DKIM",
+                        ))
 
                 # Empty p= means key revoked
                 if "p=" in (record or "") and re.search(r"p=\s*;|p=\"\"", record or ""):
-                    result.issues.append(f"Selector '{sel}': public key is empty (revoked)")
+                    result.findings.append(AuditFinding(
+                        title="Revoked DKIM Key",
+                        description=f"Selector '{sel}': public key is empty (revoked)",
+                        remediation="Configure a new DKIM selector with a valid key, or remove unused selectors.",
+                        severity="HIGH",
+                        category="DKIM",
+                    ))
 
     if not result.found_selectors:
-        result.issues.append("No DKIM selectors found from common list — DKIM may not be configured")
+        result.findings.append(AuditFinding(
+            title="No DKIM Selectors Found",
+            description="No DKIM selectors found from common list — DKIM may not be configured",
+            remediation="Configure DKIM signing with your mail provider and publish the public key in DNS.",
+            severity="MEDIUM",
+            category="DKIM",
+        ))
 
     return result
 
@@ -619,10 +635,12 @@ def check_dns_security(domain: str) -> DNSSecurityResult:
             "No SPF record found. Anyone can send emails appearing to come from this domain.",
             f"Add TXT record: v=spf1 include:_spf.google.com -all"
         ))
-    elif result.spf.issues:
-        for issue in result.spf.issues:
-            result.findings.append(_finding("MEDIUM", "SPF Misconfiguration", issue,
-                "Update SPF record to use -all and fix identified issues."))
+    elif result.spf.findings:
+        for finding in result.spf.findings:
+            result.findings.append(_finding(
+                finding.severity, finding.title, finding.description,
+                finding.remediation,
+            ))
 
     if not result.dkim.found_selectors:
         result.findings.append(_finding(
