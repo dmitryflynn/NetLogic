@@ -135,21 +135,15 @@ async def cancel_job(
         return {"job_id": job_id, "status": job.status, "cancelled": False,
                 "detail": "Job already in terminal state."}
 
-    # Signal the scan thread first so it exits at its next emit_callback().
-    job._stop_flag.set()
-
-    if job._task and not job._task.done():
-        job._task.cancel()
-
     job.status = "cancelled"
     job.completed_at = time.time()
     job.error = "Cancelled by user request."
 
-    # Notify consumers
+    # Notify SSE consumers; the agent will receive a 409 / ignored response
+    # on its next complete_task call since the job is already terminal.
     job.push_event({"type": "error", "message": job.error})
     job.push_sentinel()
 
-    # Persist the final state
     job_manager.persist_job(job)
 
     return {"job_id": job_id, "status": job.status, "cancelled": True}
@@ -173,10 +167,6 @@ async def delete_job(
     job = job_manager.get(job_id, org_id=org_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-
-    # Best-effort cancellation if still running
-    if job.status in ("queued", "running") and job._task:
-        job._task.cancel()
 
     job_manager.delete(job_id)
     return Response(status_code=204)

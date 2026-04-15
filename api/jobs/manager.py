@@ -43,6 +43,12 @@ class ScanJob:
     # ── Multi-tenancy ─────────────────────────────────────────────────────────
     org_id: str = ""                 # owning organisation — empty string = no tenant
 
+    # ── Dispatch tracking ─────────────────────────────────────────────────────
+    # Which agent is actually executing this job.  May differ from
+    # config.agent_id when the controller auto-assigned to any available agent.
+    # Set by executor.py; read by agent routes for ownership verification.
+    assigned_agent_id: Optional[str] = None
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
     status: str = "queued"          # queued | running | completed | failed | cancelled
     progress: float = 0.0           # 0.0 to 100.0
@@ -83,6 +89,7 @@ class ScanJob:
             "job_id": self.job_id,
             "config": self.config.model_dump(),
             "org_id": self.org_id,
+            "assigned_agent_id": self.assigned_agent_id,
             "status": self.status,
             "progress": self.progress,
             "created_at": self.created_at,
@@ -99,6 +106,7 @@ class ScanJob:
             job_id=data["job_id"],
             config=ScanRequest(**data["config"]),
             org_id=data.get("org_id", ""),
+            assigned_agent_id=data.get("assigned_agent_id"),
             status=data["status"],
             progress=data.get("progress", 0.0),
             created_at=data["created_at"],
@@ -240,6 +248,20 @@ class JobManager:
         if org_id:
             jobs = [j for j in jobs if j.org_id == org_id]
         return jobs[:limit]
+
+    def list_queued_unassigned(self, org_id: str = "") -> list[ScanJob]:
+        """Return queued jobs that have no assigned agent yet, oldest first.
+
+        Used by try_dispatch_queued() to find work for newly available agents.
+        Does NOT trigger eviction (intentional — called on every heartbeat).
+        """
+        jobs = [
+            j for j in self._jobs.values()
+            if j.status == "queued"
+            and not j.assigned_agent_id
+            and (not org_id or j.org_id == org_id)
+        ]
+        return sorted(jobs, key=lambda j: j.created_at)
 
     # ── Delete ────────────────────────────────────────────────────────────────
 

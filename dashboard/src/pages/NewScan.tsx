@@ -185,25 +185,28 @@ export default function NewScan() {
         </div>
 
         {/* Agent routing */}
-        {agents.length > 0 && (
-          <div className="panel p-4 space-y-3">
-            <p className="section-title">Remote Agent (optional)</p>
-            <select
-              className="input"
-              value={form.agent_id ?? ''}
-              onChange={(e) => setForm({ ...form, agent_id: e.target.value || undefined })}
-            >
-              <option value="">Run locally on controller</option>
-              {agents
-                .filter((a) => a.status !== 'offline')
-                .map((a) => (
-                  <option key={a.agent_id} value={a.agent_id}>
-                    {a.hostname} ({a.status})
-                  </option>
-                ))}
-            </select>
-          </div>
-        )}
+        <div className="panel p-4 space-y-3">
+          <p className="section-title">Agent</p>
+          <select
+            className="input"
+            value={form.agent_id ?? ''}
+            onChange={(e) => setForm({ ...form, agent_id: e.target.value || undefined })}
+          >
+            <option value="">Auto-assign to any available agent</option>
+            {agents
+              .filter((a) => a.status !== 'offline')
+              .map((a) => (
+                <option key={a.agent_id} value={a.agent_id}>
+                  {a.hostname} ({a.status})
+                </option>
+              ))}
+          </select>
+          {agents.filter((a) => a.status !== 'offline').length === 0 && (
+            <p className="text-[11px] text-high">
+              No agents online — job will queue until one registers and heartbeats in.
+            </p>
+          )}
+        </div>
 
         {err && (
           <p className="text-critical text-[11px] bg-critical/10 border border-critical/30 rounded px-3 py-2">

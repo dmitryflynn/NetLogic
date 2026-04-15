@@ -1,238 +1,107 @@
 """
-NetLogic API — Scan executor.
+NetLogic API — SaaS scan dispatcher.
 
-Bridges the synchronous NetLogic scan engine with asyncio:
+In a SaaS model the controller never executes scans locally — that would be
+expensive and a security risk.  All scan work runs on registered remote agents.
 
-  1. submit_scan(job)        — called from the async route handler.
-                               Sets up the asyncio Queue, captures the running
-                               event loop, then schedules _run_async as an
-                               asyncio Task (fire-and-forget, doesn't block the
-                               HTTP response).
+Public API
+──────────
+  submit_scan(job)          Called by POST /jobs after the job is created.
+                             Sets up the SSE async queue, then dispatches the
+                             job to an agent.  Always returns immediately.
 
-  2. _run_async(job)         — async coroutine that acquires the concurrency
-                               semaphore then offloads the blocking scan to a
-                               ThreadPoolExecutor via loop.run_in_executor().
+  try_dispatch_queued(org)  Called on every heartbeat and task-complete so
+                             that queued jobs are assigned as soon as an agent
+                             becomes idle.  Returns the count dispatched.
 
-  3. _run_scan_thread(job)   — runs inside an OS thread.  Calls
-                               run_streaming_scan() with an emit_callback that
-                               writes events to job.events (list append, GIL-safe)
-                               and wakes the SSE consumer via
-                               loop.call_soon_threadsafe().
+Dispatch rules
+──────────────
+1. job.config.agent_id set  → assign to that specific agent; fail immediately
+                               if the agent is offline / unknown.
+2. No agent_id              → pick the first idle online agent in the org;
+                               the job stays "queued" (SSE keeps pinging) until
+                               an agent heartbeats and the dispatcher retries.
 
-Thread-safety guarantees
-────────────────────────
-• job.events — append-only list; CPython's GIL makes append atomic.
-• job.status / job.started_at / … — simple attribute assignments; atomic under GIL.
-• job._queue / job._loop — written once before the thread starts, then read-only.
-• emit_callback uses call_soon_threadsafe to schedule queue writes on the event
-  loop thread, so asyncio.Queue is only touched from the correct thread.
+The `assigned_agent_id` field on ScanJob always records which agent was
+actually given the work, regardless of whether the user specified one.
 """
 
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
-import os
-import sys
 import time
-from typing import TYPE_CHECKING
 
-# ── Project Path Bootstrap ────────────────────────────────────────────────────
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
-
-# ── Core Engine Imports ───────────────────────────────────────────────────────
-from src.json_bridge import run_streaming_scan
-from src.scanner import COMMON_PORTS, EXTENDED_PORTS
-
-if TYPE_CHECKING:
-    from api.jobs.manager import ScanJob
-
-# ── Concurrency Enforcement ───────────────────────────────────────────────────
-# _MAX_CONCURRENT is enforced at two levels:
-# 1. API Level: asyncio.Semaphore(10) ensures only 10 scan tasks are scheduled.
-# 2. Execution Level: ThreadPoolExecutor(max_workers=10) ensures only 10 OS
-#    threads are actually running in the background.
-# This prevents OOM/CPU saturation on the server.
-_MAX_CONCURRENT = 10
-_thread_pool = concurrent.futures.ThreadPoolExecutor(
-    max_workers=_MAX_CONCURRENT,
-    thread_name_prefix="netlogic-scan",
-)
-
-# ── Asyncio concurrency guard ─────────────────────────────────────────────────
-# Lazily created so it is bound to whatever event loop is running at first use.
-_semaphore: asyncio.Semaphore | None = None
-
-# Keep a strong reference to every background Task so GC cannot collect them
-# before they finish.
-_live_tasks: set[asyncio.Task] = set()
-
-
-def _get_semaphore() -> asyncio.Semaphore:
-    global _semaphore
-    if _semaphore is None:
-        _semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
-    return _semaphore
+from api.agents.registry import agent_registry
+from api.jobs.manager import ScanJob, job_manager
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
 async def submit_scan(job: ScanJob) -> None:
-    """Schedule `job` for execution.  Returns immediately (non-blocking).
+    """Schedule a job for execution on a remote agent.
 
-    The job's _queue and _loop are always configured here so SSE consumers
-    can start waiting before the first event arrives — regardless of whether
-    the scan runs locally or on a remote agent.
-
-    Remote agent path (job.config.agent_id is set):
-      The job is pushed onto the agent's pending task queue.  The agent will
-      pick it up the next time it polls GET /agents/{id}/tasks, run the scan
-      locally, and stream events back via POST /agents/{id}/tasks/{id}/events.
-
-    Local execution path (no agent_id):
-      The scan runs in a ThreadPoolExecutor on the controller (Phase 1 behaviour).
+    Sets up the SSE queue so consumers can start listening immediately, then
+    dispatches the job.  Returns without blocking regardless of whether an
+    agent was found.
     """
     loop = asyncio.get_running_loop()
     job._loop = loop
     job._queue = asyncio.Queue(maxsize=1000)
 
     if job.config.agent_id:
-        # ── Remote agent dispatch ─────────────────────────────────────────
-        from api.agents.registry import agent_registry  # avoid circular import
-        agent = agent_registry.get(job.config.agent_id)
-        if agent is None or agent.status == "offline":
-            job.status = "failed"
-            job.error = (
-                f"Agent '{job.config.agent_id}' is not available "
-                f"(not registered or offline)."
-            )
-            job.completed_at = time.time()
-            job.push_event({"type": "error", "message": job.error})
-            job.push_sentinel()
-            return
-        agent_registry.assign_task(job.config.agent_id, job.job_id)
-        # Job remains "queued" — the agent drives it from here.
-        return
-
-    # ── Local execution ───────────────────────────────────────────────────
-    task = asyncio.create_task(_run_async(job, loop))
-    job._task = task
-    _live_tasks.add(task)
-    task.add_done_callback(_live_tasks.discard)
+        _assign_to_agent(job, job.config.agent_id)
+    else:
+        _assign_to_any(job)
+        # If no agent was available the job stays "queued"; it will be
+        # dispatched by try_dispatch_queued() on the next heartbeat.
 
 
-# ── Internal coroutine ────────────────────────────────────────────────────────
+def try_dispatch_queued(org_id: str = "") -> int:
+    """Flush the queue: assign every waiting job to an idle agent.
 
-async def _run_async(job: ScanJob, loop: asyncio.AbstractEventLoop) -> None:
-    """Async wrapper: acquires semaphore then runs the blocking scan in a thread."""
-    sem = _get_semaphore()
-    # Global timeout for the entire scan job (e.g. 1 hour) to prevent zombie scans.
-    # The scan engine doesn't support mid-scan interruption of the OS thread,
-    # but the API Task will be cancelled and resources reclaimed.
-    GLOBAL_SCAN_TIMEOUT = 3600  # 1 hour
+    Should be called whenever agent availability changes:
+      - POST /agents/{id}/heartbeat   (agent just checked in)
+      - POST /agents/{id}/tasks/{id}/complete  (agent just freed up)
 
-    try:
-        async with sem:
-            await asyncio.wait_for(
-                loop.run_in_executor(_thread_pool, _run_scan_thread, job),
-                timeout=GLOBAL_SCAN_TIMEOUT
-            )
-    except asyncio.TimeoutError:
-        job.status = "failed"
-        job.error = f"Scan timed out after {GLOBAL_SCAN_TIMEOUT}s."
-        job.push_event({"type": "error", "message": job.error})
-    except asyncio.CancelledError:
-        # Signal the scan thread to exit at its next emit_callback() call.
-        # The thread cannot be force-killed, but it will raise InterruptedError
-        # on the next event and unwind cleanly — typically within milliseconds.
-        job._stop_flag.set()
-        job.status = "cancelled"
-        job.error = "Scan cancelled by user."
-        job.push_event({"type": "error", "message": job.error})
-        raise
-    except Exception as e:
-        job.status = "failed"
-        job.error = str(e)
-        job.push_event({"type": "error", "message": str(e)})
-    finally:
-        job.completed_at = time.time()
-        job.push_sentinel()
-
-
-# ── Blocking scan thread ──────────────────────────────────────────────────────
-
-def _run_scan_thread(job: ScanJob) -> None:
-    """Blocking function that runs inside a ThreadPoolExecutor worker thread.
-
-    Calls run_streaming_scan() with an emit_callback that:
-      1. Appends the event to job.events (GIL-safe).
-      2. Wakes SSE consumers via loop.call_soon_threadsafe().
+    Returns the number of jobs dispatched this call.
     """
-    job.status = "running"
-    job.started_at = time.time()
-
-    def emit_callback(event_type: str, data, message: str | None) -> None:
-        """Called by emit() inside the scan engine (on this OS thread).
-
-        Checks the cooperative stop flag on every event.  When set, raises
-        InterruptedError which unwinds run_streaming_scan() and exits the
-        thread cleanly — the fastest safe way to stop a Python OS thread.
-        """
-        if job._stop_flag.is_set():
-            raise InterruptedError("Scan cancelled by user.")
-
-        event: dict = {"type": event_type}
-        if message is not None:
-            event["message"] = message
-        else:
-            event["data"] = data
-        job.push_event(event)
-
-    try:
-        ports = _resolve_ports(job.config.ports)
-
-        run_streaming_scan(
-            target=job.config.target,
-            ports=ports,
-            timeout=job.config.timeout,
-            threads=job.config.threads,
-            # The engine handles the do_full flag internally, but we still pass
-            # individual flags so partial scans work correctly.
-            do_osint=job.config.do_osint or job.config.do_full,
-            cidr=job.config.cidr,
-            do_tls=job.config.do_tls or job.config.do_full,
-            do_headers=job.config.do_headers or job.config.do_full,
-            do_stack=job.config.do_stack or job.config.do_full,
-            do_dns=job.config.do_dns or job.config.do_full,
-            do_full=job.config.do_full,
-            do_probe=job.config.do_probe or job.config.do_full,
-            do_takeover=job.config.do_takeover or job.config.do_full,
-            min_cvss=job.config.min_cvss,
-            emit_callback=emit_callback,
-        )
-        if job.status == "running":
-            job.status = "completed"
-
-    except Exception as exc:  # noqa: BLE001
-        if job.status == "running":
-            job.status = "failed"
-            job.error = str(exc)
-            # Emit a synthetic error event so SSE consumers can terminate cleanly.
-            error_event: dict = {"type": "error", "message": str(exc)}
-            job.push_event(error_event)
+    dispatched = 0
+    for job in job_manager.list_queued_unassigned(org_id=org_id):
+        if _assign_to_any(job):
+            dispatched += 1
+    return dispatched
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Internal helpers ──────────────────────────────────────────────────────────
 
-def _resolve_ports(ports_arg: str) -> list[int]:
-    """Convert the ports string (quick / full / custom=...) to a port list."""
-    if ports_arg == "quick":
-        return list(COMMON_PORTS)
-    if ports_arg == "full":
-        return list(EXTENDED_PORTS)
-    # 'custom=21,22,80' (already normalised by Pydantic validator)
-    raw = ports_arg[len("custom="):]
-    return [int(p) for p in raw.split(",") if p.strip().isdigit()]
+def _assign_to_agent(job: ScanJob, agent_id: str) -> bool:
+    """Assign to a specific agent, failing the job immediately if unavailable."""
+    agent = agent_registry.get(agent_id, org_id=job.org_id)
+    if agent is None or agent.status == "offline":
+        job.status = "failed"
+        job.error = f"Agent '{agent_id[:8]}…' is not available (offline or not registered)."
+        job.completed_at = time.time()
+        job.push_event({"type": "error", "message": job.error})
+        job.push_sentinel()
+        return False
+    job.assigned_agent_id = agent_id
+    agent_registry.assign_task(agent_id, job.job_id)
+    return True
 
+
+def _assign_to_any(job: ScanJob) -> bool:
+    """Pick the first truly idle online agent in the org and assign the job.
+
+    An agent is considered idle when:
+      • Its heartbeat was received within the last 60 s (status == "online")
+      • Its current_job_id is None (not already running a scan)
+      • Its pending_tasks list is empty (nothing queued but not yet polled)
+
+    Returns True if dispatched, False if no suitable agent was found.
+    """
+    for agent in agent_registry.list(org_id=job.org_id):
+        if agent.status == "online" and not agent.pending_tasks:
+            job.assigned_agent_id = agent.agent_id
+            agent_registry.assign_task(agent.agent_id, job.job_id)
+            return True
+    return False

@@ -38,6 +38,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from api.agents.registry import Agent, agent_registry
 from api.auth.dependencies import require_org
+from api.jobs.executor import try_dispatch_queued
 from api.jobs.manager import job_manager
 from api.models.agent import AgentRegistration, AgentTaskComplete
 
@@ -121,6 +122,8 @@ async def agent_heartbeat(
     the last heartbeat timestamp to compute online/offline status.
     """
     agent_registry.heartbeat(agent_id)
+    # Dispatch any queued jobs now that this agent has checked in.
+    try_dispatch_queued(org_id=agent.org_id)
     return {"status": "ok", "server_time": time.time()}
 
 
@@ -186,7 +189,7 @@ async def submit_events(
     job = job_manager.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    if job.config.agent_id != agent_id:
+    if job.assigned_agent_id != agent_id:
         raise HTTPException(status_code=403, detail="Job does not belong to this agent.")
     if agent.org_id and job.org_id and agent.org_id != job.org_id:
         raise HTTPException(status_code=403, detail="Cross-organisation access denied.")
@@ -220,10 +223,15 @@ async def complete_task(
     job = job_manager.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    if job.config.agent_id != agent_id:
+    if job.assigned_agent_id != agent_id:
         raise HTTPException(status_code=403, detail="Job does not belong to this agent.")
     if agent.org_id and job.org_id and agent.org_id != job.org_id:
         raise HTTPException(status_code=403, detail="Cross-organisation access denied.")
+
+    # Ignore completion calls for jobs already in a terminal state (e.g. cancelled).
+    if job.status not in ("running", "queued"):
+        agent.current_job_id = None
+        return {"job_id": job_id, "status": job.status}
 
     if payload.error:
         job.status = "failed"
@@ -238,6 +246,9 @@ async def complete_task(
     job.push_sentinel()        # wake + close all SSE consumers
     agent.current_job_id = None
     job_manager.persist_job(job)
+
+    # Agent is now idle — dispatch any waiting jobs immediately.
+    try_dispatch_queued(org_id=agent.org_id)
 
     return {"job_id": job_id, "status": job.status}
 
