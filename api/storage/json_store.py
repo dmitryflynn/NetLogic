@@ -35,14 +35,19 @@ class JsonScanStore:
         await loop.run_in_executor(None, self._write, path, record)
 
     def _write(self, path: str, record: dict) -> None:
-        tmp = path + ".tmp"
+        import uuid
+        # Use a unique temporary filename to prevent race conditions during concurrent writes
+        tmp = f"{path}.{uuid.uuid4()}.tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(record, fh, default=str, indent=2)
             os.replace(tmp, path)   # atomic on POSIX
         except Exception:
             if os.path.exists(tmp):
-                os.unlink(tmp)
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
             raise
 
     # ── Read ─────────────────────────────────────────────────────────────────

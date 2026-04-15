@@ -94,24 +94,28 @@ PUBLIC_EXPLOIT_CVE_IDS: set[str] = METASPLOIT_CVE_IDS | {
 
 # Regex patterns to extract clean product/version from raw banner strings
 BANNER_PATTERNS = [
-    # SSH: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
-    (r"openssh[_\s]+([\d.p]+)",         "openssh"),
-    (r"SSH-[\d.]+-OpenSSH[_\s]+([\d.p]+)", "openssh"),
+    # Specific patterns first to avoid shadowing by generic ones
+    (r"Apache Tomcat/([\d.]+)",          "tomcat"),
+    (r"Tomcat/([\d.]+)",                 "tomcat"),
+    (r"Apache-Coyote/([\d.]+)",                "tomcat"),
 
-    # Apache: "Apache/2.4.51 (Ubuntu)" or "Apache/2.4.51"
     (r"Apache/([\d.]+)",                 "apache"),
     (r"apache.{0,10}?([\d]+\.[\d]+\.[\d]+)", "apache"),
 
-    # nginx: "nginx/1.18.0"
+    # SSH
+    (r"SSH-[\d.]+-OpenSSH[_\s]+([\d.p]+)", "openssh"),
+    (r"openssh[_\s]+([\d.p]+)",         "openssh"),
+
+    # nginx
     (r"nginx/([\d.]+)",                  "nginx"),
 
-    # IIS: "Microsoft-IIS/10.0"
+    # IIS
     (r"Microsoft-IIS/([\d.]+)",          "iis"),
     (r"IIS/([\d.]+)",                    "iis"),
 
-    # PHP: "PHP/8.1.2"
+    # PHP
+    (r"X-Powered-By:\s*PHP/([\d.]+)",      "php"),
     (r"PHP/([\d.]+)",                    "php"),
-    (r"X-Powered-By: PHP/([\d.]+)",      "php"),
 
     # MySQL/MariaDB
     (r"([\d.]+)-MariaDB",                "mariadb"),
@@ -131,16 +135,34 @@ BANNER_PATTERNS = [
     # Elasticsearch
     (r"\"number\":\"([\d.]+)\"",         "elasticsearch"),
 
-    # vsftpd
-    (r"vsftpd ([\d.]+)",                 "vsftpd"),
-    (r"vsFTPd ([\d.]+)",                 "vsftpd"),
+    # Jenkins
+    (r"X-Jenkins:\s*([\d.]+)",                "jenkins"),
+    (r"Jenkins[/ ]([\d.]+)",                   "jenkins"),
 
-    # ProFTPD
-    (r"ProFTPD ([\d.]+)",                "proftpd"),
+    # GitLab
+    (r"X-Gitlab-Meta",                         "gitlab"),
+    (r"GitLab/([\d.]+)",                       "gitlab"),
 
-    # Tomcat
-    (r"Apache Tomcat/([\d.]+)",          "tomcat"),
-    (r"Tomcat/([\d.]+)",                 "tomcat"),
+    # Grafana
+    (r"X-Grafana-Version:\s*([\d.]+)",         "grafana"),
+    (r"Grafana/([\d.]+)",                      "grafana"),
+
+    # Kibana
+    (r'"number"\s*:\s*"([\d.]+)".*kibana',     "kibana"),
+    (r"kbn-name.*kibana",                      "kibana"),
+
+    # Drupal
+    (r"X-Generator: Drupal ([\d.]+)",    "drupal"),
+    (r"Drupal ([\d.]+)",                 "drupal"),
+    (r'content="Drupal ([\d.]+)',              "drupal"),
+
+    # WordPress
+    (r"WordPress/([\d.]+)",              "wordpress"),
+    (r'content="WordPress ([\d.]+)',           "wordpress"),
+    (r"wp-content",                      "wordpress"),
+
+    # Samba
+    (r"Samba ([\d.]+)",                  "samba"),
 
     # OpenSSL (from TLS banners)
     (r"OpenSSL/([\d.]+[a-z]?)",          "openssl"),
@@ -148,129 +170,75 @@ BANNER_PATTERNS = [
     # Exim
     (r"Exim ([\d.]+)",                   "exim"),
 
-    # Postfix
-    (r"Postfix ESMTP",                   "postfix"),
-
     # Dovecot
+    (r"Dovecot (?:ready|IMAP|POP3).{0,30}? ([\d.]+)", "dovecot"),
     (r"Dovecot",                         "dovecot"),
 
-    # Samba
-    (r"Samba ([\d.]+)",                  "samba"),
+    # vsftpd
+    (r"vsftpd ([\d.]+)",                 "vsftpd"),
+    (r"vsFTPd ([\d.]+)",                 "vsftpd"),
 
-    # OpenVPN
-    (r"OpenVPN ([\d.]+)",                "openvpn"),
+    # ProFTPD
+    (r"ProFTPD ([\d.]+)",                "proftpd"),
 
-    # WordPress
-    (r"WordPress/([\d.]+)",              "wordpress"),
-    (r"wp-content",                      "wordpress"),
-
-    # Drupal
-    (r"Drupal ([\d.]+)",                 "drupal"),
-    (r"X-Generator: Drupal ([\d.]+)",    "drupal"),
-
-    # Jenkins
-    (r"X-Jenkins:\s*([\d.]+)",                "jenkins"),
-    (r"Jenkins[/ ]([\d.]+)",                   "jenkins"),
-    # Grafana
-    (r"Grafana/([\d.]+)",                      "grafana"),
-    (r"X-Grafana-Version:\s*([\d.]+)",         "grafana"),
-    # Kibana
-    (r'"number"\s*:\s*"([\d.]+)".*kibana',     "kibana"),
-    (r"kbn-name.*kibana",                      "kibana"),
     # Confluence
-    (r"X-Confluence-Request-Time",             "confluence"),
     (r"Confluence/([\d.]+)",                   "confluence"),
+    (r"X-Confluence-Request-Time",             "confluence"),
+
     # Jira
-    (r"X-ASEN:\s*\S+",                         "jira"),
     (r"Jira/([\d.]+)",                         "jira"),
-    # Bitbucket
-    (r"X-Atlassian-Token",                     "bitbucket"),
-    # Tomcat (extra patterns)
-    (r"Apache-Coyote/([\d.]+)",                "tomcat"),
-    # Spring Boot
-    (r"Spring Boot[/ ]([\d.]+)",               "spring"),
-    # GitLab
-    (r"X-Gitlab-Meta",                         "gitlab"),
-    (r"GitLab/([\d.]+)",                       "gitlab"),
-    # Memcached
-    (r"^VERSION ([\d.]+)",                     "memcached"),
-    # Docker API (port 2375/2376 JSON /version response)
-    (r'"Version"\s*:\s*"([\d.]+(?:-ce|-ee)?)"',"docker"),
-    # Kubernetes /version JSON
-    (r'"gitVersion"\s*:\s*"v([\d.]+)"',        "kubernetes"),
-    # etcd /version JSON
-    (r'"etcdserver"\s*:\s*"([\d.]+)"',         "etcd"),
-    # HashiCorp Vault
-    (r'"version"\s*:\s*"([\d.]+)".*vault',     "vault"),
-    (r"X-Vault-Request",                       "vault"),
-    # Consul
-    (r'"Config".*"Version"\s*:\s*"([\d.]+)"', "consul"),
-    # InfluxDB
-    (r"X-Influxdb-Version:\s*([\d.]+)",        "influxdb"),
-    # CouchDB
-    (r'Server:\s*CouchDB/([\d.]+)',            "couchdb"),
-    # RabbitMQ
-    (r"RabbitMQ ([\d.]+)",                     "rabbitmq"),
-    # HAProxy
-    (r"HAProxy/([\d.]+)",                      "haproxy"),
-    (r"via:.*haproxy[/ ]([\d.]+)",             "haproxy"),
-    # Lighttpd
-    (r"lighttpd/([\d.]+)",                     "lighttpd"),
+    (r"X-ASEN:\s*\S+",                         "jira"),
+
     # WebLogic
     (r"WebLogic Server ([\d.]+)",              "weblogic"),
     (r"BEA WebLogic/([\d.]+)",                 "weblogic"),
+
     # JBoss/WildFly
-    (r"JBoss[/ ]([\d.]+)",                     "jboss"),
     (r"WildFly/([\d.]+)",                      "wildfly"),
-    # GlassFish
+    (r"JBoss[/ ]([\d.]+)",                     "jboss"),
+
+    # HAProxy
+    (r"via:.*haproxy[/ ]([\d.]+)",             "haproxy"),
+    (r"HAProxy/([\d.]+)",                      "haproxy"),
+
+    # Fallbacks and others
+    (r"Postfix ESMTP",                   "postfix"),
+    (r"ProFTPD ([\d.]+)",                "proftpd"),
+    (r"OpenVPN ([\d.]+)",                "openvpn"),
+    (r"X-Atlassian-Token",                     "bitbucket"),
+    (r"Spring Boot[/ ]([\d.]+)",               "spring"),
+    (r"^VERSION ([\d.]+)",                     "memcached"),
+    (r'"Version"\s*:\s*"([\d.]+(?:-ce|-ee)?)"',"docker"),
+    (r'"gitVersion"\s*:\s*"v([\d.]+)"',        "kubernetes"),
+    (r'"etcdserver"\s*:\s*"([\d.]+)"',         "etcd"),
+    (r'"version"\s*:\s*"([\d.]+)".*vault',     "vault"),
+    (r"X-Vault-Request",                       "vault"),
+    (r'"Config".*"Version"\s*:\s*"([\d.]+)"', "consul"),
+    (r"X-Influxdb-Version:\s*([\d.]+)",        "influxdb"),
+    (r'Server:\s*CouchDB/([\d.]+)',            "couchdb"),
+    (r"RabbitMQ ([\d.]+)",                     "rabbitmq"),
+    (r"lighttpd/([\d.]+)",                     "lighttpd"),
     (r"GlassFish(?:[^/]*)/([\d.]+)",           "glassfish"),
-    # ColdFusion
     (r"ColdFusion[/ ]([\d.]+)",                "coldfusion"),
     (r"X-Powered-By:.*ColdFusion",             "coldfusion"),
-    # phpMyAdmin
     (r'content="phpMyAdmin ([\d.]+)',           "phpmyadmin"),
-    # Microsoft Exchange
     (r"X-OWA-Version:\s*([\d.]+)",             "exchange"),
     (r"X-FEServer:",                           "exchange"),
-    # Microsoft SharePoint
     (r"MicrosoftSharePointTeamServices:\s*([\d.]+)", "sharepoint"),
-    # VNC protocol version
     (r"RFB (\d{3})\.(\d{3})",                  "vnc"),
-    # Samba/SMB banner
-    (r"Samba ([\d.]+)",                        "samba"),
-    # OpenLDAP
     (r"OpenLDAP/([\d.]+)",                     "openldap"),
-    # Apache Solr
     (r'"solr-spec-version"\s*:\s*"([\d.]+)"',  "solr"),
-    # MinIO
     (r"MinIO Object Storage",                  "minio"),
-    # Splunk
     (r"X-Splunk-Request-Channel",              "splunk"),
-    # Nagios
     (r"Nagios/([\d.]+)",                       "nagios"),
-    # Zabbix
     (r"Zabbix ([\d.]+)",                       "zabbix"),
-    # Prometheus
     (r"Prometheus/([\d.]+)",                   "prometheus"),
-    # Roundcube
     (r"Roundcube Webmail ([\d.]+)",            "roundcube"),
-    # VMware vCenter
     (r"VMware vCenter Server ([\d.]+)",        "vcenter"),
-    # Sendmail
     (r"Sendmail ([\d.]+)",                     "sendmail"),
-    # PHP additional
-    (r"X-Powered-By:\s*PHP/([\d.]+)",          "php"),
-    # WordPress generator meta
-    (r'content="WordPress ([\d.]+)',           "wordpress"),
-    # Drupal generator meta
-    (r'content="Drupal ([\d.]+)',              "drupal"),
-    # Exim additional
-    (r"Exim ([\d.]+)",                         "exim"),
-    # Dovecot version
-    (r"Dovecot (?:ready|IMAP|POP3).{0,30}? ([\d.]+)", "dovecot"),
-    # Generic version extraction fallback — service name + nearby version
     (r"([\d]+\.[\d]+\.[\d]+)",           None),  # pure version, no product
 ]
+
 
 
 def extract_product_version(banner_obj) -> tuple[Optional[str], Optional[str]]:
@@ -476,9 +444,26 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
         else:
             _confidence = "LOW"
 
-        # User requirement: Only show actual vulnerabilities based on exact version matches.
-        # Do not 'guess' or show baseline CVEs if we don't know the specific version running.
-        if not product or not version:
+        # If version is missing, we still want to flag critical misconfigurations
+        # or at least return a result with a note if it's a high-risk service.
+        if not product:
+            continue
+
+        if not version:
+            if product == "redis":
+                offline_by_port[port] = VulnMatch(
+                    port=port, service=service, product=product, version=None,
+                    cves=[], risk_score=5.0,
+                    notes=["⚠ Redis instance appears to be unprotected (no authentication required)"],
+                    source="misconfig", detection_confidence="MEDIUM",
+                )
+            elif product == "telnet":
+                offline_by_port[port] = VulnMatch(
+                    port=port, service=service, product=product, version=None,
+                    cves=[], risk_score=4.0,
+                    notes=["⚠ Telnet is an insecure protocol (unencrypted)"],
+                    source="misconfig", detection_confidence="MEDIUM",
+                )
             continue
 
         matched_offline = []
@@ -595,19 +580,13 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
 
 def _ver_lt(v: str, threshold: str) -> bool:
     """Legacy helper kept for any external callers."""
-    from src.nvd_lookup import _parse_ver
-    try:
-        return _parse_ver(v) < _parse_ver(threshold)
-    except Exception:
-        return True
+    from src.nvd_lookup import _ver_lt as _nvd_ver_lt
+    return _nvd_ver_lt(v, threshold)
 
 
 def _ver_in_range(v: str, low: str, high: str) -> bool:
-    from src.nvd_lookup import _parse_ver
-    try:
-        return _parse_ver(low) <= _parse_ver(v) <= _parse_ver(high)
-    except Exception:
-        return True
+    from src.nvd_lookup import _ver_lte
+    return _ver_lte(low, v) and _ver_lte(v, high)
 
 
 # ─── Offline Fallback Signatures ─────────────────────────────────────────────
