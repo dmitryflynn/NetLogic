@@ -194,9 +194,8 @@ def _nvd_request(params: dict) -> Optional[dict]:
             except Exception:
                 return None
         return None
-    except urllib.error.URLError as e:
+    except urllib.error.URLError:
         # Network unreachable / DNS failure — stop trying for this session
-        print(f"DEBUG: NVD API URLError: {e}", file=sys.stderr)
         _nvd_unavailable = True
         return None
     except Exception:
@@ -397,8 +396,10 @@ def _ver_lt(a: str, b: str) -> bool:
     try:
         v1, v2 = str(a).strip(), str(b).strip()
         try:
+            if Version is None:
+                raise TypeError("packaging not installed")
             return Version(v1) < Version(v2)
-        except InvalidVersion:
+        except (InvalidVersion, TypeError):
             return _parse_ver(v1) < _parse_ver(v2)
     except Exception:
         return True
@@ -556,17 +557,20 @@ PRODUCT_KEYWORD_MAP = {
 }
 
 
-def _build_keyword(product: str, version: str = None) -> str:
-    """Build NVD search keyword from product name."""
+def _build_keyword(product: str, version: str = None) -> Optional[str]:
+    """Build NVD search keyword from product name.
+
+    Returns None for products explicitly suppressed in PRODUCT_KEYWORD_MAP
+    (e.g. "http", "ftp") — callers must check for None and skip the query.
+    """
     product_lower = (product or "").lower().strip()
 
-    # Try direct map first
-    mapped = PRODUCT_KEYWORD_MAP.get(product_lower)
-    if mapped:
-        return mapped
+    # Check the map first; use `is not None` so explicit None suppressions are honoured.
+    if product_lower in PRODUCT_KEYWORD_MAP:
+        return PRODUCT_KEYWORD_MAP[product_lower]  # may be None → caller skips
 
-    # Fallback to the provided product name
-    return product_lower
+    # Unknown product — use as-is (best-effort)
+    return product_lower or None
 
 
 # ─── Main Lookup Function ─────────────────────────────────────────────────────
@@ -578,8 +582,8 @@ def query_nvd_for_product(product: str, version: str = None,
     Results are cached to disk for 24 hours.
     """
     product_clean = (product or "").strip().lower()
-    keyword = _build_keyword(product_clean, version) or product_clean
-    if not keyword:
+    keyword = _build_keyword(product_clean, version)
+    if not keyword:  # None (suppressed) or empty string
         return []
 
     # Cache key includes product but NOT version (same CVEs apply)
@@ -602,22 +606,17 @@ def query_nvd_for_product(product: str, version: str = None,
 
     data = _nvd_request(params)
     if not data:
-        print("DEBUG: No data from _nvd_request", file=sys.stderr)
         return []
 
     vulns = data.get("vulnerabilities", [])
-    print(f"DEBUG: API returned {len(vulns)} vulnerabilities", file=sys.stderr)
     cves = []
     for item in vulns:
         try:
             cve_obj = _parse_nvd_item(item)
             if cve_obj:
                 cves.append(cve_obj)
-        except Exception as e:
-            print(f"DEBUG: Parse error: {e}", file=sys.stderr)
+        except Exception:
             continue
-
-    print(f"DEBUG: Parsed {len(cves)} total CVEs", file=sys.stderr)
 
     # Sort by CVSS score descending
     cves.sort(key=lambda c: c.cvss_score, reverse=True)
