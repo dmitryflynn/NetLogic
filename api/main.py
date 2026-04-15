@@ -27,7 +27,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 # ── Deferred imports (after path bootstrap) ───────────────────────────────────
-from api.routes import health, scans  # noqa: E402
+from api.routes import health, jobs  # noqa: E402
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -84,7 +84,7 @@ def create_app() -> FastAPI:
 
     # ── Routers ───────────────────────────────────────────────────────────────
     app.include_router(health.router)
-    app.include_router(scans.router)
+    app.include_router(jobs.router)
 
     # ── Root redirect ─────────────────────────────────────────────────────────
     @app.get("/", include_in_schema=False)

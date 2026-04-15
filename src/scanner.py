@@ -66,57 +66,94 @@ SERVICE_MAP = {
 }
 
 PROBES = {
-    "http":    b"GET / HTTP/1.0\r\nHost: {host}\r\n\r\n",
-    "ftp":     None,   # banner grab only
+    "http":    b"GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: NetLogic/2.0\r\nConnection: close\r\n\r\n",
+    "ftp":     None,   
     "ssh":     None,
-    "smtp":    None,
+    "smtp":    b"HELO netlogic.local\r\n",
     "pop3":    None,
     "imap":    None,
     "redis":   b"INFO server\r\n",
-    "mysql":   None,
+    "mysql":   b"\x00\x00\x00\x01", # Trigger error to see version in error msg
+    "postgresql": b"\x00\x00\x00\x08\x04\xd2\x16\x2f", # SSLRequest
     "mongodb": b"\x41\x00\x00\x00\xd4\x07\x00\x00\x00\x00\x00\x00\xd4\x07\x00\x00\x00\x00\x00\x00"
                b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
-    "docker-api":      b"GET /version HTTP/1.0\r\nHost: {host}\r\n\r\n",
-    "etcd":            b"GET /version HTTP/1.0\r\nHost: {host}\r\n\r\n",
-    "kibana":          b"GET /api/status HTTP/1.0\r\nHost: {host}\r\n\r\n",
-    "grafana":         b"GET /api/health HTTP/1.0\r\nHost: {host}\r\n\r\n",
-    "vault":           b"GET /v1/sys/health HTTP/1.0\r\nHost: {host}\r\n\r\n",
-    "consul-http":     b"GET /v1/status/leader HTTP/1.0\r\nHost: {host}\r\n\r\n",
-    "couchdb":         b"GET / HTTP/1.0\r\nHost: {host}\r\n\r\n",
-    "prometheus":      b"GET /-/healthy HTTP/1.0\r\nHost: {host}\r\n\r\n",
-    "rabbitmq-mgmt":   b"GET /api/overview HTTP/1.0\r\nHost: {host}\r\n\r\n",
-    "solr":            b"GET /solr/admin/info/system?wt=json HTTP/1.0\r\nHost: {host}\r\n\r\n",
-    "neo4j-http":      b"GET / HTTP/1.0\r\nHost: {host}\r\n\r\n",
     "memcached":       b"version\r\n",
-    "http-alt":        b"GET / HTTP/1.0\r\nHost: {host}\r\n\r\n",
+    "zookeeper":       b"srvr\r\n",
+    "docker-api":      b"GET /version HTTP/1.0\r\nHost: {host}\r\n\r\n",
 }
 
 VERSION_PATTERNS = [
+    # Multi-line/complex SSH
+    (r"SSH-[21]\.\d+-OpenSSH[_\s]([\d.]+[p\d]*)", "openssh"),
     (r"SSH-(\S+)", "ssh"),
-    (r"220[- ](\S+\s+\S+)", "smtp"),
+    # HTTP Side-channels
     (r"Server:\s*([^\r\n]+)", "http"),
+    (r"X-Powered-By:\s*([^\r\n]+)", "web-framework"),
+    (r"X-AspNet-Version:\s*([\d.]+)", "asp.net"),
+    (r"X-Generator:\s*([^\r\n]+)", "cms"),
+    # Databases
+    (r"(\d+\.\d+\.\d+)-MariaDB", "mariadb"),
+    (r"(\d+\.\d+\.\d+)-MySQL", "mysql"),
+    (r"mysql_native_password", "mysql"), # Heuristic: if no version but this string, it's MySQL
+    (r"PostgreSQL.*([\d.]+)", "postgresql"),
+    # Others
     (r"redis_version:(\S+)", "redis"),
-    (r"(\d+\.\d+\.\d+)-MariaDB", "mysql"),
-    (r"OpenSSH[_\s]([\d.]+[p\d]*)", "ssh"),
-    (r"vsftpd\s+([\d.]+)", "ftp"),
-    (r"ProFTPD\s+([\d.]+)", "ftp"),
+    (r"vsftpd\s+([\d.]+)", "vsftpd"),
+    (r"ProFTPD\s+([\d.]+)", "proftpd"),
+    (r"Pure-FTPd\s+([\d.]+)", "pure-ftpd"),
+    (r"Zookeeper version:\s*([\d.]+)", "zookeeper"),
 ]
 
 
 def parse_banner(raw: str, service: str) -> ServiceBanner:
-    """Extract product/version from raw banner text."""
-    b = ServiceBanner(raw=raw[:512])
-    for pattern, svc in VERSION_PATTERNS:
-        m = re.search(pattern, raw, re.IGNORECASE)
-        if m:
-            b.version = m.group(1).strip()
-            b.product = svc
-            break
-    # HTTP-specific
-    if "Server:" in raw:
-        m = re.search(r"Server:\s*([^\r\n]+)", raw)
+    """Extract product/version using multi-layered heuristic analysis."""
+    b = ServiceBanner(raw=raw[:4096]) # Increased capture for deep response analysis
+    
+    # 1. HTTP/Web Specific Deep Analysis
+    if service in ("http", "https", "http-alt", "https-alt") or "HTTP/" in raw:
+        # Check standard Server header first
+        m = re.search(r"^Server:\s*([^\r\n]+)", raw, re.I | re.M)
         if m:
             b.product = m.group(1).strip()
+            # Split product from version if possible (e.g. Apache/2.4.41)
+            if "/" in b.product:
+                parts = b.product.split("/", 1)
+                b.product = parts[0].strip()
+                b.version = parts[1].strip()
+        
+        # 2. Side-channel Inference (Fallback if Server is generic or missing)
+        if not b.version:
+            # Check Framework headers
+            m = re.search(r"^X-Powered-By:\s*([^\r\n]+)", raw, re.I | re.M)
+            if m:
+                b.extra = f"framework:{m.group(1).strip()}"
+                # Many frameworks include versions here
+                vm = re.search(r"/([\d.]+)", m.group(1))
+                if vm: b.version = vm.group(1)
+            
+            # Check CMS markers
+            m = re.search(r"^X-Generator:\s*([^\r\n]+)", raw, re.I | re.M)
+            if m:
+                b.product = b.product or "cms"
+                vm = re.search(r"([\d.]+)", m.group(1))
+                if vm: b.version = vm.group(1)
+
+    # 3. Global Regex Library
+    for pattern, product in VERSION_PATTERNS:
+        m = re.search(pattern, raw, re.I)
+        if m:
+            # If the regex has a capture group, use it as the version
+            try:
+                b.version = b.version or m.group(1).strip()
+            except IndexError:
+                pass
+            b.product = b.product or product
+            break
+            
+    # 4. Accuracy Refinement: If product is "http" but we have better info, prefer it
+    if b.product == "http" and b.extra and "framework:" in b.extra:
+        b.product = b.extra.split(":")[1].split("/")[0]
+
     return b
 
 
@@ -158,19 +195,39 @@ def probe_port(host: str, port: int, timeout: float = 2.0) -> PortResult:
             if probe:
                 probe_data = probe.replace(b"{host}", host.encode()) if b"{host}" in probe else probe
                 sock.sendall(probe_data)
-            sock.settimeout(2.0)
-            raw_banner = sock.recv(4096)
+            sock.settimeout(timeout)
+            
+            # Robust collection of banner data
+            chunks = []
+            while True:
+                data = sock.recv(1024)
+                if not data: break
+                chunks.append(data)
+                if len(b"".join(chunks)) > 4096: break
+            raw_banner = b"".join(chunks)
+        except (socket.timeout, ConnectionResetError, BrokenPipeError, OSError):
+            pass
         except Exception:
             pass
-        sock.close()
+        finally:
+            try:
+                sock.close()
+            except:
+                pass
 
         if raw_banner:
-            result.banner = parse_banner(raw_banner.decode("utf-8", errors="replace"), service_name)
+            try:
+                banner_text = raw_banner.decode("utf-8", errors="replace")
+                result.banner = parse_banner(banner_text, service_name)
+            except Exception:
+                pass
 
     except (ConnectionRefusedError, OSError):
         result.state = "closed"
     except (socket.timeout, TimeoutError):
         result.state = "filtered"
+    except Exception:
+        result.state = "closed"
 
     # TLS detection - only for open ports that might have TLS
     if result.state == "open":

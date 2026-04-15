@@ -37,13 +37,24 @@ import sys
 import time
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    pass
+# ── Project Path Bootstrap ────────────────────────────────────────────────────
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
-# ── Thread pool ───────────────────────────────────────────────────────────────
-# Hard-cap at 10 concurrent scans.  Each scan can itself use up to 100 threads
-# (configurable), so the real thread ceiling is 10 × 100 = 1 000 which is
-# already generous for a single server.
+# ── Core Engine Imports ───────────────────────────────────────────────────────
+from src.json_bridge import run_streaming_scan
+from src.scanner import COMMON_PORTS, EXTENDED_PORTS
+
+if TYPE_CHECKING:
+    from api.jobs.manager import ScanJob
+
+# ── Concurrency Enforcement ───────────────────────────────────────────────────
+# _MAX_CONCURRENT is enforced at two levels:
+# 1. API Level: asyncio.Semaphore(10) ensures only 10 scan tasks are scheduled.
+# 2. Execution Level: ThreadPoolExecutor(max_workers=10) ensures only 10 OS
+#    threads are actually running in the background.
+# This prevents OOM/CPU saturation on the server.
 _MAX_CONCURRENT = 10
 _thread_pool = concurrent.futures.ThreadPoolExecutor(
     max_workers=_MAX_CONCURRENT,
@@ -68,20 +79,20 @@ def _get_semaphore() -> asyncio.Semaphore:
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-async def submit_scan(job) -> None:
+async def submit_scan(job: ScanJob) -> None:
     """Schedule `job` for execution.  Returns immediately (non-blocking).
 
     The job's _queue and _loop are configured here (synchronously, before the
     task starts) so that the SSE generator can begin waiting on the queue even
     before the first scan event is emitted.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     job._loop = loop
     # maxsize=1000: if consumers are slow we still store ≤1000 wake signals;
     # the cursor-based replay always recovers the full event list.
     job._queue = asyncio.Queue(maxsize=1000)
 
-    task = asyncio.ensure_future(_run_async(job, loop))
+    task = asyncio.create_task(_run_async(job, loop))
     job._task = task
     _live_tasks.add(task)
     task.add_done_callback(_live_tasks.discard)
@@ -89,31 +100,60 @@ async def submit_scan(job) -> None:
 
 # ── Internal coroutine ────────────────────────────────────────────────────────
 
-async def _run_async(job, loop: asyncio.AbstractEventLoop) -> None:
+async def _run_async(job: ScanJob, loop: asyncio.AbstractEventLoop) -> None:
     """Async wrapper: acquires semaphore then runs the blocking scan in a thread."""
     sem = _get_semaphore()
-    async with sem:
-        await loop.run_in_executor(_thread_pool, _run_scan_thread, job)
+    # Global timeout for the entire scan job (e.g. 1 hour) to prevent zombie scans.
+    # The scan engine doesn't support mid-scan interruption of the OS thread,
+    # but the API Task will be cancelled and resources reclaimed.
+    GLOBAL_SCAN_TIMEOUT = 3600  # 1 hour
+
+    try:
+        async with sem:
+            await asyncio.wait_for(
+                loop.run_in_executor(_thread_pool, _run_scan_thread, job),
+                timeout=GLOBAL_SCAN_TIMEOUT
+            )
+    except asyncio.TimeoutError:
+        job.status = "failed"
+        job.error = f"Scan timed out after {GLOBAL_SCAN_TIMEOUT}s."
+        job.push_event({"type": "error", "message": job.error})
+    except asyncio.CancelledError:
+        # Client cancelled the job
+        job.status = "cancelled"
+        job.error = "Scan cancelled by user."
+        # We cannot kill the OS thread in the pool immediately, but we can
+        # mark the job as failed and stop streaming.
+        job.push_event({"type": "error", "message": job.error})
+        raise
+    except Exception as e:
+        job.status = "failed"
+        job.error = str(e)
+        job.push_event({"type": "error", "message": str(e)})
+    finally:
+        job.completed_at = time.time()
+        job.push_sentinel()
 
 
 # ── Blocking scan thread ──────────────────────────────────────────────────────
 
-def _run_scan_thread(job) -> None:
+def _run_scan_thread(job: ScanJob) -> None:
     """Blocking function that runs inside a ThreadPoolExecutor worker thread.
 
     Calls run_streaming_scan() with an emit_callback that:
       1. Appends the event to job.events (GIL-safe).
       2. Wakes SSE consumers via loop.call_soon_threadsafe().
     """
-    # Make sure the project root is importable (important when the worker
-    # thread's sys.path differs from the main thread's).
-    _ensure_project_on_path()
-
     job.status = "running"
     job.started_at = time.time()
 
     def emit_callback(event_type: str, data, message: str | None) -> None:
         """Called by emit() inside the scan engine (on this OS thread)."""
+        # If the task has been cancelled, we should stop processing events
+        # from the engine, even if the thread is still technically running.
+        if job.status == "failed" and "cancelled" in (job.error or "").lower():
+            return
+
         event: dict = {"type": event_type}
         if message is not None:
             event["message"] = message
@@ -122,8 +162,6 @@ def _run_scan_thread(job) -> None:
         job.push_event(event)
 
     try:
-        from src.json_bridge import run_streaming_scan  # noqa: PLC0415
-
         ports = _resolve_ports(job.config.ports)
 
         run_streaming_scan(
@@ -145,27 +183,22 @@ def _run_scan_thread(job) -> None:
             min_cvss=job.config.min_cvss,
             emit_callback=emit_callback,
         )
-        job.status = "completed"
+        if job.status == "running":
+            job.status = "completed"
 
     except Exception as exc:  # noqa: BLE001
-        job.status = "failed"
-        job.error = str(exc)
-        # Emit a synthetic error event so SSE consumers can terminate cleanly.
-        error_event: dict = {"type": "error", "message": str(exc)}
-        job.push_event(error_event)
-
-    finally:
-        job.completed_at = time.time()
-        # Push sentinel (None) so SSE generators know the stream is finished.
-        job.push_sentinel()
+        if job.status == "running":
+            job.status = "failed"
+            job.error = str(exc)
+            # Emit a synthetic error event so SSE consumers can terminate cleanly.
+            error_event: dict = {"type": "error", "message": str(exc)}
+            job.push_event(error_event)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _resolve_ports(ports_arg: str) -> list[int]:
     """Convert the ports string (quick / full / custom=...) to a port list."""
-    from src.scanner import COMMON_PORTS, EXTENDED_PORTS  # noqa: PLC0415
-
     if ports_arg == "quick":
         return list(COMMON_PORTS)
     if ports_arg == "full":
@@ -174,14 +207,3 @@ def _resolve_ports(ports_arg: str) -> list[int]:
     raw = ports_arg[len("custom="):]
     return [int(p) for p in raw.split(",") if p.strip().isdigit()]
 
-
-def _ensure_project_on_path() -> None:
-    """Add the project root to sys.path if it isn't already there.
-
-    Necessary because ThreadPoolExecutor workers inherit sys.path from the
-    spawning thread, but in some deployment configurations (e.g. uvicorn with
-    --app-dir) the root may not be present.
-    """
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    if root not in sys.path:
-        sys.path.insert(0, root)
