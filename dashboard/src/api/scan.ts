@@ -43,8 +43,11 @@ export interface JobDetail extends JobSummary {
 
 export interface ScanEvent {
   type: string
-  data?: Record<string, unknown>
+  // data is typed as PortEvent | VulnEvent | Record<string,unknown> to allow
+  // safe narrowing without double-cast (as unknown as X) at call sites.
+  data?: PortEvent | VulnEvent | Record<string, unknown>
   message?: string
+  ts?: number  // optional server-side timestamp (unix epoch seconds)
 }
 
 export interface PortEvent {
@@ -208,8 +211,8 @@ export function useStreamScan(jobId: string | null) {
     return () => ctrl.abort()
   }, [jobId])
 
-  const ports  = events.filter((e) => e.type === 'port')  .map((e) => e.data as unknown as PortEvent)
-  const vulns  = events.filter((e) => e.type === 'vuln')  .map((e) => e.data as unknown as VulnEvent)
+  const ports    = events.filter((e) => e.type === 'port').map((e) => e.data as PortEvent)
+  const vulns    = events.filter((e) => e.type === 'vuln').map((e) => e.data as VulnEvent)
   const progress = events.filter((e) => e.type === 'progress').at(-1)?.data as { percent?: number } | undefined
 
   return { events, ports, vulns, progress, streaming, done }

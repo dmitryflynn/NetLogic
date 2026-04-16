@@ -1,10 +1,5 @@
 import { useEffect, useRef } from 'react'
-
-interface ScanEvent {
-  type: string
-  data?: Record<string, unknown>
-  ts?:  number
-}
+import type { ScanEvent } from '../api/scan'
 
 const TYPE_COLOR: Record<string, string> = {
   port:     'text-low',

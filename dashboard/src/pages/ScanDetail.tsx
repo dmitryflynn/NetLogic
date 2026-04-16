@@ -19,13 +19,15 @@ export default function ScanDetail() {
   const live = (job?.status === 'running' || job?.status === 'queued')
   const { events, ports, vulns, progress, streaming } = useStreamScan(live ? id! : null)
 
-  // For completed jobs, pull ports/vulns from stored events
+  // For completed jobs, pull ports/vulns from stored events.
+  // The ScanEvent.data union type allows a simple cast here; the filter()
+  // call guarantees the correct event type before we cast.
   const storedPorts = (job?.events ?? [])
     .filter((e) => e.type === 'port')
-    .map((e) => e.data as unknown as PortEvent)
+    .map((e) => e.data as PortEvent)
   const storedVulns = (job?.events ?? [])
     .filter((e) => e.type === 'vuln')
-    .map((e) => e.data as unknown as VulnEvent)
+    .map((e) => e.data as VulnEvent)
 
   const displayPorts = live ? ports  : storedPorts
   const displayVulns = live ? vulns  : storedVulns

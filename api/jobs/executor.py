@@ -114,7 +114,15 @@ def _assign_to_any(job: ScanJob) -> bool:
     Returns True if dispatched, False if no suitable agent was found.
     """
     for agent in agent_registry.list(org_id=job.org_id):
-        if agent.status == "online" and not agent.pending_tasks:
+        # An agent is truly idle when:
+        #   • it is online (heartbeat recent enough)
+        #   • it has no job currently running (current_job_id is None)
+        #   • its pending_tasks queue is empty (nothing queued but not yet polled)
+        if (
+            agent.status == "online"
+            and agent.current_job_id is None
+            and not agent.pending_tasks
+        ):
             job.assigned_agent_id = agent.agent_id
             agent_registry.assign_task(agent.agent_id, job.job_id)
             return True

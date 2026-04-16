@@ -184,49 +184,65 @@ async def delete_job(
 async def _sse_generator(job: ScanJob) -> AsyncGenerator[str, None]:
     """
     Resilient SSE generator with cursor-based replay and non-blocking queue.
+
+    Note: job.events is a deque.  We snapshot it to a list so we can slice
+    by index — deques don't support slicing directly.
     """
     idx = 0
+    # Max iterations waiting for _queue to be initialised (covers the rare race
+    # between create_job returning and submit_scan setting job._queue).
+    _queue_wait_retries = 0
+    _QUEUE_WAIT_MAX = 150  # 30 s at 0.2 s per sleep
+
     while True:
-        # 1. Drain available events from history (replay/catch-up)
-        snapshot = job.events[idx:]
-        for event in snapshot:
+        # 1. Drain available events from history (replay/catch-up).
+        #    Take a list snapshot so we can safely slice by index.
+        snapshot = list(job.events)
+        for event in snapshot[idx:]:
             idx += 1
             yield f"data: {json.dumps(event, default=str)}\n\n"
-            # If we just yielded a 'done' or 'error' from history, we're finished.
+            # If we just yielded a terminal event from history, we're finished.
             if event.get("type") in ("done", "error"):
                 return
 
-        # 2. Check if job finished while we were processing history
+        # 2. Check if job finished while we were processing history.
         if job.status in ("completed", "failed", "cancelled"):
-            # Final catch-up for any events added after the last snapshot
-            for event in job.events[idx:]:
+            # Final catch-up for any events added after the last snapshot.
+            for event in list(job.events)[idx:]:
                 idx += 1
                 yield f"data: {json.dumps(event, default=str)}\n\n"
             return
 
-        # 3. Wait for new events (wake-up signal)
+        # 3. Wait for the SSE queue to be initialised (set by submit_scan).
         if job._queue is None:
+            _queue_wait_retries += 1
+            if _queue_wait_retries > _QUEUE_WAIT_MAX:
+                # submit_scan never ran or the job was never dispatched; bail out.
+                yield 'data: {"type":"error","message":"Stream initialisation timeout."}\n\n'
+                return
             await asyncio.sleep(0.2)
             continue
 
+        _queue_wait_retries = 0  # reset counter once queue is alive
+
         try:
-            # Keep-alive ping every 30s to prevent proxy timeouts
+            # Keep-alive ping every 30 s to prevent proxy timeouts.
             signal = await asyncio.wait_for(job._queue.get(), timeout=30.0)
         except asyncio.TimeoutError:
             yield 'data: {"type":"ping"}\n\n'
             continue
         except asyncio.CancelledError:
-            return  # Client disconnected
+            return  # Client disconnected.
 
-        # 4. Sentinel received: scan thread is finished
+        # 4. Sentinel received: scan thread is finished.
         if signal is None:
-            # One final pass to ensure zero data loss
-            for event in job.events[idx:]:
+            # One final pass to ensure zero data loss.
+            for event in list(job.events)[idx:]:
                 idx += 1
                 yield f"data: {json.dumps(event, default=str)}\n\n"
             return
 
-        # 5. Signal received: loop back to Phase 1 to drain the new event(s)
+        # 5. Signal received: loop back to Phase 1 to drain the new event(s).
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -265,5 +281,5 @@ def _job_detail(job: ScanJob) -> dict:
     detail = _job_summary(job)
     detail["config"] = job.config.model_dump()
     if job.status in ("completed", "failed", "cancelled"):
-        detail["events"] = job.events
+        detail["events"] = list(job.events)  # deque → list for JSON serialization
     return detail

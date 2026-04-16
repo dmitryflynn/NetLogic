@@ -172,11 +172,15 @@ async def get_pending_tasks(
     job_ids = agent_registry.get_pending_tasks(agent_id)
     tasks = []
     for job_id in job_ids:
-        job = job_manager.get(job_id)
+        job = job_manager.get(job_id, org_id=agent.org_id)
         if job and job.status == "queued":
             job.status = "running"
             job.started_at = time.time()
-            agent.current_job_id = job_id
+            # Only update current_job_id for the first accepted job so we don't
+            # overwrite it on each iteration (the field is a single value, not a
+            # list; in normal operation there is at most one task per poll).
+            if agent.current_job_id is None:
+                agent.current_job_id = job_id
             tasks.append({
                 "job_id": job.job_id,
                 "config": job.config.model_dump(),
@@ -197,7 +201,6 @@ async def submit_events(
     job_id: str,
     events: list[dict],
     agent: Annotated[Agent, Depends(_auth_agent)],
-    request: Request = None,
 ) -> dict:
     """
     Agent POSTs batches of scan events as they are emitted.
@@ -216,13 +219,12 @@ async def submit_events(
             detail=f"Batch too large: max {MAX_EVENTS_PER_BATCH} events per request.",
         )
 
-    job = job_manager.get(job_id)
+    # Org-scoped lookup: returns None if the job belongs to a different org.
+    job = job_manager.get(job_id, org_id=agent.org_id if agent.org_id else "")
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     if job.assigned_agent_id != agent_id:
         raise HTTPException(status_code=403, detail="Job does not belong to this agent.")
-    if agent.org_id and job.org_id and agent.org_id != job.org_id:
-        raise HTTPException(status_code=403, detail="Cross-organisation access denied.")
 
     for event in events:
         job.push_event(event)
@@ -250,13 +252,12 @@ async def complete_task(
     * If `error` is null/omitted → job is marked `completed`.
     * If `error` is set → job is marked `failed` with the error message.
     """
-    job = job_manager.get(job_id)
+    # Org-scoped lookup: returns None if the job belongs to a different org.
+    job = job_manager.get(job_id, org_id=agent.org_id if agent.org_id else "")
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     if job.assigned_agent_id != agent_id:
         raise HTTPException(status_code=403, detail="Job does not belong to this agent.")
-    if agent.org_id and job.org_id and agent.org_id != job.org_id:
-        raise HTTPException(status_code=403, detail="Cross-organisation access denied.")
 
     # Ignore completion calls for jobs already in a terminal state (e.g. cancelled).
     if job.status not in ("running", "queued"):

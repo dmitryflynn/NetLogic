@@ -20,7 +20,7 @@ REST surface
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from api.auth.api_keys import api_key_store, verify_admin
@@ -138,3 +138,4 @@ async def revoke_key(
         raise HTTPException(status_code=403, detail="Invalid admin key.")
     if not api_key_store.revoke(key):
         raise HTTPException(status_code=404, detail="API key not found.")
+    return Response(status_code=204)
