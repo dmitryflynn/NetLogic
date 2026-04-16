@@ -186,7 +186,7 @@ export function useStreamScan(jobId: string | null) {
             const line = chunk.trim()
             if (!line.startsWith('data:')) continue
             try {
-              const ev: ScanEvent = JSON.parse(line.slice(5).trim())
+              const ev: ScanEvent = structuredClone(JSON.parse(line.slice(5).trim()))
               if (ev.type === 'ping') continue
               setEvents((prev) => [...prev, ev])
               if (ev.type === 'done' || ev.type === 'error') {

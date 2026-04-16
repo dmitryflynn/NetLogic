@@ -20,11 +20,13 @@ REST surface
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from api.auth.api_keys import api_key_store, verify_admin
 from api.auth.jwt_handler import create_token, JWT_DEFAULT_EXPIRY
+from api.auth.rate_limit import token_limiter
+from api.middleware.audit import audit_log
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -48,17 +50,23 @@ class KeyCreateRequest(BaseModel):
     summary="Exchange API key for JWT",
     response_description="Signed JWT and expiry",
 )
-async def get_token(body: TokenRequest) -> dict:
+async def get_token(request: Request, body: TokenRequest) -> dict:
     """
     Exchange a valid API key for a short-lived JWT.
 
     The returned `token` must be included as a `Bearer` credential in the
     `Authorization` header of every subsequent API call.
     """
+    ip = request.client.host if request.client else "unknown"
+    if not token_limiter.allow(ip):
+        audit_log("token_rate_limited", ip=ip)
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
     org_id = api_key_store.lookup(body.api_key)
     if org_id is None:
+        audit_log("token_exchange_failed", ip=ip, reason="invalid_api_key")
         raise HTTPException(status_code=401, detail="Invalid API key.")
     token = create_token(org_id=org_id, sub=body.api_key)
+    audit_log("token_exchange_ok", ip=ip, org_id=org_id)
     return {
         "token": token,
         "token_type": "bearer",

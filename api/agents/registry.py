@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -26,6 +27,17 @@ from typing import Optional
 
 # Agent is considered offline after this many seconds without a heartbeat.
 HEARTBEAT_TIMEOUT = 60.0
+
+# Agent tokens expire after this many seconds (default: 7 days).
+AGENT_TOKEN_MAX_AGE: float = float(
+    os.environ.get("NETLOGIC_AGENT_TOKEN_MAX_AGE", str(7 * 24 * 3600))
+)
+
+# Maximum pending task queue length per agent — prevents memory exhaustion.
+AGENT_PENDING_CAP: int = int(os.environ.get("NETLOGIC_AGENT_PENDING_CAP", "50"))
+
+# Maximum agents per organisation — prevents registry exhaustion.
+MAX_AGENTS_PER_ORG: int = int(os.environ.get("NETLOGIC_MAX_AGENTS_PER_ORG", "100"))
 
 
 @dataclass
@@ -38,6 +50,7 @@ class Agent:
     token_hash: str              # SHA-256 hex of the secret — never stored plaintext
     org_id: str = ""             # owning organisation — empty string = no tenant
     registered_at: float = field(default_factory=time.time)
+    token_issued_at: float = field(default_factory=time.time)  # for expiry enforcement
     last_heartbeat: Optional[float] = None
     current_job_id: Optional[str] = None
     pending_tasks: list = field(default_factory=list)  # job_ids queued for this agent
@@ -54,7 +67,10 @@ class Agent:
         return "online"
 
     def verify_token(self, secret: str) -> bool:
-        """Constant-time comparison — no timing side-channel."""
+        """Constant-time comparison + token-age enforcement."""
+        # Reject tokens that are too old regardless of HMAC validity.
+        if time.time() - self.token_issued_at > AGENT_TOKEN_MAX_AGE:
+            return False
         expected = hashlib.sha256(secret.encode()).hexdigest()
         return hmac.compare_digest(self.token_hash, expected)
 
@@ -78,7 +94,16 @@ class AgentRegistry:
         """
         Create a new agent record.
         Returns (agent_id, plaintext_secret) — secret shown only once to caller.
+        Raises ValueError if the per-org agent cap is exceeded.
         """
+        if org_id:
+            org_count = sum(1 for a in self._agents.values() if a.org_id == org_id)
+            if org_count >= MAX_AGENTS_PER_ORG:
+                raise ValueError(
+                    f"Organisation '{org_id}' has reached the maximum of "
+                    f"{MAX_AGENTS_PER_ORG} registered agents."
+                )
+        now        = time.time()
         agent_id   = str(uuid.uuid4())
         secret     = str(uuid.uuid4())
         token_hash = hashlib.sha256(secret.encode()).hexdigest()
@@ -90,6 +115,8 @@ class AgentRegistry:
             tags=tags,
             token_hash=token_hash,
             org_id=org_id,
+            registered_at=now,
+            token_issued_at=now,
         )
         return agent_id, secret
 
@@ -129,9 +156,14 @@ class AgentRegistry:
     # ── Task dispatch ─────────────────────────────────────────────────────────
 
     def assign_task(self, agent_id: str, job_id: str) -> bool:
-        """Push a job_id onto the agent's pending queue."""
+        """Push a job_id onto the agent's pending queue.
+
+        Returns False if the agent is not found or the queue is at capacity.
+        """
         agent = self._agents.get(agent_id)
         if not agent:
+            return False
+        if len(agent.pending_tasks) >= AGENT_PENDING_CAP:
             return False
         agent.pending_tasks.append(job_id)
         return True

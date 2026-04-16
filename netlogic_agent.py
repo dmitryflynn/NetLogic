@@ -39,6 +39,7 @@ import logging
 import os
 import signal
 import socket
+import stat
 import sys
 import threading
 import time
@@ -95,6 +96,17 @@ class AgentState:
     def load(self) -> bool:
         if not self.path.exists():
             return False
+        # Warn if the file is world- or group-readable.
+        try:
+            mode = self.path.stat().st_mode
+            if mode & (stat.S_IRGRP | stat.S_IROTH | stat.S_IWGRP | stat.S_IWOTH):
+                log.warning(
+                    "State file %s has insecure permissions (%s) — expected 0o600.",
+                    self.path,
+                    oct(stat.S_IMODE(mode)),
+                )
+        except OSError:
+            pass
         try:
             d = json.loads(self.path.read_text())
             self.agent_id = d["agent_id"]
@@ -108,6 +120,11 @@ class AgentState:
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps({"agent_id": self.agent_id, "token": self.token}, indent=2))
+        # Restrict to owner-only read/write.
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError as exc:
+            log.warning("Could not set permissions on %s: %s", self.path, exc)
         log.info("Credentials saved → %s", self.path)
 
 
