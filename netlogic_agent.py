@@ -119,13 +119,22 @@ class AgentState:
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps({"agent_id": self.agent_id, "token": self.token}, indent=2))
-        # Restrict to owner-only read/write.
+        payload = {
+            "_warning": (
+                "This file contains a plaintext agent token. "
+                "Protect it with filesystem permissions (already set to 0o600). "
+                "Do not share or commit this file."
+            ),
+            "agent_id": self.agent_id,
+            "token": self.token,
+        }
+        self.path.write_text(json.dumps(payload, indent=2))
+        # Restrict to owner-only read/write — prevents other local users reading the token.
         try:
             os.chmod(self.path, 0o600)
         except OSError as exc:
             log.warning("Could not set permissions on %s: %s", self.path, exc)
-        log.info("Credentials saved → %s", self.path)
+        log.info("Credentials saved → %s (permissions: 0o600)", self.path)
 
 
 # ── Scan worker (one per job, runs in its own thread) ─────────────────────────

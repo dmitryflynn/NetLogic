@@ -1,5 +1,15 @@
 import { useState } from 'react'
 
+// Only allow http/https URLs in reference links — blocks javascript: injection.
+function isSafeUrl(url: string): boolean {
+  try {
+    const { protocol } = new URL(url)
+    return protocol === 'https:' || protocol === 'http:'
+  } catch {
+    return false
+  }
+}
+
 interface Vuln {
   cve_id?:      string
   title?:       string
@@ -72,9 +82,22 @@ export default function VulnCard({ vuln }: { vuln: Vuln }) {
             <div>
               <p className="text-[10px] text-text-dim uppercase tracking-wide mb-1">References</p>
               <ul className="space-y-0.5">
-                {vuln.references.map((r, i) => (
-                  <li key={i} className="text-[11px] font-mono text-accent truncate">{r}</li>
-                ))}
+                {vuln.references.map((r, i) =>
+                  isSafeUrl(r) ? (
+                    <li key={i}>
+                      <a
+                        href={r}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[11px] font-mono text-accent truncate hover:underline block"
+                      >
+                        {r}
+                      </a>
+                    </li>
+                  ) : (
+                    <li key={i} className="text-[11px] font-mono text-text-dim truncate">{r}</li>
+                  )
+                )}
               </ul>
             </div>
           )}

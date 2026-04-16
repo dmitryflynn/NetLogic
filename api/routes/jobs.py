@@ -145,12 +145,11 @@ async def cancel_job(
     job.completed_at = time.time()
     job.error = "Cancelled by user request."
 
-    # Notify SSE consumers; the agent will receive a 409 / ignored response
-    # on its next complete_task call since the job is already terminal.
     job.push_event({"type": "error", "message": job.error})
     job.push_sentinel()
 
     job_manager.persist_job(job)
+    audit_log("job_cancelled", job_id=job_id, org_id=org_id, target=job.config.target)
 
     return {"job_id": job_id, "status": job.status, "cancelled": True}
 

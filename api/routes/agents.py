@@ -338,6 +338,7 @@ async def deregister_agent(
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     agent_registry.deregister(agent_id)
+    audit_log("agent_deregistered", agent_id=agent_id, org_id=org_id, hostname=agent.hostname)
     return Response(status_code=204)
 
 
