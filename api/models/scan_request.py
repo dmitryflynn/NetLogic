@@ -7,9 +7,14 @@ full Pydantic v2 validation.  All fields are optional except `target`.
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+# RFC 1123 label: 1-63 chars, starts/ends with alnum, may contain hyphens.
+_LABEL_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$")
 
 
 class ScanRequest(BaseModel):
@@ -83,26 +88,35 @@ class ScanRequest(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("target cannot be empty")
-        
-        # Guard against shell-injection characters.
-        forbidden = set(';|&`$\n\r<>')
-        bad = forbidden & set(v)
-        if bad:
-            raise ValueError(
-                f"target contains disallowed character(s): {', '.join(sorted(bad))}"
-            )
+        if len(v) > 253:
+            raise ValueError("target too long — maximum 253 characters")
 
-        # Basic format check: IP, CIDR, or Domain
-        import re
-        # IP/CIDR pattern (very loose, just for basic structure)
-        if re.match(r"^[\d\./]+$", v):
+        # Try plain IPv4 / IPv6 address first.
+        try:
+            ipaddress.ip_address(v)
             return v
-        
-        # Domain pattern
-        if re.match(r"^[a-zA-Z0-9\-\.]+$", v):
+        except ValueError:
+            pass
+
+        # Try CIDR notation (IPv4 or IPv6).
+        try:
+            ipaddress.ip_network(v, strict=False)
             return v
-            
-        raise ValueError("invalid target format — must be a hostname, IP, or CIDR block")
+        except ValueError:
+            pass
+
+        # Validate as an RFC 1123 hostname (allows sub-domains).
+        labels = v.rstrip(".").split(".")
+        for label in labels:
+            if not label:
+                raise ValueError("invalid target: empty label in hostname")
+            if len(label) > 63:
+                raise ValueError(f"invalid target: label '{label[:20]}…' exceeds 63 characters")
+            if not _LABEL_RE.match(label):
+                raise ValueError(
+                    f"invalid target: label '{label[:20]}' contains invalid characters"
+                )
+        return v
 
     @field_validator("ports")
     @classmethod

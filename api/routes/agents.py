@@ -33,13 +33,15 @@ from __future__ import annotations
 import time
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from api.agents.registry import Agent, agent_registry
 from api.auth.dependencies import require_org
+from api.auth.rate_limit import events_limiter, heartbeat_limiter, register_limiter
 from api.jobs.executor import try_dispatch_queued
 from api.jobs.manager import job_manager
+from api.middleware.audit import audit_log
 from api.models.agent import AgentRegistration, AgentTaskComplete
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -79,6 +81,7 @@ def _auth_agent(
     response_description="Agent ID and one-time secret token",
 )
 async def register_agent(
+    request: Request,
     payload: AgentRegistration,
     org_id: str = Depends(require_org),
 ) -> dict:
@@ -90,12 +93,25 @@ async def register_agent(
     must be stored securely by the agent and included as a Bearer credential
     in all subsequent agent-facing requests.
     """
-    agent_id, secret = agent_registry.register(
-        hostname=payload.hostname,
-        capabilities=payload.capabilities,
-        version=payload.version,
-        tags=payload.tags,
+    ip = request.client.host if request.client else "unknown"
+    if not register_limiter.allow(ip):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
+    try:
+        agent_id, secret = agent_registry.register(
+            hostname=payload.hostname,
+            capabilities=payload.capabilities,
+            version=payload.version,
+            tags=payload.tags,
+            org_id=org_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    audit_log(
+        "agent_registered",
+        agent_id=agent_id,
         org_id=org_id,
+        hostname=payload.hostname,
+        ip=request.client.host if request.client else "",
     )
     return {
         "agent_id": agent_id,
@@ -121,6 +137,8 @@ async def agent_heartbeat(
     Agent calls this every 30 s to signal it is alive.  The controller uses
     the last heartbeat timestamp to compute online/offline status.
     """
+    if not heartbeat_limiter.allow(agent_id):
+        raise HTTPException(status_code=429, detail="Heartbeat rate limit exceeded.")
     agent_registry.heartbeat(agent_id)
     # Dispatch any queued jobs now that this agent has checked in.
     try_dispatch_queued(org_id=agent.org_id)
@@ -179,6 +197,7 @@ async def submit_events(
     job_id: str,
     events: list[dict],
     agent: Annotated[Agent, Depends(_auth_agent)],
+    request: Request = None,
 ) -> dict:
     """
     Agent POSTs batches of scan events as they are emitted.
@@ -186,6 +205,17 @@ async def submit_events(
     Each event is forwarded into the job's event store and wakes any SSE
     consumers watching `GET /jobs/{id}/stream` on the controller in real-time.
     """
+    if not events_limiter.allow(agent_id):
+        raise HTTPException(status_code=429, detail="Event submission rate limit exceeded.")
+
+    # Hard cap: reject oversized batches to prevent memory exhaustion.
+    MAX_EVENTS_PER_BATCH = 500
+    if len(events) > MAX_EVENTS_PER_BATCH:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Batch too large: max {MAX_EVENTS_PER_BATCH} events per request.",
+        )
+
     job = job_manager.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")

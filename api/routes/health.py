@@ -17,9 +17,12 @@ _START_TIME: float = time.time()
     response_description="Service status and uptime",
 )
 async def health() -> dict:
-    """Returns 200 OK when the service is ready to accept requests."""
+    """Returns 200 OK when the service is ready to accept requests.
+
+    Version information is intentionally omitted from this public endpoint
+    to reduce information disclosure.
+    """
     return {
         "status": "ok",
         "uptime_s": round(time.time() - _START_TIME, 1),
-        "version": "1.0.0",
     }

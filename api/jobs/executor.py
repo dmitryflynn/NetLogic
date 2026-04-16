@@ -29,10 +29,15 @@ actually given the work, regardless of whether the user specified one.
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 
 from api.agents.registry import agent_registry
 from api.jobs.manager import ScanJob, job_manager
+
+# Prevent double-assignment race: only one thread may run try_dispatch_queued
+# at a time.  The lock is non-reentrant so callers must not hold it already.
+_dispatch_lock = threading.Lock()
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -63,13 +68,22 @@ def try_dispatch_queued(org_id: str = "") -> int:
       - POST /agents/{id}/heartbeat   (agent just checked in)
       - POST /agents/{id}/tasks/{id}/complete  (agent just freed up)
 
+    Protected by _dispatch_lock to prevent concurrent calls from double-assigning
+    the same job to multiple agents.
+
     Returns the number of jobs dispatched this call.
     """
-    dispatched = 0
-    for job in job_manager.list_queued_unassigned(org_id=org_id):
-        if _assign_to_any(job):
-            dispatched += 1
-    return dispatched
+    if not _dispatch_lock.acquire(blocking=False):
+        # Another thread is already dispatching — skip to avoid double-assignment.
+        return 0
+    try:
+        dispatched = 0
+        for job in job_manager.list_queued_unassigned(org_id=org_id):
+            if _assign_to_any(job):
+                dispatched += 1
+        return dispatched
+    finally:
+        _dispatch_lock.release()
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────

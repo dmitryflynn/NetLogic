@@ -18,6 +18,10 @@ from typing import Optional
 
 SCANS_DIR: str = os.path.join(os.path.expanduser("~"), ".netlogic", "scans")
 
+# Safety limits — prevent unbounded memory usage when loading scan records.
+_MAX_FILE_BYTES: int = 10 * 1024 * 1024   # 10 MB per file
+_MAX_SCAN_FILES: int = 500                  # keep only the 500 newest files
+
 
 class JsonScanStore:
     """Store scan records as individual JSON files on disk."""
@@ -62,6 +66,9 @@ class JsonScanStore:
 
     def _read(self, path: str) -> Optional[dict]:
         try:
+            size = os.path.getsize(path)
+            if size > _MAX_FILE_BYTES:
+                return None  # silently skip oversized files
             with open(path, "r", encoding="utf-8") as fh:
                 return json.load(fh)
         except (OSError, json.JSONDecodeError):
@@ -85,11 +92,12 @@ class JsonScanStore:
         except OSError:
             return []
 
-        # Sort newest first by mtime
+        # Sort newest first by mtime; cap at _MAX_SCAN_FILES before reading.
         files.sort(
             key=lambda f: os.path.getmtime(os.path.join(self.directory, f)),
             reverse=True,
         )
+        files = files[:_MAX_SCAN_FILES]
 
         results: list[dict] = []
         for fname in files[:limit]:
