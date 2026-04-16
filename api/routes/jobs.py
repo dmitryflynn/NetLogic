@@ -21,12 +21,14 @@ import json
 import time
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from api.auth.dependencies import require_org
+from api.auth.rate_limit import jobs_limiter
 from api.jobs.executor import submit_scan
 from api.jobs.manager import ScanJob, job_manager
+from api.middleware.audit import audit_log
 from api.models.scan_request import ScanRequest
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -41,15 +43,19 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
     response_description="Job ID and initial status",
 )
 async def create_job(
-    request: ScanRequest,
+    request: Request,
+    body: ScanRequest,
     org_id: str = Depends(require_org),
 ) -> dict:
     """
     Kick off an async scan. Returns immediately with a `job_id`.
     The job is scoped to the caller's organisation.
     """
-    job = job_manager.create(request, org_id=org_id)
+    if not jobs_limiter.allow(org_id):
+        raise HTTPException(status_code=429, detail="Job submission rate limit exceeded.")
+    job = job_manager.create(body, org_id=org_id)
     await submit_scan(job)
+    audit_log("job_created", job_id=job.job_id, org_id=org_id, target=body.target)
     return _job_summary(job)
 
 

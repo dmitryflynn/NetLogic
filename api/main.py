@@ -19,10 +19,11 @@ import webbrowser
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # ── Path bootstrap ────────────────────────────────────────────────────────────
 # Ensure the project root (parent of api/) is on sys.path so that `from src.x`
@@ -37,6 +38,31 @@ _INDEX_HTML = _DIST_DIR / "index.html"
 
 # ── Deferred imports (after path bootstrap) ───────────────────────────────────
 from api.routes import auth, health, jobs, agents  # noqa: E402
+from api.middleware.audit import AuditMiddleware  # noqa: E402
+
+
+# ── Security-headers middleware ────────────────────────────────────────────────
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Attach defensive HTTP headers to every response."""
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("X-XSS-Protection", "1; mode=block")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault(
+            "Permissions-Policy",
+            "geolocation=(), microphone=(), camera=()",
+        )
+        # CSP: API-only responses don't need script/style allowances.
+        # The React SPA sets its own CSP via <meta> in index.html.
+        if not response.headers.get("Content-Security-Policy"):
+            ct = response.headers.get("content-type", "")
+            if "text/html" not in ct:
+                response.headers["Content-Security-Policy"] = "default-src 'none'"
+        return response
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -81,6 +107,12 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json",
         lifespan=lifespan,
     )
+
+    # ── Audit / correlation IDs ───────────────────────────────────────────────
+    app.add_middleware(AuditMiddleware)
+
+    # ── Security headers ──────────────────────────────────────────────────────
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # ── CORS ──────────────────────────────────────────────────────────────────
     raw_origins = os.environ.get("NETLOGIC_CORS_ORIGINS", "*")

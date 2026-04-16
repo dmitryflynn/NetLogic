@@ -30,6 +30,18 @@ from typing import Optional
 JWT_SECRET: str = os.environ.get("NETLOGIC_JWT_SECRET", "changeme-in-production")
 JWT_DEFAULT_EXPIRY: int = int(os.environ.get("NETLOGIC_JWT_EXPIRY", "3600"))
 
+import warnings as _warnings
+if JWT_SECRET in ("changeme-in-production", "changeme", ""):
+    _warnings.warn(
+        "NETLOGIC_JWT_SECRET is set to a weak default — override in production!",
+        stacklevel=2,
+    )
+elif len(JWT_SECRET) < 32:
+    _warnings.warn(
+        f"NETLOGIC_JWT_SECRET is only {len(JWT_SECRET)} chars — use 32+ chars in production!",
+        stacklevel=2,
+    )
+
 _HEADER_B64 = (
     base64.urlsafe_b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
     .rstrip(b"=")
@@ -86,6 +98,13 @@ def verify_token(token: str) -> Optional[dict]:
         if len(parts) != 3:
             return None
         header_b64, payload_b64, sig = parts
+        # Enforce algorithm before verifying signature (prevents alg=none attack)
+        try:
+            header = json.loads(_b64url_decode(header_b64))
+        except Exception:
+            return None
+        if header.get("alg") != "HS256":
+            return None
         expected = _sign(header_b64, payload_b64)
         if not hmac.compare_digest(sig, expected):
             return None
