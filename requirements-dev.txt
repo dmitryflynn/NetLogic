@@ -1,0 +1,5 @@
+# NetLogic — Development and test dependencies
+# Install with: pip install -r requirements-dev.txt
+
+pytest==9.0.3
+httpx==0.28.1
