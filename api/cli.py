@@ -112,6 +112,22 @@ def main() -> None:
 
     threading.Timer(1.5, webbrowser.open, args=(url,)).start()
 
+    # Auto-start a local scan agent after the server has had time to bind.
+    agent_script = PROJECT_ROOT / "netlogic_agent.py"
+    if agent_script.exists():
+        def _start_local_agent():
+            import time as _t
+            _t.sleep(2.5)  # wait for uvicorn to be ready
+            subprocess.Popen(
+                [sys.executable, str(agent_script),
+                 "--controller", url,
+                 "--api-key", api_key,
+                 "--hostname", "localhost"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        threading.Thread(target=_start_local_agent, daemon=True).start()
+
     import uvicorn  # noqa: PLC0415
     uvicorn.run("api.main:app", host=host, port=port, log_level="warning")
 

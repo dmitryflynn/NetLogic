@@ -81,6 +81,7 @@ export interface Agent {
   registered_at: number
   last_heartbeat: number | null
   current_job_id: string | null
+  token: string
 }
 
 // ── Jobs API ───────────────────────────────────────────────────────────────────
