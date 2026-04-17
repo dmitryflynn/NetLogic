@@ -12,6 +12,7 @@ import json
 import os
 import secrets
 import subprocess
+import sys
 import threading
 import webbrowser
 from pathlib import Path
@@ -80,12 +81,38 @@ def _ensure_dashboard_built() -> None:
         print("[netlogic] Warning: npm not found — install Node.js to enable the dashboard.")
 
 
+def _check_license() -> bool:
+    """Verify a license key exists; prompt the user to enter one if not. Returns True if licensed."""
+    from api.auth.license import license_manager  # noqa: PLC0415
+    if license_manager.is_licensed:
+        return True
+    print()
+    print("  No license key found.")
+    print("  Get a license at: https://netlogic.io/pricing")
+    print()
+    try:
+        key = input("  Enter license key (or press Enter to exit): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    if not key:
+        return False
+    if license_manager.activate(key):
+        print("  License activated!")
+        return True
+    print("  Invalid license key. Visit https://netlogic.io/pricing to purchase.")
+    return False
+
+
 def main() -> None:
     data = _load_or_generate_secrets()
 
     # Inject the default API key so ApiKeyStore seeds it on import.
     api_key = data["NETLOGIC_API_KEY"]
     os.environ["NETLOGIC_API_KEYS"] = f"{api_key}:default"
+
+    if not _check_license():
+        sys.exit(1)
 
     _ensure_dashboard_built()
 
