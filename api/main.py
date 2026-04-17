@@ -37,11 +37,39 @@ _DIST_DIR   = Path(_PROJECT_ROOT) / "dashboard" / "dist"
 _INDEX_HTML = _DIST_DIR / "index.html"
 
 # ── Deferred imports (after path bootstrap) ───────────────────────────────────
-from api.routes import auth, health, jobs, agents  # noqa: E402
+from api.routes import auth, health, jobs, agents, license as license_route  # noqa: E402
 from api.middleware.audit import AuditMiddleware  # noqa: E402
 
 
 # ── Security-headers middleware ────────────────────────────────────────────────
+
+# ── License gate middleware ───────────────────────────────────────────────────
+
+# Paths that are always accessible even without a valid license.
+_LICENSE_FREE = {"/health", "/v1/health", "/docs", "/redoc", "/openapi.json"}
+
+
+class LicenseMiddleware(BaseHTTPMiddleware):
+    """Block all /v1/ routes (except /v1/license) when no valid license is present."""
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        path = request.url.path
+        if path in _LICENSE_FREE or not path.startswith("/v1/") or path.startswith("/v1/license"):
+            return await call_next(request)
+        from api.auth.license import license_manager  # noqa: PLC0415
+        if not license_manager.is_licensed:
+            from fastapi.responses import JSONResponse  # noqa: PLC0415
+            return JSONResponse(
+                {
+                    "detail": "No valid license. Activate at POST /v1/license/activate.",
+                    "code": "license_required",
+                },
+                status_code=402,
+            )
+        return await call_next(request)
+
+
+# ── Security headers middleware ────────────────────────────────────────────────
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Attach defensive HTTP headers to every response."""
@@ -124,6 +152,9 @@ def create_app() -> FastAPI:
     # ── Audit / correlation IDs ───────────────────────────────────────────────
     app.add_middleware(AuditMiddleware)
 
+    # ── License gate (outermost — runs before auth) ───────────────────────────
+    app.add_middleware(LicenseMiddleware)
+
     # ── Security headers ──────────────────────────────────────────────────────
     app.add_middleware(SecurityHeadersMiddleware)
 
@@ -146,10 +177,11 @@ def create_app() -> FastAPI:
     # ── API routers ───────────────────────────────────────────────────────────
     # Health stays at /health for Docker probes + backwards compat; also at /v1/health.
     app.include_router(health.router)
-    app.include_router(health.router, prefix="/v1")
-    app.include_router(auth.router,   prefix="/v1")
-    app.include_router(jobs.router,   prefix="/v1")
-    app.include_router(agents.router, prefix="/v1")
+    app.include_router(health.router,        prefix="/v1")
+    app.include_router(license_route.router, prefix="/v1")
+    app.include_router(auth.router,          prefix="/v1")
+    app.include_router(jobs.router,          prefix="/v1")
+    app.include_router(agents.router,        prefix="/v1")
 
     # ── React dashboard static files ──────────────────────────────────────────
     # Serve the compiled Vite assets only when the dashboard has been built.
