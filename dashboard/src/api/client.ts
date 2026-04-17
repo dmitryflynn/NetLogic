@@ -3,7 +3,7 @@
  * All API functions return typed data or throw an Error with a message.
  */
 
-const BASE = import.meta.env.VITE_API_URL ?? ''
+const BASE = (import.meta.env.VITE_API_URL ?? '') + '/v1'
 
 function getToken(): string | null {
   try {
