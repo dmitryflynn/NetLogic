@@ -1,0 +1,9 @@
+# NetLogic API — Python dependencies
+# Install with: pip install -r requirements-api.txt
+#
+# The core NetLogic scan engine (src/) has zero third-party dependencies.
+# Only the API layer requires the packages below.
+
+fastapi==0.135.3
+uvicorn[standard]==0.44.0
+pydantic==2.13.0

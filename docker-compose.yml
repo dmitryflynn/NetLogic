@@ -1,0 +1,23 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      NETLOGIC_JWT_SECRET: ${NETLOGIC_JWT_SECRET}
+      NETLOGIC_ADMIN_KEY: ${NETLOGIC_ADMIN_KEY}
+      NETLOGIC_ANTHROPIC_API_KEY: ${NETLOGIC_ANTHROPIC_API_KEY:-}
+      NETLOGIC_CORS_ORIGINS: ${NETLOGIC_CORS_ORIGINS:-http://localhost:5173}
+      NETLOGIC_NO_BROWSER: "1"
+    volumes:
+      - netlogic-data:/root/.netlogic
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  netlogic-data:

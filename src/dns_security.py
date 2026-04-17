@@ -74,13 +74,13 @@ class DNSSecResult:
     enabled: bool = False
     ds_records: list[str] = field(default_factory=list)
     dnskey_found: bool = False
-    findings: list[AuditFinding] = field(default_factory=list)
+    issues: list[str] = field(default_factory=list)
 
 @dataclass
 class CAAResult:
     present: bool = False
     records: list[str] = field(default_factory=list)
-    findings: list[AuditFinding] = field(default_factory=list)
+    issues: list[str] = field(default_factory=list)
 
 @dataclass
 class DNSSecurityResult:
@@ -282,29 +282,29 @@ def check_dkim(domain: str) -> DKIMResult:
                     if key_len < 1024:
                         result.findings.append(AuditFinding(
                             title="Weak DKIM Key Length",
-                            description=f"Selector '{sel}': RSA key appears short (<1024 bits). This makes it vulnerable to factoring attacks.",
-                            remediation="Generate a new DKIM key with at least 2048 bits.",
+                            description=f"Selector '{sel}': RSA key appears short (<1024 bits) — vulnerable to factoring",
+                            remediation="Generate a new 2048-bit or larger RSA key pair for DKIM signing.",
                             severity="HIGH",
-                            category="DKIM"
+                            category="DKIM",
                         ))
 
                 # Empty p= means key revoked
                 if "p=" in (record or "") and re.search(r"p=\s*;|p=\"\"", record or ""):
                     result.findings.append(AuditFinding(
                         title="Revoked DKIM Key",
-                        description=f"Selector '{sel}': public key is empty, indicating the key has been revoked.",
-                        remediation="If this is an active selector, publish a valid public key.",
-                        severity="LOW",
-                        category="DKIM"
+                        description=f"Selector '{sel}': public key is empty (revoked)",
+                        remediation="Configure a new DKIM selector with a valid key, or remove unused selectors.",
+                        severity="HIGH",
+                        category="DKIM",
                     ))
 
     if not result.found_selectors:
         result.findings.append(AuditFinding(
             title="No DKIM Selectors Found",
-            description="None of the common DKIM selectors were found for this domain. DKIM may not be configured or uses a custom selector.",
-            remediation="Ensure DKIM is configured and the selector is correctly published in DNS.",
+            description="No DKIM selectors found from common list — DKIM may not be configured",
+            remediation="Configure DKIM signing with your mail provider and publish the public key in DNS.",
             severity="MEDIUM",
-            category="DKIM"
+            category="DKIM",
         ))
 
     return result
@@ -518,13 +518,9 @@ def check_dnssec(domain: str) -> DNSSecResult:
         result.enabled = True
 
     if not result.enabled:
-        result.findings.append(AuditFinding(
-            title="DNSSEC Not Enabled",
-            description="DNSSEC is not enabled. Without it, DNS responses can be forged via cache poisoning or BGP hijacking.",
-            remediation="Configure DNSSEC with your DNS host and publish the DS record at your registrar.",
-            severity="MEDIUM",
-            category="DNSSEC"
-        ))
+        result.issues.append(
+            "DNSSEC not enabled — DNS responses can be forged (DNS cache poisoning, BGP hijacking)"
+        )
 
     return result
 
@@ -536,13 +532,10 @@ def check_caa(domain: str) -> CAAResult:
     answers = _doh(domain, "CAA")
 
     if not answers:
-        result.findings.append(AuditFinding(
-            title="Missing CAA Records",
-            description="No CAA records found. Any Certificate Authority (CA) can issue certificates for this domain.",
-            remediation="Add CAA records to specify which CAs (e.g., Let's Encrypt) are allowed to issue certificates.",
-            severity="LOW",
-            category="CAA"
-        ))
+        result.issues.append(
+            "No CAA records — any Certificate Authority can issue TLS certs for this domain. "
+            "CAA records restrict which CAs are authorized."
+        )
         return result
 
     result.present = True
@@ -551,13 +544,7 @@ def check_caa(domain: str) -> CAAResult:
     # Check for issuewild restriction
     has_issuewild = any("issuewild" in r for r in result.records)
     if not has_issuewild:
-        result.findings.append(AuditFinding(
-            title="CAA Lack of 'issuewild' Restriction",
-            description="No 'issuewild' tag found. Wildcard certificates can still be issued by any authorized CA.",
-            remediation="Add 'issuewild' CAA tags to further restrict wildcard certificate issuance.",
-            severity="LOW",
-            category="CAA"
-        ))
+        result.issues.append("No 'issuewild' CAA tag — wildcard certs can be issued by any authorized CA")
 
     return result
 
@@ -641,10 +628,39 @@ def check_dns_security(domain: str) -> DNSSecurityResult:
         result.spf, result.dkim, result.dmarc
     )
 
-    # Propagate findings from sub-modules
-    for sub_res in [result.spf, result.dkim, result.dmarc, result.dnssec, result.caa]:
-        for f in sub_res.findings:
-            result.findings.append(_finding(f.severity, f.title, f.description, f.remediation))
+    # Build findings list
+    if not result.spf.present:
+        result.findings.append(_finding(
+            "HIGH", "Missing SPF Record",
+            "No SPF record found. Anyone can send emails appearing to come from this domain.",
+            f"Add TXT record: v=spf1 include:_spf.google.com -all"
+        ))
+    elif result.spf.findings:
+        for finding in result.spf.findings:
+            result.findings.append(_finding(
+                finding.severity, finding.title, finding.description,
+                finding.remediation,
+            ))
+
+    if not result.dkim.found_selectors:
+        result.findings.append(_finding(
+            "MEDIUM", "No DKIM Selectors Found",
+            "DKIM signing not detected. Emails cannot be cryptographically verified.",
+            "Configure DKIM signing with your mail provider and publish the public key in DNS."
+        ))
+
+    if not result.dmarc.present:
+        result.findings.append(_finding(
+            "HIGH", "Missing DMARC Record",
+            "No DMARC policy. SPF/DKIM failures are not enforced — spoofed emails may be delivered.",
+            "Add: _dmarc.domain TXT v=DMARC1; p=reject; rua=mailto:dmarc@domain.com"
+        ))
+    elif result.dmarc.policy == "none":
+        result.findings.append(_finding(
+            "MEDIUM", "DMARC Policy: none (No Enforcement)",
+            "DMARC is monitoring only. Spoofed emails are still delivered to inboxes.",
+            "Change p=none to p=quarantine or p=reject after reviewing reports."
+        ))
 
     if result.zone_transfer_vulnerable:
         result.findings.append(_finding(
@@ -660,6 +676,20 @@ def check_dns_security(domain: str) -> DNSSecurityResult:
             "*.domain resolves — any subdomain points somewhere. "
             "Increases subdomain takeover attack surface significantly.",
             "Remove wildcard DNS unless intentionally required."
+        ))
+
+    if not result.dnssec.enabled:
+        result.findings.append(_finding(
+            "LOW", "DNSSEC Not Enabled",
+            "DNS responses can be forged without DNSSEC. Enables DNS cache poisoning attacks.",
+            "Enable DNSSEC at your domain registrar and DNS provider."
+        ))
+
+    if not result.caa.present:
+        result.findings.append(_finding(
+            "LOW", "No CAA Records",
+            "Any trusted CA can issue certificates for this domain.",
+            'Add: domain CAA 0 issue "letsencrypt.org"'
         ))
 
     if result.email_spoofable:

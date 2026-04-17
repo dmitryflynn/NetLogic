@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    @apply h-full bg-base text-text font-mono text-[13px];
+    -webkit-font-smoothing: antialiased;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  ::-webkit-scrollbar       { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-border rounded-sm; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-text-dim; }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded text-[12px] font-medium
+           border border-border bg-surface text-text
+           hover:bg-elevated hover:border-text-dim
+           transition-colors duration-150 cursor-pointer;
+  }
+  .btn-primary {
+    @apply bg-accent text-base border-accent font-semibold
+           hover:brightness-110 hover:border-accent;
+  }
+  .btn-danger {
+    @apply border-critical/40 text-critical hover:bg-critical/10;
+  }
+  .input {
+    @apply w-full bg-surface border border-border rounded px-3 py-1.5 text-text-bright text-[12px]
+           focus:outline-none focus:border-accent
+           transition-colors duration-150 placeholder:text-text-dim;
+  }
+  .panel {
+    @apply bg-panel border border-border rounded-lg;
+  }
+  .section-title {
+    @apply text-[10px] font-bold tracking-[0.14em] uppercase text-text-dim;
+  }
+}

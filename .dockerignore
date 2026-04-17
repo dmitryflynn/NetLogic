@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+
+# Node / Electron (not needed inside the API container)
+node_modules
+dist
+out
+electron/
+
+# Python caches
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+.eggs
+
+# Build artefacts
+build/
+*.spec
+*.nsi
+*.bat
+
+# Reports generated at runtime
+reports/
+
+# Dev / IDE
+.env
+.env.*
+*.swp
+*.swo
+.DS_Store
+.vscode/
+.idea/
