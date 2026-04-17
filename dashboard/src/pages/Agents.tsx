@@ -1,4 +1,6 @@
-import { useAgents, useDeleteAgent } from '../api/scan'
+import { useState } from 'react'
+import { useAgents, useDeleteAgent, useRegisterAgent } from '../api/scan'
+import type { RegisterAgentResponse } from '../api/scan'
 
 function fmtDate(ts: number | null) {
   if (!ts) return 'Never'
@@ -14,29 +16,129 @@ const STATUS_COLORS = {
   offline: 'text-text-dim border-border bg-elevated',
 }
 
+function RegisterModal({ onClose }: { onClose: () => void }) {
+  const [hostname, setHostname] = useState('')
+  const [caps, setCaps]         = useState('scan')
+  const [version, setVersion]   = useState('1.0.0')
+  const [result, setResult]     = useState<RegisterAgentResponse | null>(null)
+  const reg = useRegisterAgent()
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault()
+    reg.mutate(
+      {
+        hostname:     hostname.trim() || window.location.hostname,
+        capabilities: caps.split(',').map((s) => s.trim()).filter(Boolean),
+        version:      version.trim() || '1.0.0',
+        tags:         {},
+      },
+      { onSuccess: (data) => setResult(data) },
+    )
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="panel w-full max-w-md p-6 space-y-4 rounded-xl" onClick={(e) => e.stopPropagation()}>
+        {result ? (
+          <>
+            <h3 className="text-text-bright font-bold text-base">Agent Registered</h3>
+            <p className="text-[12px] text-text-dim">
+              Save this token now — it will not be shown again.
+            </p>
+            <div className="space-y-2">
+              <div>
+                <p className="text-[10px] text-text-dim uppercase tracking-wide mb-1">Agent ID</p>
+                <code className="text-[11px] text-accent break-all">{result.agent_id}</code>
+              </div>
+              <div>
+                <p className="text-[10px] text-text-dim uppercase tracking-wide mb-1">Token</p>
+                <code className="text-[11px] text-high break-all">{result.token}</code>
+              </div>
+            </div>
+            <p className="text-[11px] text-text-dim">
+              Run <code className="text-accent">netlogic_agent.py</code> with these credentials on the remote machine.
+            </p>
+            <button className="btn btn-primary w-full" onClick={onClose}>Done</button>
+          </>
+        ) : (
+          <>
+            <h3 className="text-text-bright font-bold text-base">Register Agent</h3>
+            <form onSubmit={submit} className="space-y-3">
+              <div>
+                <label className="text-[11px] text-text-dim uppercase tracking-wide block mb-1">Hostname</label>
+                <input
+                  className="input w-full"
+                  placeholder={window.location.hostname}
+                  value={hostname}
+                  onChange={(e) => setHostname(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-text-dim uppercase tracking-wide block mb-1">Capabilities (comma-separated)</label>
+                <input
+                  className="input w-full"
+                  placeholder="scan, tls, osint"
+                  value={caps}
+                  onChange={(e) => setCaps(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-text-dim uppercase tracking-wide block mb-1">Version</label>
+                <input
+                  className="input w-full"
+                  placeholder="1.0.0"
+                  value={version}
+                  onChange={(e) => setVersion(e.target.value)}
+                />
+              </div>
+              {reg.error && (
+                <p className="text-[12px] text-critical">{reg.error.message}</p>
+              )}
+              <div className="flex gap-2 pt-1">
+                <button type="button" className="btn flex-1" onClick={onClose}>Cancel</button>
+                <button type="submit" className="btn btn-primary flex-1" disabled={reg.isPending}>
+                  {reg.isPending ? 'Registering…' : 'Register'}
+                </button>
+              </div>
+            </form>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function Agents() {
   const { data: agents = [], isLoading } = useAgents()
   const del = useDeleteAgent()
+  const [showModal, setShowModal] = useState(false)
 
   return (
     <div className="px-6 py-6 space-y-4">
+      {showModal && <RegisterModal onClose={() => setShowModal(false)} />}
+
       <div className="flex items-center justify-between">
         <h2 className="font-display font-bold text-lg text-text-bright tracking-wide">
           Remote Agents
         </h2>
-        <span className="text-text-dim text-[11px]">
-          {agents.filter((a) => a.status !== 'offline').length} / {agents.length} online
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-text-dim text-[11px]">
+            {agents.filter((a) => a.status !== 'offline').length} / {agents.length} online
+          </span>
+          <button className="btn btn-primary text-[12px]" onClick={() => setShowModal(true)}>
+            + Register Agent
+          </button>
+        </div>
       </div>
 
       {isLoading ? (
         <p className="text-text-dim text-[12px]">Loading…</p>
       ) : agents.length === 0 ? (
-        <div className="panel p-8 text-center space-y-2">
+        <div className="panel p-8 text-center space-y-3">
           <p className="text-text-dim text-[13px]">No agents registered.</p>
-          <p className="text-text-dim text-[11px]">
-            Register an agent by calling <code className="text-accent">POST /agents/register</code>.
-          </p>
+          <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+            + Register your first agent
+          </button>
         </div>
       ) : (
         <div className="space-y-3">
@@ -52,9 +154,7 @@ export default function Agents() {
                       {a.status}
                     </span>
                     {a.current_job_id && (
-                      <span className="text-[10px] text-accent">
-                        scanning…
-                      </span>
+                      <span className="text-[10px] text-accent">scanning…</span>
                     )}
                   </div>
                   <p className="text-text-dim text-[11px]">
