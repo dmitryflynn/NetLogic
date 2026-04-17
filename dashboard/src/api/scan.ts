@@ -146,6 +146,28 @@ export const useDeleteAgent = () => {
   })
 }
 
+export interface RegisterAgentRequest {
+  hostname: string
+  capabilities: string[]
+  version: string
+  tags: Record<string, string>
+}
+
+export interface RegisterAgentResponse {
+  agent_id: string
+  token: string
+  org_id: string
+  message: string
+}
+
+export const useRegisterAgent = () => {
+  const qc = useQueryClient()
+  return useMutation<RegisterAgentResponse, Error, RegisterAgentRequest>({
+    mutationFn: (body) => api.post('/agents/register', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }),
+  })
+}
+
 // ── SSE stream hook ────────────────────────────────────────────────────────────
 
 /**
