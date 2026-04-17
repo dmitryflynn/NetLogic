@@ -9,7 +9,7 @@ interface AuthState {
   logout: () => void
 }
 
-const BASE = import.meta.env.VITE_API_URL ?? ''
+const BASE = (import.meta.env.VITE_API_URL ?? '') + '/v1'
 
 export const useAuthStore = create<AuthState>()(
   persist(
