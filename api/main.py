@@ -161,7 +161,7 @@ def create_app() -> FastAPI:
         # SPA catch-all — everything that isn't an API route returns index.html
         # so that React Router handles client-side navigation.
         @app.get("/{full_path:path}", include_in_schema=False)
-        async def serve_spa(_full_path: str) -> FileResponse:
+        async def serve_spa(full_path: str) -> FileResponse:
             return FileResponse(str(_INDEX_HTML))
 
     else:
