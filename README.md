@@ -1,197 +1,176 @@
 # NetLogic
 
-**Attack Surface Mapper & Vulnerability Correlator**
+**Cloud-Native Attack Surface Mapper & Vulnerability Correlator**
 
-NetLogic is a professional-grade network security reconnaissance tool that combines active port scanning, service misconfiguration detection, passive OSINT, live CVE correlation, SSL/TLS analysis, HTTP security auditing, WAF detection, DNS/email security assessment, subdomain takeover detection, and active CVE-specific probing into a single workflow — replacing what typically requires eight or more separate tools and hours of manual cross-referencing.
+NetLogic is a professional-grade network security platform combining active port scanning, service fingerprinting, CVE correlation, SSL/TLS analysis, HTTP security auditing, DNS/email security assessment, subdomain takeover detection, passive OSINT, and active vulnerability probing — all accessible from a web dashboard, a remote agent network, or a standalone desktop app.
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](https://github.com/dmitryflynn/netlogic/blob/main/LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](https://github.com/dmitryflynn/netlogic)
 [![CVE Source: NVD](https://img.shields.io/badge/CVEs-NVD%20Live%20API-orange)](https://nvd.nist.gov/)
-[![View on GitHub](https://img.shields.io/badge/GitHub-dmitryflynn%2Fnetlogic-181717?logo=github)](https://github.com/dmitryflynn/netlogic)
-
-> **Python CLI:** Zero third-party dependencies — pure Python 3.9+ standard library.
-> **Electron GUI:** Requires Node.js; uses `electron-store` for settings persistence.
 
 ---
 
-## What makes this different?
+## Deployment Modes
 
-Most scanners stop at port discovery. NetLogic goes further:
-
-1. **Fingerprints** running services and extracts exact version strings via 22 custom protocol probes across 43 mapped port/service combinations (SSH, HTTP, FTP, Redis, MySQL, MongoDB, Docker, Kubernetes, etcd, Vault, and more)
-2. **Queries the live NIST NVD API** for CVEs matching every discovered product/version across 101 product keyword mappings — no stale hardcoded database, always current
-3. **Checks CISA KEV** (Known Exploited Vulnerabilities catalog) and flags actively exploited CVEs automatically
-4. **Flags exploit availability** with tiered indicators: Metasploit module (52 CVEs tracked), public PoC (88 CVEs tracked), or CISA KEV
-5. **Active service probing** — detects unauthenticated access to Redis, MongoDB, Elasticsearch, CouchDB, etcd, Consul, Docker API, Kubernetes API, Vault, Prometheus, RabbitMQ, InfluxDB, FTP; probes 33 HTTP admin panel paths
-6. **CVE-specific active confirmation probes** — safely confirms Apache CVE-2021-41773/42013 path traversal, Grafana CVE-2021-43798, Shellshock, Ghostcat AJP, Spring Boot actuator exposure, open redirect, directory traversal, exposed backup files with credentials, and more
-7. **Deep SSL/TLS analysis** — deprecated protocols, weak ciphers, POODLE/BEAST/CRIME/DROWN, certificate expiry, self-signed certs, hostname mismatch
-8. **HTTP security header audit** — CSP, HSTS, X-Frame-Options, CORS misconfiguration, insecure cookies, server version disclosure
-9. **Technology stack fingerprinting** — detects CMS (WordPress, Drupal, Joomla), frameworks, cloud provider (AWS/Azure/GCP), CDN, and WAF
-10. **DNS/email security assessment** — SPF, DKIM, DMARC, DNSSEC, zone transfer attempts, CAA records, email spoofability score
-11. **Subdomain takeover detection** — discovers subdomains via CT logs then checks 25 cloud providers for dangling DNS
-12. **Passive OSINT** without touching the target: Certificate Transparency logs, DNS enumeration (DoH), ASN/CIDR lookup
-13. **Composite risk scoring** weighted by CVSS + CISA KEV exploit status + Metasploit/PoC availability + detection confidence
-14. **Exports** machine-readable JSON (SIEM-ready), styled HTML reports, and rich terminal output
+| Mode | Description |
+|---|---|
+| **SaaS / Web** | FastAPI controller + React dashboard. Scans run on registered remote agents — the server never touches your network. |
+| **Remote Agent** | `netlogic_agent.py` polls the controller, runs scans on its local network, and streams results back in real time. |
+| **Desktop App** | Electron GUI bundles the Python engine locally. Built for Windows via NSIS installer; no server needed. |
+| **CLI** | `netlogic.py` — zero third-party dependencies, pure Python 3.9+ stdlib. |
 
 ---
 
-## Installation
+## Quick Start
+
+### Web Dashboard (SaaS mode)
+
+```bash
+# 1. Install API dependencies
+pip install -r requirements-api.txt
+
+# 2. Start the controller (auto-opens browser at http://localhost:8000)
+uvicorn api.main:app --host 0.0.0.0 --port 8000
+
+# 3. Create an API key for your organisation
+curl -X POST http://localhost:8000/auth/keys \
+     -H "X-Admin-Key: $NETLOGIC_ADMIN_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"org_id": "acme"}'
+
+# 4. Exchange it for a JWT
+curl -X POST http://localhost:8000/auth/token \
+     -H "Content-Type: application/json" \
+     -d '{"api_key": "<key-from-step-3>"}'
+```
+
+Set `NETLOGIC_NO_BROWSER=1` to suppress the auto-open in headless / CI environments.
+
+### Remote Agent
+
+```bash
+# First run — registers with the controller and saves credentials
+python netlogic_agent.py \
+    --controller http://your-controller:8000 \
+    --api-key <api-key>
+
+# Subsequent runs (credentials loaded from ~/.netlogic/agent.json)
+python netlogic_agent.py --controller http://your-controller:8000
+```
+
+Credentials are stored at `~/.netlogic/agent.json` with `0o600` permissions (owner read/write only).
+
+### CLI (local, no server)
 
 ```bash
 git clone https://github.com/dmitryflynn/netlogic.git
 cd netlogic
-# No third-party Python dependencies — pure stdlib
-python netlogic.py --version
+python netlogic.py scanme.nmap.org --full
 ```
 
 ---
 
-## Usage
+## Environment Variables
 
-```bash
-# Quick scan — 43 ports, CVE correlation
-python netlogic.py scanme.nmap.org
+### Controller
 
-# Deep TLS + header audit
-python netlogic.py example.com --tls --headers
+| Variable | Default | Description |
+|---|---|---|
+| `NETLOGIC_JWT_SECRET` | `changeme-in-production` | HS256 signing secret — **must be overridden** (32+ chars) |
+| `NETLOGIC_JWT_EXPIRY` | `3600` | JWT lifetime in seconds |
+| `NETLOGIC_ADMIN_KEY` | `admin-changeme` | Admin credential for key management — **override in production** |
+| `NETLOGIC_API_KEYS` | _(empty)_ | Seed keys: `key1:org1,key2:org2,...` |
+| `NETLOGIC_CORS_ORIGINS` | `*` | Comma-separated allowed origins, or `*` |
+| `NETLOGIC_PORT` | `8000` | Port reported to the browser auto-open |
+| `NETLOGIC_NO_BROWSER` | _(unset)_ | Set to `1` to disable browser auto-open |
+| `NETLOGIC_AGENT_TOKEN_MAX_AGE` | `604800` | Agent token lifetime in seconds (7 days) |
+| `NETLOGIC_AGENT_PENDING_CAP` | `50` | Max queued tasks per agent |
+| `NETLOGIC_MAX_AGENTS_PER_ORG` | `100` | Max registered agents per organisation |
 
-# Active probing: unauthenticated services, default creds, CVE confirmation
-python netlogic.py 10.0.0.5 --probe
+### Agent
 
-# Full DNS/email security check
-python netlogic.py example.com --dns
-
-# Technology stack + WAF detection
-python netlogic.py example.com --stack
-
-# Subdomain takeover detection
-python netlogic.py example.com --takeover
-
-# Run everything at once
-python netlogic.py example.com --full --report html --out ./reports
-
-# CIDR block sweep (internal network audit)
-python netlogic.py 192.168.1.0/24 --cidr --report json --out ./reports
-
-# Extended port range (58 ports)
-python netlogic.py 10.0.0.5 --ports full
-
-# Custom port list
-python netlogic.py 10.0.0.5 --ports custom=22,80,443,8080,9200 --timeout 3
-
-# Only show HIGH+ CVEs
-python netlogic.py example.com --min-cvss 7.0
-
-# Use NVD API key for faster lookups (recommended for --full scans)
-python netlogic.py example.com --nvd-key YOUR_KEY
-
-# Cache management
-python netlogic.py --cache-stats
-python netlogic.py --clear-cache
-python netlogic.py --preload-cache
-```
+| Variable | Default | Description |
+|---|---|---|
+| `NETLOGIC_CONTROLLER` | `http://localhost:8000` | Controller base URL |
+| `NETLOGIC_API_KEY` | _(unset)_ | API key for first-time registration |
 
 ---
 
-## All Flags
+## API Reference
 
-| Flag | Description |
-|---|---|
-| `--ports quick\|full\|custom=...` | Port set: quick (43 ports), full (58 ports), or comma-separated list |
-| `--tls` | Deep SSL/TLS protocol, cipher, and certificate analysis |
-| `--headers` | HTTP security header audit + CORS/cookie analysis |
-| `--stack` | Technology stack + WAF fingerprinting |
-| `--dns` | DNS/email security (SPF, DKIM, DMARC, DNSSEC, zone transfer) |
-| `--takeover` | Subdomain takeover detection via CT logs + 25 provider fingerprints |
-| `--osint` | Passive recon (DNS, CT logs, ASN) — no direct target contact |
-| `--probe` | Active probing: unauthenticated service access, default credentials, CVE-specific confirms |
-| `--full` | Run all of the above |
-| `--report terminal\|json\|html\|all` | Output format |
-| `--out <dir>` | Save reports to directory |
-| `--cidr` | Treat target as CIDR block and sweep all hosts |
-| `--min-cvss <score>` | Minimum CVSS score to report (default: 4.0) |
-| `--nvd-key <key>` | NVD API key for 10× faster rate limits (or set `NETLOGIC_NVD_KEY` env var) |
-| `--timeout <seconds>` | Per-port TCP timeout (default: 2.0) |
-| `--threads <n>` | Max concurrent scan threads (default: 100) |
-| `--cache-stats` | Show NVD disk cache info |
-| `--clear-cache` | Clear NVD disk cache |
-| `--preload-cache` | Pre-warm cache for common products |
-| `--no-color` | Disable ANSI colors |
-| `--json-stream` | Newline-delimited JSON events for Electron GUI |
+### Authentication
 
----
-
-## Example Output
+All endpoints (except `POST /auth/token`) require `Authorization: Bearer <jwt>`.
 
 ```
-══════════════════════════════════════════════════════════════════════
-  NetLogic Scan Report
-  Target : scanme.nmap.org
-  IP     : 45.33.32.156
-  OS Est.: Linux/Unix
-  Runtime: 4.2s
-══════════════════════════════════════════════════════════════════════
+POST   /auth/token           Exchange API key → JWT
+POST   /auth/keys            Create API key for an org (X-Admin-Key required)
+GET    /auth/keys            List API keys, masked (admin only)
+DELETE /auth/keys/{key}      Revoke an API key (admin only)
+```
 
-  OPEN PORTS
-  PORT     SERVICE          PRODUCT/VERSION                     TLS
-  22       ssh              OpenSSH 6.6.1p1 Ubuntu              –
-  80       http             Apache/2.4.7                        –
-  443      https                                                ✓ TLS
-  6379     redis                                                –
-  9200     elasticsearch                                        –
+### Jobs
 
-  VULNERABILITY FINDINGS
-  Port 22/ssh (OpenSSH 6.6.1p1)
-  [✓ version confirmed]
-  Risk Score: 9.8/10
+```
+POST   /jobs                 Submit a scan job → {job_id, status: "queued"}
+GET    /jobs                 List recent jobs for your org
+GET    /jobs/{id}            Job status + result counts
+GET    /jobs/{id}/stream     Live SSE stream of scan events
+POST   /jobs/{id}/cancel     Cancel a queued/running job
+DELETE /jobs/{id}            Remove a job record
+```
 
-    🔴 CRITICAL  CVE-2023-38408  CVSS 9.8
-    OpenSSH < 9.3p2 ssh-agent RCE via PKCS#11 provider loading.
-    ⚡ Metasploit module available
-    ⚡ Actively exploited (CISA KEV)
+**POST /jobs body:**
 
-    🟠 HIGH      CVE-2018-15473  CVSS 5.3
-    OpenSSH < 7.7 username enumeration via timing side-channel.
+```json
+{
+  "target": "example.com",
+  "ports": "quick",
+  "do_tls": false,
+  "do_headers": false,
+  "do_stack": false,
+  "do_dns": false,
+  "do_osint": false,
+  "do_probe": false,
+  "do_takeover": false,
+  "do_full": false,
+  "cidr": false,
+  "timeout": 2.0,
+  "threads": 100,
+  "min_cvss": 4.0,
+  "agent_id": null
+}
+```
 
-  SSL/TLS ANALYSIS
-  Port 443 — Grade: C
-  Protocols : TLSv1.3, TLSv1.2, TLSv1.1
-  Deprecated: TLSv1.1
-    MEDIUM  Deprecated Protocol Supported: TLSv1.1
+`ports`: `"quick"` (43 ports) | `"full"` (58 ports) | `"custom=22,80,443"`  
+`agent_id`: route the job to a specific agent; omit to auto-assign.
 
-  HTTP SECURITY HEADERS — Score: 45/100  Grade: F
-  Missing: strict-transport-security, content-security-policy, x-frame-options
-    HIGH  Missing HSTS Header
-    HIGH  Missing Content-Security-Policy
+### Agents (controller-side management)
 
-  DNS & EMAIL SECURITY — Spoofability: 7/10 (SPOOFABLE)
-  SPF    ✗  MISSING — anyone can spoof this domain
-  DKIM   ✗  No selectors found
-  DMARC  ✗  MISSING — no policy enforcement
+```
+GET    /agents               List all agents with live status
+GET    /agents/{id}          Agent detail
+DELETE /agents/{id}          Deregister an agent
+```
 
-  SERVICE MISCONFIGURATION FINDINGS  (3 issues, 18 probes run)
+### Agent protocol (used by `netlogic_agent.py`)
 
-    🔴 CRITICAL  Redis — No Authentication Required
-    Port 6379 / redis
-    Redis 7.0.1 is fully accessible without a password. Attackers can read/write all
-    data, load modules for RCE, or use SLAVEOF for lateral movement.
-    Evidence   : INFO server returned redis_version:7.0.1
-    Remediation: Set 'requirepass' in redis.conf; bind to 127.0.0.1; use Redis 6+ ACLs.
+```
+POST   /agents/register                        Register → {agent_id, token}
+POST   /agents/{id}/heartbeat                  Keep-alive (every 25 s)
+GET    /agents/{id}/tasks                      Poll for pending jobs
+POST   /agents/{id}/tasks/{job_id}/events      Stream scan events (max 500/batch)
+POST   /agents/{id}/tasks/{job_id}/complete    Mark job done or failed
+```
 
-    🔴 CRITICAL  Elasticsearch — Open Access (No Authentication)
-    Port 9200 / elasticsearch
-    Elasticsearch cluster 'prod-cluster' v8.1.0 is open without authentication.
-    Evidence   : GET / → HTTP 200; cluster_name='prod-cluster'; indices accessible=True
+Agent endpoints authenticate with the one-time registration token (`Bearer <token>`), not a JWT.
 
-  ACTIVE VULNERABILITY PROBES  (1 confirmed, 12 probes run)
+### System
 
-    🔴 CRITICAL  Apache 2.4.49 Path Traversal — /etc/passwd Retrieved  [CONFIRMED]
-    CVE-2021-41773
-    Path traversal confirmed. /etc/passwd is readable. If mod_cgi is enabled,
-    this escalates to unauthenticated RCE (CVSS 9.8).
-    Evidence   : GET /cgi-bin/.%2e/.%2e/.%2e/.%2e/etc/passwd → HTTP 200 with passwd
-    Remediation: Upgrade Apache to 2.4.51+; disable mod_cgi; Require all denied.
+```
+GET    /health               Service status + uptime
+GET    /docs                 Interactive OpenAPI docs
 ```
 
 ---
@@ -200,131 +179,208 @@ python netlogic.py --preload-cache
 
 ```
 netlogic/
-├── netlogic.py               ← CLI entry point, flag routing, output orchestration
-└── src/
-    ├── scanner.py             ← TCP scanner, 22 service probes, banner grabbing (43 services)
-    ├── cve_correlator.py      ← CVE correlation: NVD + 192 offline sigs, 89 banner patterns
-    ├── nvd_lookup.py          ← NIST NVD API v2.0 client, disk cache, CISA KEV, 101 products
-    ├── service_prober.py      ← Unauthenticated access, default creds, 33 admin panel paths
-    ├── vuln_prober.py         ← CVE-specific safe active probes (path traversal, RCE confirm, etc.)
-    ├── osint.py               ← DNS/DoH, CT logs (crt.sh), ASN lookup, HTTP fingerprinting
-    ├── tls_analyzer.py        ← SSL/TLS deep analysis, POODLE/BEAST/CRIME/DROWN detection
-    ├── header_audit.py        ← HTTP security header audit, CORS, cookie flags, scoring
-    ├── stack_fingerprint.py   ← CMS, framework, cloud, CDN, WAF detection
-    ├── dns_security.py        ← SPF, DKIM, DMARC, DNSSEC, zone transfer, spoofability score
-    ├── takeover.py            ← Subdomain takeover detection (25 providers)
-    ├── reporter.py            ← Terminal (ANSI), JSON, and HTML report generators
-    └── json_bridge.py         ← Streaming JSON event emitter for Electron desktop app
+├── netlogic.py                  ← CLI entry point
+├── netlogic_agent.py            ← Remote agent runner (stdlib-only)
+│
+├── src/                         ← Scan engine (zero third-party deps)
+│   ├── scanner.py               ← TCP scanner, 22 service probes, banner grabbing
+│   ├── cve_correlator.py        ← CVE correlation: NVD + 192 offline sigs
+│   ├── nvd_lookup.py            ← NIST NVD API v2.0 client, disk cache, CISA KEV
+│   ├── service_prober.py        ← Unauthenticated access, default creds, admin paths
+│   ├── vuln_prober.py           ← CVE-specific safe active probes
+│   ├── osint.py                 ← DNS/DoH, CT logs, ASN lookup
+│   ├── tls_analyzer.py          ← SSL/TLS deep analysis
+│   ├── header_audit.py          ← HTTP security header audit
+│   ├── stack_fingerprint.py     ← CMS, framework, cloud, CDN, WAF detection
+│   ├── dns_security.py          ← SPF, DKIM, DMARC, DNSSEC, zone transfer
+│   ├── takeover.py              ← Subdomain takeover (25 providers)
+│   ├── reporter.py              ← Terminal, JSON, HTML output
+│   └── json_bridge.py           ← Streaming JSON events for Electron / agent
+│
+├── api/                         ← FastAPI controller
+│   ├── main.py                  ← App factory, static SPA serving, middleware
+│   ├── auth/
+│   │   ├── jwt_handler.py       ← HS256 JWT (stdlib-only, alg enforcement)
+│   │   ├── api_keys.py          ← In-memory API key store
+│   │   ├── rate_limit.py        ← Sliding-window rate limiter (per-IP / per-agent)
+│   │   └── dependencies.py      ← require_org FastAPI dependency
+│   ├── agents/
+│   │   └── registry.py          ← Agent registry (token expiry, pending cap)
+│   ├── jobs/
+│   │   ├── manager.py           ← In-memory + JSON-file job store
+│   │   └── executor.py          ← SaaS dispatcher (never runs scans locally)
+│   ├── middleware/
+│   │   └── audit.py             ← X-Request-ID correlation + audit log
+│   ├── models/
+│   │   ├── scan_request.py      ← Pydantic ScanRequest (ipaddress validation)
+│   │   └── agent.py             ← AgentRegistration with size constraints
+│   ├── routes/
+│   │   ├── auth.py              ← /auth/*
+│   │   ├── jobs.py              ← /jobs/*
+│   │   ├── agents.py            ← /agents/*
+│   │   └── health.py            ← /health
+│   └── storage/
+│       └── json_store.py        ← Scan persistence (10 MB cap, 500 file cap)
+│
+├── dashboard/                   ← React SPA (Vite + TypeScript + Tailwind)
+│   └── src/
+│       ├── api/                 ← REST + SSE client hooks
+│       ├── components/          ← StatusBadge, PortTable, VulnCard, ScanFeed, Layout
+│       ├── pages/               ← Dashboard, NewScan, ScanDetail, Agents, Login
+│       └── store/               ← Zustand auth store
+│
+└── electron/                    ← Desktop app (Node + Electron)
+    ├── main.js                  ← BrowserWindow (sandbox, contextIsolation, no nodeIntegration)
+    └── preload.js               ← Sandboxed IPC bridge
 ```
 
-### Scanner Engine (`scanner.py`)
-- Concurrent TCP connect scanning via `ThreadPoolExecutor` (up to 100 threads)
-- 43 mapped port/service combinations; 22 protocol-specific probes (HTTP GET, Redis INFO, MongoDB wire protocol, Docker API, etcd, Consul, Vault, Grafana, Kibana, Prometheus, RabbitMQ, Solr, Memcached, and more)
-- Banner parsing with regex version extraction
-- TLS handshake inspection + certificate CN extraction
-- TTL-based OS fingerprinting (Linux / Windows / Network Device)
+### SaaS Dispatch Flow
 
-### CVE Correlator (`cve_correlator.py`) + NVD Lookup (`nvd_lookup.py`)
-- **Live NIST NVD API v2.0** queries for every discovered product/version across 101 product keyword mappings
-- **CISA KEV integration** — flags CVEs actively exploited in the wild
-- **Exploit tracking** — 52 CVEs with confirmed Metasploit modules, 88 CVEs with public exploits/PoCs
-- **Detection confidence** — HIGH (version from banner) / MEDIUM (product only) / LOW (port guess)
-- **Disk cache** at `~/.netlogic/nvd_cache/` with 24-hour TTL
-- **Offline fallback** — 192 hardcoded signatures across 89 banner patterns; used when NVD is unreachable
-- Composite risk scoring: CVSS base + KEV bonus + Metasploit/PoC flag + detection confidence
-- Optional API key (`--nvd-key` or `NETLOGIC_NVD_KEY`) for 10× faster queries
+```
+Browser / curl
+    │  POST /jobs  (JWT)
+    ▼
+FastAPI Controller
+    │  creates ScanJob{status: queued}
+    │  try_dispatch_queued() — dispatch lock prevents races
+    │       ↓ if agent online & idle
+    │  assign_task(agent_id, job_id)
+    ▼
+netlogic_agent.py  (runs on your network)
+    │  GET /agents/{id}/tasks  → receives job config
+    │  runs src/json_bridge.run_streaming_scan()
+    │  POST /agents/{id}/tasks/{job_id}/events  (batched, ≤ 500/req)
+    │  POST /agents/{id}/tasks/{job_id}/complete
+    ▼
+Browser SSE (GET /jobs/{id}/stream)
+    └─ live events replayed to dashboard
+```
 
-### Service Prober (`service_prober.py`) — activated by `--probe` or `--full`
-Performs safe, read-only checks against every discovered open port:
+---
 
-| Service | Check |
+## Security Architecture
+
+### Authentication
+- **API keys** — long-lived org credentials, stored in-memory (seed via `NETLOGIC_API_KEYS`)
+- **JWT** — HS256, stdlib-only; `alg` field enforced before signature verification (prevents `alg=none` attack); startup warning if secret is weak or < 32 chars
+- **Agent tokens** — SHA-256 hashed in registry, expire after 7 days (`NETLOGIC_AGENT_TOKEN_MAX_AGE`); stored at `~/.netlogic/agent.json` with `0o600` permissions
+
+### Rate Limiting (sliding window, in-memory)
+
+| Endpoint | Limit |
 |---|---|
-| Redis | Unauthenticated access via INFO command |
-| Memcached | Unauthenticated VERSION command |
-| MongoDB | Wire protocol isMaster without credentials |
-| Elasticsearch | Cluster info + index listing without auth |
-| CouchDB | `/_all_dbs` without credentials |
-| Docker API | `/version` on TCP port 2375 (host takeover vector) |
-| Kubernetes API | Anonymous `/api` access |
-| etcd | `/v2/keys` or `/v3/cluster` without auth (holds K8s secrets) |
-| Consul | `/v1/catalog/services` without ACL tokens |
-| Prometheus | `/metrics` and admin API without authentication |
-| HashiCorp Vault | Uninitialized or unsealed state detection |
-| RabbitMQ | Default `guest:guest` credentials on management API |
-| InfluxDB | `SHOW DATABASES` without credentials |
-| FTP | Anonymous login (USER anonymous) |
-| HTTP (any port) | 33 admin panel paths: `.env`, `.git/config`, backup configs, Spring actuator (`/env`, `/heapdump`), Swagger, GraphQL, phpMyAdmin, Tomcat manager, JBoss consoles, Adminer, and more |
+| `POST /auth/token` | 10 / minute / IP |
+| `POST /agents/register` | 5 / hour / IP |
+| `POST /agents/{id}/heartbeat` | 3 / minute / agent |
+| `POST /agents/{id}/tasks/{id}/events` | 60 / minute / agent, max 500 events/batch |
+| `POST /jobs` | 30 / minute / org |
 
-### Vulnerability Prober (`vuln_prober.py`) — activated by `--probe` or `--full`
-CVE-specific safe active probes that attempt to confirm vulnerabilities:
+### Multi-tenancy
+Every job, agent, and API key is scoped to an `org_id`. Cross-org lookups return 404 (not 403) to prevent enumeration.
 
-| CVE | Title | What's Confirmed |
+### HTTP Security Headers
+Applied by `SecurityHeadersMiddleware` to every response:
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `X-XSS-Protection: 1; mode=block`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `Permissions-Policy: geolocation=(), microphone=(), camera=()`
+- `Content-Security-Policy: default-src 'none'` (API JSON responses)
+
+### Content Security Policy (dashboard)
+Set via `<meta http-equiv="Content-Security-Policy">` in `index.html`:
+- `script-src 'self'` — no inline scripts, no CDN script injection
+- `style-src 'self' 'unsafe-inline'` — Tailwind requires inline styles
+- `connect-src 'self'` — SSE and API calls to same origin only
+- `frame-ancestors 'none'` — clickjacking prevention
+
+### Audit Logging
+`AuditMiddleware` emits structured JSON lines to the `netlogic.audit` logger for:
+- `token_exchange_ok` / `token_exchange_failed` / `token_rate_limited`
+- `agent_registered` / `agent_deregistered`
+- `job_created` / `job_cancelled`
+
+Every request receives a unique `X-Request-ID` header for correlation.
+
+### Input Validation
+- Targets validated with Python's `ipaddress` module (IP / CIDR) then RFC 1123 label regex — no ReDoS-prone patterns
+- Agent `hostname` max 255 chars; tags max 20 pairs × 64 chars; capabilities max 32 items
+- Scan JSON files capped at 10 MB each; max 500 files loaded on startup
+
+### Electron Desktop
+- `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`
+- All renderer↔main IPC goes through typed `preload.js` bridge
+
+---
+
+## Scan Modules
+
+| Flag | Module | What it does |
 |---|---|---|
-| CVE-2021-41773 | Apache 2.4.49 Path Traversal | Retrieves `/etc/passwd` via `/.%2e/` encoding |
-| CVE-2021-42013 | Apache 2.4.50 Path Traversal | Double-encoded `%%32%65` variant |
-| CVE-2021-43798 | Grafana Plugin Traversal | Retrieves `/etc/passwd` via plugin path |
-| CVE-2014-6271 | Shellshock CGI RCE | Injects payload into User-Agent/Cookie, checks response |
-| CVE-2020-1938 | Ghostcat AJP | CPING/CPONG handshake on port 8009 |
-| CVE-2021-44228 | Log4Shell | JNDI header injection; Java error leakage indicates processing |
-| CWE-215 | Spring Boot Actuator | `/env`, `/heapdump`, `/httptrace`, `/mappings`, `/loggers` |
-| CWE-521 | Tomcat Default Creds | Tests 9 common credential pairs against `/manager/html` |
-| CWE-601 | Open Redirect | 11 common redirect parameters tested |
-| CWE-548 | Directory Listing | Detects Apache/Nginx index pages across common paths |
-| CWE-200 | phpinfo() Exposure | `/phpinfo.php`, `/info.php`, and variants |
-| CWE-200 | Backup/Config Files | `.env`, `.git/config`, `wp-config.php.bak`, `id_rsa`, `server.key`, and more — with credential keyword confirmation |
-| CWE-22 | Nginx Alias Traversal | `/static../etc/passwd` off-by-one alias misconfiguration |
-| CVE-2010-2730 | IIS Tilde Enumeration | 8.3 short filename disclosure detection |
+| _(default)_ | Port scanner | TCP connect scan, 22 service probes, CVE correlation via NVD |
+| `--tls` / `do_tls` | TLS analyzer | Protocol versions, weak ciphers, POODLE/BEAST/CRIME/DROWN, cert expiry |
+| `--headers` / `do_headers` | Header audit | HSTS, CSP, X-Frame-Options, CORS, cookie flags; 0–100 score |
+| `--stack` / `do_stack` | Stack fingerprint | CMS, framework, cloud provider, CDN, WAF detection |
+| `--dns` / `do_dns` | DNS security | SPF, DKIM, DMARC, DNSSEC, zone transfer, spoofability score |
+| `--osint` / `do_osint` | Passive OSINT | CT logs, DoH DNS, ASN lookup — no direct target contact |
+| `--probe` / `do_probe` | Service prober | Unauthenticated Redis/Mongo/ES/Docker/K8s/etcd, 33 admin paths |
+| `--takeover` / `do_takeover` | Takeover detector | CT subdomain discovery + 25 provider fingerprints |
+| `--full` / `do_full` | All modules | Enables every module above |
 
-### SSL/TLS Analyzer (`tls_analyzer.py`)
-- Protocol version probing: TLSv1.0, TLSv1.1, TLSv1.2, TLSv1.3
-- Cipher suite weakness detection: RC4, DES, 3DES, NULL, EXPORT, Anonymous DH
-- Known vulnerability checks: POODLE (CVE-2014-3566), BEAST (CVE-2011-3389), CRIME (CVE-2012-4929), DROWN (CVE-2016-0800)
-- Certificate analysis: expiry, self-signed, hostname mismatch, SAN coverage, wildcard scope
-- Letter grading: A through F based on findings
+---
 
-### HTTP Header Auditor (`header_audit.py`)
-- Checks 10+ security headers: HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, CORP, COEP
-- CORS misconfiguration detection (wildcard + credentials = CRITICAL)
-- Cookie flag analysis: Secure, HttpOnly, SameSite per cookie
-- Server/X-Powered-By version disclosure detection
-- Scored 0–100 with letter grade
+## CLI Usage
 
-### Stack Fingerprinter (`stack_fingerprint.py`)
-- CMS detection: WordPress (+ deep scan of login, REST API, xmlrpc.php), Drupal, Joomla, Shopify, Ghost, Squarespace, Wix, Webflow
-- Framework detection: Next.js, Nuxt, Angular, React, Vue, Laravel, Django, Rails, Flask
-- Cloud/CDN: AWS, Azure, GCP, Cloudflare, Fastly, Akamai, Vercel, Netlify
-- WAF detection: Cloudflare WAF, AWS WAF, Imperva, Akamai, Sucuri, ModSecurity, F5 BIG-IP, Wordfence, Barracuda — with bypass notes per product
+```bash
+# Quick scan — 43 ports, CVE correlation
+python netlogic.py scanme.nmap.org
 
-### DNS Security Checker (`dns_security.py`)
-- **SPF**: presence, `all` mechanism strength, DNS lookup count (RFC 7208 limit of 10)
-- **DKIM**: probes 25 common selectors, checks key length
-- **DMARC**: policy enforcement level (`none`/`quarantine`/`reject`), subdomain policy, reporting addresses
-- **DNSSEC**: DS and DNSKEY record verification
-- **CAA**: certificate authority authorization records
-- **Zone Transfer**: raw AXFR attempt against all nameservers
-- **Wildcard DNS**: detects `*.domain` resolution
-- **Email spoofability score**: 0–10 composite rating based on SPF + DKIM + DMARC posture
+# Full scan with HTML report
+python netlogic.py example.com --full --report html --out ./reports
 
-### Subdomain Takeover Detector (`takeover.py`)
-- Discovers subdomains via Certificate Transparency logs (crt.sh)
-- Follows full CNAME chains via Cloudflare DoH
-- Fingerprint database for 25 providers: GitHub Pages, Heroku, Amazon S3, CloudFront, Netlify, Vercel, Azure, Shopify, Fastly, Ghost, Tumblr, WordPress.com, Zendesk, Surge.sh, Webflow, Squarespace, Wix, ReadTheDocs, Bitbucket, and more
+# Active probing: unauthenticated services, default creds, CVE confirmation
+python netlogic.py 10.0.0.5 --probe
 
-### OSINT Module (`osint.py`)
-- All queries use public APIs — zero direct contact with target
-- `crt.sh` Certificate Transparency subdomain enumeration
-- Cloudflare DoH for DNS records: A, AAAA, MX, TXT, NS, CNAME, SOA, SRV
-- `ipinfo.io` for ASN/org/country lookup
+# Deep TLS + header audit
+python netlogic.py example.com --tls --headers
 
-### Reporter (`reporter.py`)
-- **Terminal**: color-coded severity badges, confidence indicators, tiered exploit markers (Metasploit > public PoC > KEV), aligned tables
-- **JSON**: structured schema compatible with Elastic SIEM / Splunk; embeds TLS, header, DNS, takeover, and probe results
-- **HTML**: dark-themed report with stat cards and sortable tables
+# CIDR block sweep
+python netlogic.py 192.168.1.0/24 --cidr --report json --out ./reports
 
-### Electron Desktop App (`json_bridge.py`)
-- Streams scan results live to GUI via newline-delimited JSON events
-- Events: `port`, `vuln`, `osint`, `tls`, `headers`, `dns`, `stack`, `service_probes`, `vuln_probes`, `progress`, `done`, `error`
-- Distributable as Windows installer via PyInstaller + NSIS
+# Only CRITICAL + HIGH CVEs
+python netlogic.py example.com --min-cvss 7.0
+
+# Extended port range (58 ports)
+python netlogic.py 10.0.0.5 --ports full
+
+# Custom port list
+python netlogic.py 10.0.0.5 --ports custom=22,80,443,8080,9200
+
+# NVD API key for 10× faster rate limits
+python netlogic.py example.com --nvd-key YOUR_KEY
+```
+
+### Remote Agent CLI
+
+```bash
+python netlogic_agent.py \
+    --controller http://localhost:8000 \
+    --api-key <key> \
+    --name my-agent-01 \
+    --tags env=prod region=us-east-1 \
+    --concurrency 2 \
+    --poll-interval 5
+
+# Options
+--controller URL    Controller base URL (or $NETLOGIC_CONTROLLER)
+--api-key KEY       API key for first-time registration (or $NETLOGIC_API_KEY)
+--name HOSTNAME     Override reported hostname (default: system hostname)
+--tags KEY=VALUE    Arbitrary metadata tags
+--state FILE        Credential file path (default: ~/.netlogic/agent.json)
+--concurrency N     Max parallel scans (default: 1)
+--poll-interval N   Task poll interval in seconds (default: 5)
+--verbose           Debug logging
+```
 
 ---
 
@@ -332,48 +388,13 @@ CVE-specific safe active probes that attempt to confirm vulnerabilities:
 
 ### Via Live NVD API (101 product mappings — always current)
 
-| Service | Vulnerability Classes |
-|---|---|
-| OpenSSH | RCE via ssh-agent (KEV), priv-esc, username enumeration, scp injection |
-| Apache HTTPD | Path traversal + RCE (Metasploit), request smuggling, mod_proxy SSRF |
-| Nginx | HTTP/2 Rapid Reset DoS, DNS resolver heap overwrite, alias traversal |
-| Microsoft IIS | Wormable HTTP stack RCE, WebDAV buffer overflow (Metasploit), tilde enumeration |
-| PHP | FPM path_info RCE, password_verify overflow, unserialize injection |
-| WordPress | PHP object injection RCE, SQL injection, REST API user enumeration |
-| Drupal | Drupalgeddon2 unauthenticated RCE (Metasploit), REST API object injection |
-| Joomla | Unauthenticated config read via REST API |
-| Apache Tomcat | Ghostcat AJP file inclusion + RCE, default manager credentials |
-| Spring Framework | Spring4Shell RCE via data binding, actuator credential exposure |
-| Log4j | Log4Shell JNDI injection (CVE-2021-44228, CVSS 10.0) |
-| Grafana | Plugin directory traversal (CVE-2021-43798), CSRF→RCE |
-| Kibana | Timelion RCE (CVE-2019-7609) |
-| Confluence | OGNL injection RCE (CVE-2022-26134, KEV) |
-| Jira | Template injection, SSRF |
-| Jenkins | Script console RCE, Git plugin arbitrary file read |
-| Redis | Lua sandbox escape RCE, integer overflow, unauthenticated access |
-| MongoDB | Unauthenticated access, cert validation bypass MITM |
-| Elasticsearch | Data exposure, unauthenticated cluster access |
-| CouchDB | Deserialization RCE (CVE-2022-24706), unauthenticated access |
-| Memcached | UDP DRDoS amplification (51,000× factor), unauthenticated access |
-| Vault | Auth bypass (CVE-2022-40186), uninitialized instance takeover |
-| Consul | Unauthenticated API, Raft RCE (CVE-2021-37219) |
-| etcd | Unauthenticated key-value access (Kubernetes secret exposure) |
-| RabbitMQ | Default guest credentials, unauthenticated management API |
-| InfluxDB | Auth bypass (CVE-2019-20933), unauthenticated queries |
-| Prometheus | Unauthenticated metrics and target enumeration |
-| Solr | DataImportHandler RCE (CVE-2019-0193) |
-| MinIO | Environment variable key leak (CVE-2023-28432) |
-| Docker daemon | Socket exposure, container escape (CVE-2019-5736) |
-| Kubernetes API | Anonymous access, privilege escalation (CVE-2018-1002105) |
-| vsftpd | Backdoor shell on 2.3.4 (Metasploit), anonymous login |
-| ProFTPD | Unauthenticated file copy via mod_copy, anonymous login |
-| Samba | Out-of-bounds heap write RCE via VFS fruit module |
-| OpenSSL | Heartbleed memory disclosure, X.400 ASN.1 type confusion |
-| Exim | Local privilege escalation, remote code execution |
-| Splunk | XSLT RCE (CVE-2023-46214) |
-| Exchange | ProxyLogon/ProxyShell chain (multiple KEV) |
-| vCenter | RCE via JNDI/SSRF (CVE-2021-21985, KEV) |
-| + any product | Live NVD API fallback — searches NIST for any product/version |
+OpenSSH, Apache HTTPD, Nginx, Microsoft IIS, PHP, WordPress, Drupal, Joomla, Apache Tomcat, Spring Framework, Log4j, Grafana, Kibana, Confluence, Jira, Jenkins, Redis, MongoDB, Elasticsearch, CouchDB, Memcached, HashiCorp Vault, Consul, etcd, RabbitMQ, InfluxDB, Prometheus, Solr, MinIO, Docker daemon, Kubernetes API, vsftpd, ProFTPD, Samba, OpenSSL, Exim, Splunk, Exchange, vCenter — and live NVD fallback for any product/version.
+
+### CISA KEV + Exploit Tracking
+- Flags CVEs actively exploited in the wild (CISA KEV catalog)
+- 52 CVEs with confirmed Metasploit modules
+- 88 CVEs with public exploits / PoCs
+- 192 offline signatures for air-gapped / NVD-unreachable environments
 
 ---
 
