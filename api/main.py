@@ -84,7 +84,20 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown — gracefully drain in-flight scans.
+    # Shutdown — mark any still-running jobs as failed so they don't get
+    # stuck in "running" state after a restart.
+    import logging  # noqa: PLC0415
+    from api.jobs.manager import job_manager  # noqa: PLC0415
+    _log = logging.getLogger("netlogic.api")
+    _log.info("NetLogic API shutting down — draining in-flight jobs...")
+    for job in list(job_manager._jobs.values()):
+        if job.status in ("running", "queued"):
+            job.status = "failed"
+            job.error = "Scan interrupted by server shutdown."
+            import time as _time  # noqa: PLC0415
+            job.completed_at = _time.time()
+            job_manager.persist_job(job)
+    _log.info("NetLogic API shutdown complete.")
 
 
 # ── Application factory ───────────────────────────────────────────────────────
@@ -131,10 +144,12 @@ def create_app() -> FastAPI:
     )
 
     # ── API routers ───────────────────────────────────────────────────────────
+    # Health stays at /health for Docker probes + backwards compat; also at /v1/health.
     app.include_router(health.router)
-    app.include_router(auth.router)
-    app.include_router(jobs.router)
-    app.include_router(agents.router)
+    app.include_router(health.router, prefix="/v1")
+    app.include_router(auth.router,   prefix="/v1")
+    app.include_router(jobs.router,   prefix="/v1")
+    app.include_router(agents.router, prefix="/v1")
 
     # ── React dashboard static files ──────────────────────────────────────────
     # Serve the compiled Vite assets only when the dashboard has been built.

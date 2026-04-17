@@ -194,10 +194,10 @@ async def _sse_generator(job: ScanJob) -> AsyncGenerator[str, None]:
     _QUEUE_WAIT_MAX = 150  # 30 s at 0.2 s per sleep
 
     while True:
-        # 1. Drain available events from history (replay/catch-up).
-        #    Take a list snapshot so we can safely slice by index.
-        snapshot = list(job.events)
-        for event in snapshot[idx:]:
+        # 1. Drain available events from history (replay/catch-up)
+        # Snapshot to a list first — deque doesn't support slice notation.
+        snapshot = list(job.events)[idx:]
+        for event in snapshot:
             idx += 1
             yield f"data: {json.dumps(event, default=str)}\n\n"
             # If we just yielded a terminal event from history, we're finished.
@@ -206,7 +206,7 @@ async def _sse_generator(job: ScanJob) -> AsyncGenerator[str, None]:
 
         # 2. Check if job finished while we were processing history.
         if job.status in ("completed", "failed", "cancelled"):
-            # Final catch-up for any events added after the last snapshot.
+            # Final catch-up for any events added after the last snapshot
             for event in list(job.events)[idx:]:
                 idx += 1
                 yield f"data: {json.dumps(event, default=str)}\n\n"
@@ -235,7 +235,7 @@ async def _sse_generator(job: ScanJob) -> AsyncGenerator[str, None]:
 
         # 4. Sentinel received: scan thread is finished.
         if signal is None:
-            # One final pass to ensure zero data loss.
+            # One final pass to ensure zero data loss
             for event in list(job.events)[idx:]:
                 idx += 1
                 yield f"data: {json.dumps(event, default=str)}\n\n"
@@ -280,5 +280,5 @@ def _job_detail(job: ScanJob) -> dict:
     detail = _job_summary(job)
     detail["config"] = job.config.model_dump()
     if job.status in ("completed", "failed", "cancelled"):
-        detail["events"] = list(job.events)  # deque → list for JSON serialization
+        detail["events"] = list(job.events)
     return detail
