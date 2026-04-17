@@ -357,4 +357,5 @@ def _agent_summary(agent: Agent) -> dict:
         "registered_at":  agent.registered_at,
         "last_heartbeat": agent.last_heartbeat,
         "current_job_id": agent.current_job_id,
+        "token":          agent.token_plaintext,
     }
