@@ -342,6 +342,48 @@ async def deregister_agent(
     return Response(status_code=204)
 
 
+# ── POST /agents/{id}/activate ────────────────────────────────────────────────
+
+
+@router.post(
+    "/{agent_id}/activate",
+    summary="Activate an agent (allow it to receive jobs)",
+    response_description="Updated agent summary",
+)
+async def activate_agent(
+    agent_id: str,
+    org_id: str = Depends(require_org),
+) -> dict:
+    """Re-enable a previously deactivated agent."""
+    agent = agent_registry.get(agent_id, org_id=org_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    agent_registry.set_disabled(agent_id, disabled=False)
+    audit_log("agent_activated", agent_id=agent_id, org_id=org_id)
+    return _agent_summary(agent)
+
+
+# ── POST /agents/{id}/deactivate ──────────────────────────────────────────────
+
+
+@router.post(
+    "/{agent_id}/deactivate",
+    summary="Deactivate an agent (prevent it from receiving jobs)",
+    response_description="Updated agent summary",
+)
+async def deactivate_agent(
+    agent_id: str,
+    org_id: str = Depends(require_org),
+) -> dict:
+    """Disable an agent without removing it from the registry."""
+    agent = agent_registry.get(agent_id, org_id=org_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    agent_registry.set_disabled(agent_id, disabled=True)
+    audit_log("agent_deactivated", agent_id=agent_id, org_id=org_id)
+    return _agent_summary(agent)
+
+
 # ── Shared helper ─────────────────────────────────────────────────────────────
 
 
@@ -354,6 +396,7 @@ def _agent_summary(agent: Agent) -> dict:
         "version":        agent.version,
         "tags":           agent.tags,
         "status":         agent.status,
+        "disabled":       agent.disabled,
         "registered_at":  agent.registered_at,
         "last_heartbeat": agent.last_heartbeat,
         "current_job_id": agent.current_job_id,

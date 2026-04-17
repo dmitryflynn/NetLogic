@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useAgents, useDeleteAgent, useRegisterAgent } from '../api/scan'
+import { useAgents, useDeleteAgent, useRegisterAgent, useSetAgentActive } from '../api/scan'
 import type { Agent } from '../api/scan'
 
 function fmtDate(ts: number | null) {
@@ -10,10 +10,11 @@ function fmtDate(ts: number | null) {
   return new Date(ts * 1000).toLocaleTimeString()
 }
 
-const STATUS_COLORS = {
-  online:  'text-low border-low/30 bg-low/10',
-  busy:    'text-accent border-accent/30 bg-accent/10',
-  offline: 'text-text-dim border-border bg-elevated',
+const STATUS_COLORS: Record<string, string> = {
+  online:   'text-low border-low/30 bg-low/10',
+  busy:     'text-accent border-accent/30 bg-accent/10',
+  offline:  'text-text-dim border-border bg-elevated',
+  disabled: 'text-critical border-critical/30 bg-critical/10',
 }
 
 function TokenRow({ label, value }: { label: string; value: string }) {
@@ -134,7 +135,8 @@ function AgentTokenSection({ agent }: { agent: Agent }) {
 
 export default function Agents() {
   const { data: agents = [], isLoading } = useAgents()
-  const del = useDeleteAgent()
+  const del    = useDeleteAgent()
+  const toggle = useSetAgentActive()
   const [showModal, setShowModal] = useState(false)
 
   return (
@@ -147,7 +149,7 @@ export default function Agents() {
         </h2>
         <div className="flex items-center gap-3">
           <span className="text-text-dim text-[11px]">
-            {agents.filter((a) => a.status !== 'offline').length} / {agents.length} online
+            {agents.filter((a) => a.status === 'online' || a.status === 'busy').length} / {agents.length} online
           </span>
           <button className="btn btn-primary text-[12px]" onClick={() => setShowModal(true)}>
             + Register Agent
@@ -185,19 +187,28 @@ export default function Agents() {
                     v{a.version} · {a.agent_id.slice(0, 8)}
                   </p>
                 </div>
-                <button
-                  onClick={() => del.mutate(a.agent_id)}
-                  className="btn btn-danger text-[11px] shrink-0"
-                  disabled={del.isPending}
-                >
-                  Deregister
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => toggle.mutate({ id: a.agent_id, active: a.disabled })}
+                    className={`btn text-[11px] ${a.disabled ? 'btn-primary' : ''}`}
+                    disabled={toggle.isPending}
+                  >
+                    {a.disabled ? 'Activate' : 'Deactivate'}
+                  </button>
+                  <button
+                    onClick={() => del.mutate(a.agent_id)}
+                    className="btn btn-danger text-[11px]"
+                    disabled={del.isPending}
+                  >
+                    Deregister
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-3 gap-4 text-[11px]">
                 <div>
                   <p className="text-text-dim mb-0.5">Last heartbeat</p>
-                  <p className={a.status === 'offline' ? 'text-critical' : 'text-text'}>
+                  <p className={a.status === 'offline' || a.status === 'disabled' ? 'text-critical' : 'text-text'}>
                     {fmtDate(a.last_heartbeat)}
                   </p>
                 </div>

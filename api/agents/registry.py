@@ -62,6 +62,7 @@ class Agent:
     token_hash: str              # SHA-256 hex of the secret
     token_plaintext: str = ""   # stored in local agents.json so UI can display it
     org_id: str = ""             # owning organisation — empty string = no tenant
+    disabled: bool = False       # manually deactivated — won't receive jobs
     registered_at: float = field(default_factory=time.time)
     token_issued_at: float = field(default_factory=time.time)  # for expiry enforcement
     last_heartbeat: Optional[float] = None
@@ -70,7 +71,9 @@ class Agent:
 
     @property
     def status(self) -> str:
-        """Dynamically computed: online | busy | offline."""
+        """Dynamically computed: online | busy | offline | disabled."""
+        if self.disabled:
+            return "disabled"
         if self.last_heartbeat is None:
             return "offline"
         if time.time() - self.last_heartbeat > HEARTBEAT_TIMEOUT:
@@ -97,6 +100,7 @@ class Agent:
             "token_hash":      self.token_hash,
             "token_plaintext": self.token_plaintext,
             "org_id":          self.org_id,
+            "disabled":        self.disabled,
             "registered_at":   self.registered_at,
             "token_issued_at": self.token_issued_at,
         }
@@ -112,6 +116,7 @@ class Agent:
             token_hash      = data["token_hash"],
             token_plaintext = data.get("token_plaintext", ""),
             org_id          = data.get("org_id", ""),
+            disabled        = data.get("disabled", False),
             registered_at   = data.get("registered_at", time.time()),
             token_issued_at = data.get("token_issued_at", time.time()),
             last_heartbeat  = None,
@@ -235,13 +240,24 @@ class AgentRegistry:
 
     # ── Task dispatch ─────────────────────────────────────────────────────────
 
+    def set_disabled(self, agent_id: str, disabled: bool) -> bool:
+        """Enable or disable an agent. Persists the change. Returns False if not found."""
+        agent = self._agents.get(agent_id)
+        if not agent:
+            return False
+        agent.disabled = disabled
+        self._save()
+        return True
+
     def assign_task(self, agent_id: str, job_id: str) -> bool:
         """Push a job_id onto the agent's pending queue.
 
-        Returns False if the agent is not found or the queue is at capacity.
+        Returns False if the agent is not found, disabled, or the queue is at capacity.
         """
         agent = self._agents.get(agent_id)
         if not agent:
+            return False
+        if agent.disabled:
             return False
         if len(agent.pending_tasks) >= AGENT_PENDING_CAP:
             return False
@@ -258,9 +274,9 @@ class AgentRegistry:
         return tasks
 
     def find_idle_agent(self) -> Optional[Agent]:
-        """Return the first online/idle agent, or None if all are offline or busy."""
+        """Return the first online/idle (non-disabled) agent, or None."""
         for agent in self._agents.values():
-            if agent.status == "online":
+            if agent.status == "online":  # disabled agents return "disabled", not "online"
                 return agent
         return None
 
