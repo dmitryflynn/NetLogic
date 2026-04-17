@@ -1,72 +1,77 @@
-import sys, os, time, threading
-from concurrent.futures import ThreadPoolExecutor
+import sys, os, time
 from fastapi.testclient import TestClient
 
-# Path bootstrap
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
+
+os.environ.setdefault("NETLOGIC_JWT_SECRET", "ci-test-secret-that-is-long-enough-for-tests")
+os.environ.setdefault("NETLOGIC_ADMIN_KEY", "ci-admin-key")
+os.environ.setdefault("NETLOGIC_NO_BROWSER", "1")
 
 from api.main import app
 from api.jobs.manager import job_manager
 
 client = TestClient(app)
 
+ADMIN_HEADERS = {"X-Admin-Key": os.environ["NETLOGIC_ADMIN_KEY"]}
+
+
+def _get_auth_headers(org_id: str = "test-org") -> dict:
+    """Create an API key for org_id and exchange it for a JWT."""
+    key_resp = client.post("/v1/auth/keys", json={"org_id": org_id}, headers=ADMIN_HEADERS)
+    api_key = key_resp.json()["api_key"]
+    token_resp = client.post("/v1/auth/token", json={"api_key": api_key})
+    token = token_resp.json()["token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_concurrency_and_eviction():
-    print("Testing concurrency limits and eviction...")
-    
-    # 1. Create many jobs quickly
+    headers = _get_auth_headers("concurrency-org")
     job_ids = []
     for i in range(20):
-        resp = client.post("/jobs", json={"target": f"127.0.0.{i}", "ports": "80"})
-        assert resp.status_code == 202
+        resp = client.post("/v1/jobs", json={"target": f"127.0.0.{i}", "ports": "80"}, headers=headers)
+        assert resp.status_code == 202, resp.text
         job_ids.append(resp.json()["job_id"])
-    
-    # 2. Check that they all exist
-    resp = client.get("/jobs?limit=50")
-    data = resp.json()
-    assert len(data) >= 20
-    print(f"  Successfully created {len(data)} jobs.")
+
+    resp = client.get("/v1/jobs?limit=50", headers=headers)
+    assert resp.status_code == 200
+    assert len(resp.json()) >= 20
+
 
 def test_persistence_rehydration():
-    print("Testing persistence rehydration...")
-    
-    # 1. Create a job manually via manager to avoid submit_scan starting a task
     from api.models.scan_request import ScanRequest
     config = ScanRequest(target="persistence.manual.test")
     job = job_manager.create(config)
     job_id = job.job_id
-    
-    # 2. Force manual status and save
-    job.status = "completed" 
+
+    job.status = "completed"
     job_manager.persist_job(job)
-    time.sleep(0.5) # Wait for background thread write
-    
-    # 3. Simulate server restart by clearing in-memory dict and reloading
+    time.sleep(0.5)
+
     job_manager._jobs.clear()
     assert len(job_manager._jobs) == 0
-    
+
     job_manager._load_from_storage()
     reloaded = job_manager.get(job_id)
-    print(f"  Reloaded status: {reloaded.status if reloaded else 'NOT FOUND'}")
     assert reloaded is not None
     assert reloaded.status == "completed"
-    print("  Job successfully rehydrated from disk.")
+
 
 def test_validation_edge_cases():
-    print("Testing API validation edge cases...")
-    
-    # Malicious target
-    resp = client.post("/jobs", json={"target": "example.com; rm -rf /", "ports": "80"})
-    assert resp.status_code == 422
-    
-    # Invalid port range
-    resp = client.post("/jobs", json={"target": "127.0.0.1", "ports": "70000"})
-    assert resp.status_code == 422
-    
-    # Negative CVSS
-    resp = client.post("/jobs", json={"target": "127.0.0.1", "min_cvss": -1.0})
-    assert resp.status_code == 422
-    print("  Validation logic correctly rejected malformed inputs.")
+    headers = _get_auth_headers("validation-org")
+
+    # FastAPI validates body fields even when they arrive before dependency resolution;
+    # pydantic validators run before auth dependencies in some cases, but auth runs
+    # first in FastAPI — so these return 422 only if auth succeeds.
+    resp = client.post("/v1/jobs", json={"target": "example.com; rm -rf /", "ports": "80"}, headers=headers)
+    assert resp.status_code == 422, resp.text
+
+    resp = client.post("/v1/jobs", json={"target": "127.0.0.1", "ports": "70000"}, headers=headers)
+    assert resp.status_code == 422, resp.text
+
+    resp = client.post("/v1/jobs", json={"target": "127.0.0.1", "min_cvss": -1.0}, headers=headers)
+    assert resp.status_code == 422, resp.text
+
 
 if __name__ == "__main__":
     try:

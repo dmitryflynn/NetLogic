@@ -283,7 +283,7 @@ class TestAgentRegistryOrgIsolation(unittest.TestCase):
 
     def setUp(self):
         from api.agents.registry import AgentRegistry
-        self.registry = AgentRegistry()
+        self.registry = AgentRegistry(persist_path=None)
 
     def _register(self, hostname: str = "h", org_id: str = "") -> tuple:
         return self.registry.register(
@@ -346,7 +346,7 @@ class TestAuthRoutes(unittest.IsolatedAsyncioTestCase):
     def test_create_key_and_get_token(self):
         # Create an API key
         resp = self.client.post(
-            "/auth/keys",
+            "/v1/auth/keys",
             json={"org_id": "test-org"},
             headers=self._admin_headers(),
         )
@@ -355,7 +355,7 @@ class TestAuthRoutes(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(api_key)
 
         # Exchange for JWT
-        resp2 = self.client.post("/auth/token", json={"api_key": api_key})
+        resp2 = self.client.post("/v1/auth/token", json={"api_key": api_key})
         self.assertEqual(resp2.status_code, 200)
         data = resp2.json()
         self.assertIn("token", data)
@@ -363,12 +363,12 @@ class TestAuthRoutes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["token_type"], "bearer")
 
     def test_invalid_api_key_returns_401(self):
-        resp = self.client.post("/auth/token", json={"api_key": "bad-key"})
+        resp = self.client.post("/v1/auth/token", json={"api_key": "bad-key"})
         self.assertEqual(resp.status_code, 401)
 
     def test_create_key_wrong_admin_returns_403(self):
         resp = self.client.post(
-            "/auth/keys",
+            "/v1/auth/keys",
             json={"org_id": "test-org"},
             headers={"X-Admin-Key": "wrong"},
         )
@@ -376,18 +376,18 @@ class TestAuthRoutes(unittest.IsolatedAsyncioTestCase):
 
     def test_list_keys_admin(self):
         self.client.post(
-            "/auth/keys",
+            "/v1/auth/keys",
             json={"org_id": "list-test-org"},
             headers=self._admin_headers(),
         )
-        resp = self.client.get("/auth/keys", headers=self._admin_headers())
+        resp = self.client.get("/v1/auth/keys", headers=self._admin_headers())
         self.assertEqual(resp.status_code, 200)
         entries = resp.json()
         self.assertTrue(any(e["org_id"] == "list-test-org" for e in entries))
 
     def test_revoke_key(self):
         resp = self.client.post(
-            "/auth/keys",
+            "/v1/auth/keys",
             json={"org_id": "revoke-org"},
             headers=self._admin_headers(),
         )
@@ -395,37 +395,37 @@ class TestAuthRoutes(unittest.IsolatedAsyncioTestCase):
 
         # Revoke it
         rev_resp = self.client.delete(
-            f"/auth/keys/{api_key}",
+            f"/v1/auth/keys/{api_key}",
             headers=self._admin_headers(),
         )
         self.assertEqual(rev_resp.status_code, 204)
 
         # Now token exchange should fail
-        token_resp = self.client.post("/auth/token", json={"api_key": api_key})
+        token_resp = self.client.post("/v1/auth/token", json={"api_key": api_key})
         self.assertEqual(token_resp.status_code, 401)
 
     def test_jobs_endpoint_requires_jwt(self):
-        resp = self.client.get("/jobs")
+        resp = self.client.get("/v1/jobs")
         self.assertEqual(resp.status_code, 401)
 
     def test_agents_endpoint_requires_jwt(self):
-        resp = self.client.get("/agents")
+        resp = self.client.get("/v1/agents")
         self.assertEqual(resp.status_code, 401)
 
     def test_job_list_scoped_to_org(self):
         """Jobs created by org-a are not visible to org-b."""
         # Create API keys for two orgs
         ka_resp = self.client.post(
-            "/auth/keys", json={"org_id": "org-a"}, headers=self._admin_headers()
+            "/v1/auth/keys", json={"org_id": "org-a"}, headers=self._admin_headers()
         )
         kb_resp = self.client.post(
-            "/auth/keys", json={"org_id": "org-b"}, headers=self._admin_headers()
+            "/v1/auth/keys", json={"org_id": "org-b"}, headers=self._admin_headers()
         )
         key_a = ka_resp.json()["api_key"]
         key_b = kb_resp.json()["api_key"]
 
-        token_a = self.client.post("/auth/token", json={"api_key": key_a}).json()["token"]
-        token_b = self.client.post("/auth/token", json={"api_key": key_b}).json()["token"]
+        token_a = self.client.post("/v1/auth/token", json={"api_key": key_a}).json()["token"]
+        token_b = self.client.post("/v1/auth/token", json={"api_key": key_b}).json()["token"]
 
         headers_a = {"Authorization": f"Bearer {token_a}"}
         headers_b = {"Authorization": f"Bearer {token_b}"}
@@ -436,7 +436,7 @@ class TestAuthRoutes(unittest.IsolatedAsyncioTestCase):
 
             # Create a job as org-a
             create_resp = self.client.post(
-                "/jobs",
+                "/v1/jobs",
                 json={"target": "10.0.0.1"},
                 headers=headers_a,
             )
@@ -444,15 +444,15 @@ class TestAuthRoutes(unittest.IsolatedAsyncioTestCase):
             job_id = create_resp.json()["job_id"]
 
         # org-a can see the job
-        list_a = self.client.get("/jobs", headers=headers_a).json()
+        list_a = self.client.get("/v1/jobs", headers=headers_a).json()
         self.assertTrue(any(j["job_id"] == job_id for j in list_a))
 
         # org-b cannot see the job
-        list_b = self.client.get("/jobs", headers=headers_b).json()
+        list_b = self.client.get("/v1/jobs", headers=headers_b).json()
         self.assertFalse(any(j["job_id"] == job_id for j in list_b))
 
         # org-b cannot access the job by ID
-        get_resp = self.client.get(f"/jobs/{job_id}", headers=headers_b)
+        get_resp = self.client.get(f"/v1/jobs/{job_id}", headers=headers_b)
         self.assertEqual(get_resp.status_code, 404)
 
 

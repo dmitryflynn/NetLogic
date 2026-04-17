@@ -144,10 +144,12 @@ def create_app() -> FastAPI:
     )
 
     # ── API routers ───────────────────────────────────────────────────────────
+    # Health stays at /health for Docker probes + backwards compat; also at /v1/health.
     app.include_router(health.router)
-    app.include_router(auth.router)
-    app.include_router(jobs.router)
-    app.include_router(agents.router)
+    app.include_router(health.router, prefix="/v1")
+    app.include_router(auth.router,   prefix="/v1")
+    app.include_router(jobs.router,   prefix="/v1")
+    app.include_router(agents.router, prefix="/v1")
 
     # ── React dashboard static files ──────────────────────────────────────────
     # Serve the compiled Vite assets only when the dashboard has been built.

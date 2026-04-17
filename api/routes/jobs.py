@@ -188,7 +188,8 @@ async def _sse_generator(job: ScanJob) -> AsyncGenerator[str, None]:
     idx = 0
     while True:
         # 1. Drain available events from history (replay/catch-up)
-        snapshot = job.events[idx:]
+        # Snapshot to a list first — deque doesn't support slice notation.
+        snapshot = list(job.events)[idx:]
         for event in snapshot:
             idx += 1
             yield f"data: {json.dumps(event, default=str)}\n\n"
@@ -199,7 +200,7 @@ async def _sse_generator(job: ScanJob) -> AsyncGenerator[str, None]:
         # 2. Check if job finished while we were processing history
         if job.status in ("completed", "failed", "cancelled"):
             # Final catch-up for any events added after the last snapshot
-            for event in job.events[idx:]:
+            for event in list(job.events)[idx:]:
                 idx += 1
                 yield f"data: {json.dumps(event, default=str)}\n\n"
             return
@@ -221,7 +222,7 @@ async def _sse_generator(job: ScanJob) -> AsyncGenerator[str, None]:
         # 4. Sentinel received: scan thread is finished
         if signal is None:
             # One final pass to ensure zero data loss
-            for event in job.events[idx:]:
+            for event in list(job.events)[idx:]:
                 idx += 1
                 yield f"data: {json.dumps(event, default=str)}\n\n"
             return
@@ -265,5 +266,5 @@ def _job_detail(job: ScanJob) -> dict:
     detail = _job_summary(job)
     detail["config"] = job.config.model_dump()
     if job.status in ("completed", "failed", "cancelled"):
-        detail["events"] = job.events
+        detail["events"] = list(job.events)
     return detail

@@ -27,7 +27,7 @@ from api.models.scan_request import ScanRequest
 class TestAgentRegistry(unittest.TestCase):
 
     def setUp(self):
-        self.registry = AgentRegistry()
+        self.registry = AgentRegistry(persist_path=None)
 
     def _register(self, hostname="agent-01"):
         return self.registry.register(
@@ -192,7 +192,7 @@ class TestSubmitScanDispatch(unittest.IsolatedAsyncioTestCase):
         from api.jobs.executor import submit_scan
         from api.jobs.manager import ScanJob
 
-        registry = AgentRegistry()
+        registry = AgentRegistry(persist_path=None)
         # Register but never heartbeat → status = offline
         agent_id, _ = registry.register(
             hostname="test-agent", capabilities=[], version="1.0", tags={}
@@ -201,8 +201,8 @@ class TestSubmitScanDispatch(unittest.IsolatedAsyncioTestCase):
         config = ScanRequest(target="10.0.0.1", agent_id=agent_id)
         job = ScanJob(job_id="test-job-1", config=config)
 
-        # Patch the singleton in the registry module (where executor imports it from).
-        with patch("api.agents.registry.agent_registry", registry):
+        # executor.py has already imported agent_registry by name, so patch there.
+        with patch("api.jobs.executor.agent_registry", registry):
             await submit_scan(job)
 
         self.assertEqual(job.status, "failed")
@@ -214,7 +214,7 @@ class TestSubmitScanDispatch(unittest.IsolatedAsyncioTestCase):
         from api.jobs.executor import submit_scan
         from api.jobs.manager import ScanJob
 
-        registry = AgentRegistry()
+        registry = AgentRegistry(persist_path=None)
         agent_id, _ = registry.register(
             hostname="test-agent", capabilities=[], version="1.0", tags={}
         )
@@ -223,8 +223,8 @@ class TestSubmitScanDispatch(unittest.IsolatedAsyncioTestCase):
         config = ScanRequest(target="10.0.0.1", agent_id=agent_id)
         job = ScanJob(job_id="test-job-2", config=config)
 
-        # Patch the singleton in the registry module (where executor imports it from).
-        with patch("api.agents.registry.agent_registry", registry):
+        # executor.py has already imported agent_registry by name, so patch there.
+        with patch("api.jobs.executor.agent_registry", registry):
             await submit_scan(job)
 
         agent = registry.get(agent_id)
