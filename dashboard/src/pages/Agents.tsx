@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAgents, useDeleteAgent, useRegisterAgent } from '../api/scan'
-import type { RegisterAgentResponse } from '../api/scan'
+import type { Agent } from '../api/scan'
 
 function fmtDate(ts: number | null) {
   if (!ts) return 'Never'
@@ -16,11 +16,32 @@ const STATUS_COLORS = {
   offline: 'text-text-dim border-border bg-elevated',
 }
 
+function TokenRow({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false)
+  function copy() {
+    navigator.clipboard.writeText(value).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+  return (
+    <div>
+      <p className="text-[10px] text-text-dim uppercase tracking-wide mb-1">{label}</p>
+      <div className="flex items-center gap-2">
+        <code className="text-[11px] text-accent break-all flex-1">{value}</code>
+        <button onClick={copy} className="text-[10px] text-text-dim hover:text-text shrink-0 border border-border rounded px-1.5 py-0.5">
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function RegisterModal({ onClose }: { onClose: () => void }) {
   const [hostname, setHostname] = useState('')
   const [caps, setCaps]         = useState('scan')
   const [version, setVersion]   = useState('1.0.0')
-  const [result, setResult]     = useState<RegisterAgentResponse | null>(null)
+  const [agentId, setAgentId]   = useState<string | null>(null)
   const reg = useRegisterAgent()
 
   function submit(e: React.FormEvent) {
@@ -32,31 +53,18 @@ function RegisterModal({ onClose }: { onClose: () => void }) {
         version:      version.trim() || '1.0.0',
         tags:         {},
       },
-      { onSuccess: (data) => setResult(data) },
+      { onSuccess: (data) => setAgentId(data.agent_id) },
     )
   }
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div className="panel w-full max-w-md p-6 space-y-4 rounded-xl" onClick={(e) => e.stopPropagation()}>
-        {result ? (
+        {agentId ? (
           <>
             <h3 className="text-text-bright font-bold text-base">Agent Registered</h3>
             <p className="text-[12px] text-text-dim">
-              Save this token now — it will not be shown again.
-            </p>
-            <div className="space-y-2">
-              <div>
-                <p className="text-[10px] text-text-dim uppercase tracking-wide mb-1">Agent ID</p>
-                <code className="text-[11px] text-accent break-all">{result.agent_id}</code>
-              </div>
-              <div>
-                <p className="text-[10px] text-text-dim uppercase tracking-wide mb-1">Token</p>
-                <code className="text-[11px] text-high break-all">{result.token}</code>
-              </div>
-            </div>
-            <p className="text-[11px] text-text-dim">
-              Run <code className="text-accent">netlogic_agent.py</code> with these credentials on the remote machine.
+              Agent is ready. You can view its token anytime from the agent card.
             </p>
             <button className="btn btn-primary w-full" onClick={onClose}>Done</button>
           </>
@@ -104,6 +112,22 @@ function RegisterModal({ onClose }: { onClose: () => void }) {
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+function AgentTokenSection({ agent }: { agent: Agent }) {
+  const [show, setShow] = useState(false)
+  if (!agent.token) return null
+  return (
+    <div className="pt-2 border-t border-border">
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-[10px] text-text-dim uppercase tracking-wide">Agent Token</p>
+        <button onClick={() => setShow((s) => !s)} className="text-[10px] text-text-dim hover:text-text border border-border rounded px-1.5 py-0.5">
+          {show ? 'Hide' : 'Reveal'}
+        </button>
+      </div>
+      {show && <TokenRow label="" value={agent.token} />}
     </div>
   )
 }
@@ -201,6 +225,8 @@ export default function Agents() {
                   ))}
                 </div>
               )}
+
+              <AgentTokenSection agent={a} />
             </div>
           ))}
         </div>

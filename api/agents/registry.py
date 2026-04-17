@@ -59,7 +59,8 @@ class Agent:
     capabilities: list[str]
     version: str
     tags: dict[str, str]
-    token_hash: str              # SHA-256 hex of the secret — never stored plaintext
+    token_hash: str              # SHA-256 hex of the secret
+    token_plaintext: str = ""   # stored in local agents.json so UI can display it
     org_id: str = ""             # owning organisation — empty string = no tenant
     registered_at: float = field(default_factory=time.time)
     token_issued_at: float = field(default_factory=time.time)  # for expiry enforcement
@@ -88,33 +89,34 @@ class Agent:
     def to_dict(self) -> dict:
         """Serialise persistent fields only (transient state excluded)."""
         return {
-            "agent_id":       self.agent_id,
-            "hostname":       self.hostname,
-            "capabilities":   self.capabilities,
-            "version":        self.version,
-            "tags":           self.tags,
-            "token_hash":     self.token_hash,
-            "org_id":         self.org_id,
-            "registered_at":  self.registered_at,
+            "agent_id":        self.agent_id,
+            "hostname":        self.hostname,
+            "capabilities":    self.capabilities,
+            "version":         self.version,
+            "tags":            self.tags,
+            "token_hash":      self.token_hash,
+            "token_plaintext": self.token_plaintext,
+            "org_id":          self.org_id,
+            "registered_at":   self.registered_at,
             "token_issued_at": self.token_issued_at,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> Agent:
         return cls(
-            agent_id      = data["agent_id"],
-            hostname      = data["hostname"],
-            capabilities  = data.get("capabilities", []),
-            version       = data.get("version", ""),
-            tags          = data.get("tags", {}),
-            token_hash    = data["token_hash"],
-            org_id        = data.get("org_id", ""),
-            registered_at = data.get("registered_at", time.time()),
+            agent_id        = data["agent_id"],
+            hostname        = data["hostname"],
+            capabilities    = data.get("capabilities", []),
+            version         = data.get("version", ""),
+            tags            = data.get("tags", {}),
+            token_hash      = data["token_hash"],
+            token_plaintext = data.get("token_plaintext", ""),
+            org_id          = data.get("org_id", ""),
+            registered_at   = data.get("registered_at", time.time()),
             token_issued_at = data.get("token_issued_at", time.time()),
-            # Transient fields start cleared — agent must re-heartbeat after restart.
-            last_heartbeat = None,
-            current_job_id = None,
-            pending_tasks  = [],
+            last_heartbeat  = None,
+            current_job_id  = None,
+            pending_tasks   = [],
         )
 
 
@@ -189,6 +191,7 @@ class AgentRegistry:
             version=version,
             tags=tags,
             token_hash=token_hash,
+            token_plaintext=secret,
             org_id=org_id,
             registered_at=now,
             token_issued_at=now,

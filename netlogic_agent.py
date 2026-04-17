@@ -229,7 +229,7 @@ class ScanWorker:
             self._last_flush = time.time()
         if not batch:
             return
-        url = f"{self.controller}/agents/{self.agent_id}/tasks/{self.job_id}/events"
+        url = f"{self.controller}/v1/agents/{self.agent_id}/tasks/{self.job_id}/events"
         try:
             _http("POST", url, body=batch, token=self.token)
             log.debug("Flushed %d event(s) for job %s", len(batch), self.job_id[:8])
@@ -237,7 +237,7 @@ class ScanWorker:
             log.warning("Failed to flush events (job %s): %s", self.job_id[:8], exc)
 
     def _mark_complete(self, error: str | None) -> None:
-        url = f"{self.controller}/agents/{self.agent_id}/tasks/{self.job_id}/complete"
+        url = f"{self.controller}/v1/agents/{self.agent_id}/tasks/{self.job_id}/complete"
         try:
             _http("POST", url, body={"error": error}, token=self.token)
             log.info("Job %s → %s", self.job_id[:8], "failed" if error else "completed")
@@ -284,12 +284,12 @@ class NetLogicAgent:
     def register(self, api_key: str) -> None:
         """Exchange API key for JWT, register agent, persist credentials."""
         log.info("Obtaining JWT from %s …", self.controller)
-        resp = _http("POST", f"{self.controller}/auth/token", body={"api_key": api_key})
+        resp = _http("POST", f"{self.controller}/v1/auth/token", body={"api_key": api_key})
         jwt  = resp["token"]
 
         log.info("Registering as '%s' …", self.hostname)
         resp = _http(
-            "POST", f"{self.controller}/agents/register",
+            "POST", f"{self.controller}/v1/agents/register",
             token=jwt,
             body={
                 "hostname":     self.hostname,
@@ -306,7 +306,7 @@ class NetLogicAgent:
     # ── Heartbeat thread ──────────────────────────────────────────────────────
 
     def _heartbeat_loop(self) -> None:
-        url = f"{self.controller}/agents/{self.state.agent_id}/heartbeat"
+        url = f"{self.controller}/v1/agents/{self.state.agent_id}/heartbeat"
         while not self._stop.is_set():
             try:
                 _http("POST", url, token=self.state.token)
@@ -345,7 +345,7 @@ class NetLogicAgent:
         log.info("Agent ready. Controller: %s | Concurrency: %d | Poll: %ss",
                  self.controller, self.concurrency, self.poll_interval)
 
-        url = f"{self.controller}/agents/{self.state.agent_id}/tasks"
+        url = f"{self.controller}/v1/agents/{self.state.agent_id}/tasks"
         while not self._stop.is_set():
             if self._active_count() < self.concurrency:
                 try:
