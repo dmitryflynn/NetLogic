@@ -12,7 +12,6 @@ import json
 import os
 import secrets
 import subprocess
-import sys
 import threading
 import webbrowser
 from pathlib import Path
@@ -23,7 +22,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DIST_DIR     = PROJECT_ROOT / "dashboard" / "dist"
 
 
-def _load_or_generate_secrets() -> None:
+def _load_or_generate_secrets() -> dict:
     """Load secrets from ~/.netlogic/secrets.json, generating them on first run."""
     if SECRETS_FILE.exists():
         try:
@@ -40,6 +39,9 @@ def _load_or_generate_secrets() -> None:
     if not data.get("NETLOGIC_ADMIN_KEY"):
         data["NETLOGIC_ADMIN_KEY"] = secrets.token_urlsafe(32)
         changed = True
+    if not data.get("NETLOGIC_API_KEY"):
+        data["NETLOGIC_API_KEY"] = secrets.token_hex(32)
+        changed = True
 
     if changed:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -48,10 +50,11 @@ def _load_or_generate_secrets() -> None:
             SECRETS_FILE.chmod(0o600)
         except Exception:
             pass
-        print("[netlogic] First run — generated secrets saved to:", SECRETS_FILE)
 
     for k, v in data.items():
         os.environ.setdefault(k, v)
+
+    return data
 
 
 def _ensure_dashboard_built() -> None:
@@ -61,17 +64,16 @@ def _ensure_dashboard_built() -> None:
 
     dashboard_dir = PROJECT_ROOT / "dashboard"
     if not dashboard_dir.exists():
-        print("[netlogic] Warning: dashboard/ directory not found — UI will not be available.")
+        print("[netlogic] Warning: dashboard/ not found — UI unavailable.")
         return
 
-    print("[netlogic] Building dashboard for the first time (this takes ~30 s)...")
+    print("[netlogic] Building dashboard for the first time (~30 s)...")
     try:
-        # shell=True works on both Windows (npm.cmd) and Unix (npm)
         subprocess.run("npm install", cwd=dashboard_dir, shell=True, check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run("npm run build", cwd=dashboard_dir, shell=True, check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print("[netlogic] Dashboard built successfully.")
+        print("[netlogic] Dashboard ready.")
     except subprocess.CalledProcessError:
         print("[netlogic] Warning: dashboard build failed — API-only mode.")
     except FileNotFoundError:
@@ -79,29 +81,39 @@ def _ensure_dashboard_built() -> None:
 
 
 def main() -> None:
-    _load_or_generate_secrets()
+    data = _load_or_generate_secrets()
+
+    # Inject the default API key so ApiKeyStore seeds it on import.
+    api_key = data["NETLOGIC_API_KEY"]
+    os.environ["NETLOGIC_API_KEYS"] = f"{api_key}:default"
+
     _ensure_dashboard_built()
 
     port = int(os.environ.get("NETLOGIC_PORT", "8000"))
     host = os.environ.get("NETLOGIC_HOST", "0.0.0.0")
     url  = f"http://localhost:{port}"
 
-    # Suppress the built-in browser open — we do it ourselves after uvicorn binds.
     os.environ["NETLOGIC_NO_BROWSER"] = "1"
 
-    print(f"[netlogic] Starting at {url}")
-    print(f"[netlogic] Admin key: {os.environ['NETLOGIC_ADMIN_KEY']}")
-    print("[netlogic] Press Ctrl+C to stop.")
+    print()
+    print("  ███╗   ██╗███████╗████████╗██╗      ██████╗  ██████╗ ██╗ ██████╗")
+    print("  ████╗  ██║██╔════╝╚══██╔══╝██║     ██╔═══██╗██╔════╝ ██║██╔════╝")
+    print("  ██╔██╗ ██║█████╗     ██║   ██║     ██║   ██║██║  ███╗██║██║")
+    print("  ██║╚██╗██║██╔══╝     ██║   ██║     ██║   ██║██║   ██║██║██║")
+    print("  ██║ ╚████║███████╗   ██║   ███████╗╚██████╔╝╚██████╔╝██║╚██████╗")
+    print("  ╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚══════╝ ╚═════╝  ╚═════╝ ╚═╝ ╚═════╝")
+    print()
+    print(f"  URL:     {url}")
+    print(f"  API Key: {api_key}")
+    print()
+    print("  Paste the API Key into the login screen.")
+    print("  Press Ctrl+C to stop.")
+    print()
 
     threading.Timer(1.5, webbrowser.open, args=(url,)).start()
 
-    import uvicorn  # noqa: PLC0415  (deferred so secrets are set first)
-    uvicorn.run(
-        "api.main:app",
-        host=host,
-        port=port,
-        log_level="warning",
-    )
+    import uvicorn  # noqa: PLC0415
+    uvicorn.run("api.main:app", host=host, port=port, log_level="warning")
 
 
 if __name__ == "__main__":
