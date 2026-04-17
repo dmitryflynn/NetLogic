@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=45"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netlogic"
+version = "3.0.0"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi==0.135.3",
+    "uvicorn[standard]==0.44.0",
+    "pydantic==2.13.0",
+]
+
+[project.scripts]
+netlogic = "api.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["api*", "src*"]
