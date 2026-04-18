@@ -20,6 +20,9 @@ interface Vuln {
   references?:  string[]
   port?:        number
   service?:     string
+  exploitable?: boolean
+  exploit_ref?: string
+  kev?:         boolean
 }
 
 const SEV_COLORS: Record<string, string> = {
@@ -56,6 +59,12 @@ export default function VulnCard({ vuln }: { vuln: Vuln }) {
           <span className="text-[11px] font-mono text-text-dim shrink-0">{vuln.cvss.toFixed(1)}</span>
         )}
         <span className="font-medium text-[12px] text-text-bright flex-1 text-left">{vuln.title ?? vuln.cve_id ?? 'Unknown'}</span>
+        {vuln.kev && (
+          <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-critical/20 text-critical border border-critical/40 uppercase tracking-wide shrink-0">KEV</span>
+        )}
+        {vuln.exploitable && !vuln.kev && (
+          <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-high/20 text-high border border-high/40 uppercase tracking-wide shrink-0">Exploit</span>
+        )}
         {vuln.cve_id && (
           <span className="text-[10px] font-mono text-text-dim shrink-0">{vuln.cve_id}</span>
         )}
@@ -72,10 +81,22 @@ export default function VulnCard({ vuln }: { vuln: Vuln }) {
           {vuln.description && (
             <p className="text-[12px] text-text leading-relaxed">{vuln.description}</p>
           )}
+          {vuln.description && !vuln.remediation && vuln.kev && (
+            <p className="text-[11px] text-critical font-medium">⚠ Listed in CISA Known Exploited Vulnerabilities catalog</p>
+          )}
           {vuln.remediation && (
             <div>
               <p className="text-[10px] text-text-dim uppercase tracking-wide mb-1">Remediation</p>
               <p className="text-[12px] text-text">{vuln.remediation}</p>
+            </div>
+          )}
+          {vuln.exploit_ref && isSafeUrl(vuln.exploit_ref) && (
+            <div>
+              <p className="text-[10px] text-text-dim uppercase tracking-wide mb-1">Exploit Reference</p>
+              <a href={vuln.exploit_ref} target="_blank" rel="noopener noreferrer"
+                 className="text-[11px] font-mono text-high hover:underline break-all">
+                {vuln.exploit_ref}
+              </a>
             </div>
           )}
           {vuln.references && vuln.references.length > 0 && (

@@ -20,14 +20,33 @@ export default function ScanDetail() {
   const { events, ports, vulns, progress, streaming } = useStreamScan(live ? id! : null)
 
   // For completed jobs, pull ports/vulns from stored events.
-  // The ScanEvent.data union type allows a simple cast here; the filter()
-  // call guarantees the correct event type before we cast.
+  // The scan engine emits vulns as {port, service, cves:[{id, cvss_score,...}]};
+  // normalise to the flat VulnEvent shape the UI expects.
   const storedPorts = (job?.events ?? [])
     .filter((e) => e.type === 'port')
     .map((e) => e.data as PortEvent)
-  const storedVulns = (job?.events ?? [])
+
+  const storedVulns: VulnEvent[] = (job?.events ?? [])
     .filter((e) => e.type === 'vuln')
-    .map((e) => e.data as VulnEvent)
+    .flatMap((e) => {
+      const d = e.data as Record<string, unknown> | undefined
+      if (!d) return []
+      // Nested engine format: {port, service, cves:[...]}
+      if (Array.isArray(d.cves) && d.cves.length > 0) {
+        return (d.cves as Record<string, unknown>[]).map((c) => ({
+          cve_id:      c.id as string,
+          cvss:        c.cvss_score as number,
+          severity:    c.severity as string,
+          description: (c.description ?? '') as string,
+          port:        d.port as number,
+          service:     (d.service ?? '') as string,
+          exploitable: (c.exploit_available ?? false) as boolean,
+          exploit_ref: (Array.isArray(c.references) ? c.references[0] : undefined) as string | undefined,
+        } satisfies VulnEvent))
+      }
+      // Already-flat format
+      return [d as unknown as VulnEvent]
+    })
 
   const displayPorts = live ? ports  : storedPorts
   const displayVulns = live ? vulns  : storedVulns
