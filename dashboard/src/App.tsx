@@ -2,13 +2,14 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAuthStore } from './store/auth'
 import { api } from './api/client'
-import Layout     from './components/Layout'
-import Login      from './pages/Login'
-import License    from './pages/License'
-import Dashboard  from './pages/Dashboard'
-import NewScan    from './pages/NewScan'
-import ScanDetail from './pages/ScanDetail'
-import Agents     from './pages/Agents'
+import Layout        from './components/Layout'
+import Login         from './pages/Login'
+import License       from './pages/License'
+import Dashboard     from './pages/Dashboard'
+import NewScan       from './pages/NewScan'
+import ScanDetail    from './pages/ScanDetail'
+import Agents        from './pages/Agents'
+import ErrorBoundary from './components/ErrorBoundary'
 
 interface LicenseStatus {
   licensed: boolean
@@ -49,10 +50,10 @@ export default function App() {
           </RequireLicense>
         }
       >
-        <Route index              element={<Dashboard />} />
-        <Route path="scans/new"   element={<NewScan />} />
-        <Route path="scans/:id"   element={<ScanDetail />} />
-        <Route path="agents"      element={<Agents />} />
+        <Route index              element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
+        <Route path="scans/new"   element={<ErrorBoundary><NewScan /></ErrorBoundary>} />
+        <Route path="scans/:id"   element={<ErrorBoundary><ScanDetail /></ErrorBoundary>} />
+        <Route path="agents"      element={<ErrorBoundary><Agents /></ErrorBoundary>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
