@@ -77,7 +77,8 @@ export interface Agent {
   capabilities: string[]
   version: string
   tags: Record<string, string>
-  status: 'online' | 'busy' | 'offline'
+  status: 'online' | 'busy' | 'offline' | 'disabled'
+  disabled: boolean
   registered_at: number
   last_heartbeat: number | null
   current_job_id: string | null
@@ -165,6 +166,15 @@ export const useRegisterAgent = () => {
   const qc = useQueryClient()
   return useMutation<RegisterAgentResponse, Error, RegisterAgentRequest>({
     mutationFn: (body) => api.post('/agents/register', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }),
+  })
+}
+
+export const useSetAgentActive = () => {
+  const qc = useQueryClient()
+  return useMutation<unknown, Error, { id: string; active: boolean }>({
+    mutationFn: ({ id, active }) =>
+      api.post(`/agents/${id}/${active ? 'activate' : 'deactivate'}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }),
   })
 }
