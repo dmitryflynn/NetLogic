@@ -68,6 +68,7 @@ export interface VulnEvent {
   service: string
   exploitable?: boolean
   exploit_ref?: string
+  kev?: boolean   // CISA Known Exploited Vulnerability
 }
 
 export interface Agent {

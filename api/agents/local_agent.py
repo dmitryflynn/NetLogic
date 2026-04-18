@@ -111,6 +111,27 @@ def _run_job(agent_id: str, job_id: str, org_id: str) -> None:
         ports = COMMON_PORTS
 
     def emit(event_type: str, data=None, message: str = "") -> None:
+        # Flatten nested vuln structure: emit one event per CVE
+        if event_type == "vuln" and isinstance(data, dict) and data.get("cves"):
+            port    = data.get("port")
+            service = data.get("service", "")
+            for cve in data["cves"]:
+                job.push_event({"type": "vuln", "data": {
+                    "cve_id":      cve.get("id"),
+                    "cvss":        cve.get("cvss_score"),
+                    "severity":    cve.get("severity"),
+                    "description": cve.get("description", ""),
+                    "port":        port,
+                    "service":     service,
+                    "exploitable": cve.get("exploit_available", False),
+                    "exploit_ref": (cve.get("references") or [None])[0],
+                    "kev":         cve.get("kev", False),
+                }})
+            for note in (data.get("notes") or []):
+                if note:
+                    job.push_event({"type": "info", "message": str(note)})
+            return
+
         ev: dict = {"type": event_type}
         if data is not None:
             ev["data"] = data
