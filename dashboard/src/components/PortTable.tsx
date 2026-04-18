@@ -2,9 +2,23 @@ interface Port {
   port:     number
   proto?:   string
   state:    string
-  service:  string
-  version?: string
-  banner?:  string
+  service:  string | Record<string, unknown>
+  version?: string | Record<string, unknown>
+  banner?:  string | Record<string, unknown>
+  product?: string
+  extra?:   string
+  raw?:     string
+}
+
+function str(v: unknown): string {
+  if (!v) return ''
+  if (typeof v === 'string') return v
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    // nmap-style version object: {product, version, extra, raw}
+    return [o.product, o.version, o.extra].filter(Boolean).join(' ') || String(o.raw ?? '')
+  }
+  return String(v)
 }
 
 export default function PortTable({ ports }: { ports: Port[] }) {
@@ -30,9 +44,9 @@ export default function PortTable({ ports }: { ports: Port[] }) {
                   {p.state}
                 </span>
               </td>
-              <td className="py-1.5 pr-4 text-text">{p.service || '—'}</td>
+              <td className="py-1.5 pr-4 text-text">{str(p.service) || '—'}</td>
               <td className="py-1.5 text-text-dim truncate max-w-xs">
-                {p.version || p.banner || '—'}
+                {str(p.version) || str(p.banner) || str(p.product) || '—'}
               </td>
             </tr>
           ))}
