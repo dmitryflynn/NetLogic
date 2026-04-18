@@ -32,7 +32,8 @@ function fmtEvent(e: ScanEvent): string {
     case 'done':
       return `DONE`
     default:
-      return `${e.type.toUpperCase().padEnd(5)} ${JSON.stringify(d)}`
+      try { return `${e.type.toUpperCase().padEnd(5)} ${JSON.stringify(d)}` }
+      catch { return `${e.type.toUpperCase().padEnd(5)} [unparseable]` }
   }
 }
 
@@ -53,7 +54,7 @@ export default function ScanFeed({ events }: { events: ScanEvent[] }) {
                 {new Date(e.ts * 1000).toLocaleTimeString()}
               </span>
             )}
-            {fmtEvent(e)}
+            {(() => { try { return fmtEvent(e) } catch { return `${e.type} [render error]` } })()}
           </div>
         ))}
         <div ref={bottomRef} />
