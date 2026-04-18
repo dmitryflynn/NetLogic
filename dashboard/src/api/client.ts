@@ -31,8 +31,15 @@ async function request<T>(
   })
 
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({}))
-    throw new Error((detail as { detail?: string }).detail ?? `HTTP ${res.status}`)
+    const body = await res.json().catch(() => ({}))
+    const d = (body as { detail?: unknown }).detail
+    const msg =
+      typeof d === 'string'
+        ? d
+        : Array.isArray(d)
+          ? d.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join('; ')
+          : `HTTP ${res.status}`
+    throw new Error(msg)
   }
 
   if (res.status === 204) return undefined as T
