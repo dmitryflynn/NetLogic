@@ -180,7 +180,30 @@ export const useSetAgentActive = () => {
   })
 }
 
-// ── SSE stream hook ────────────────────────────────────────────────────────────
+// ── VDB (Vulnerability Database) ──────────────────────────────────────────────
+
+export interface VdbStatus {
+  entries: number
+  size_kb: number
+  cache_dir: string
+  nvd_available: boolean
+  synced?: boolean
+}
+
+export const useVdbStatus = () =>
+  useQuery<VdbStatus>({
+    queryKey: ['vdb-status'],
+    queryFn: () => api.get('/vdb/status'),
+    staleTime: 30_000,
+  })
+
+export const useVdbSync = () => {
+  const qc = useQueryClient()
+  return useMutation<VdbStatus, Error>({
+    mutationFn: () => api.post('/vdb/sync'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['vdb-status'] }),
+  })
+}
 
 /**
  * Consume GET /jobs/{id}/stream via fetch + ReadableStream.
