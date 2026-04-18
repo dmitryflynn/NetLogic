@@ -194,14 +194,14 @@ export default function NewScan() {
           >
             <option value="">Auto-assign to any available agent</option>
             {agents
-              .filter((a) => a.status !== 'offline')
+              .filter((a) => a.status === 'online' || a.status === 'busy')
               .map((a) => (
                 <option key={a.agent_id} value={a.agent_id}>
                   {a.hostname} ({a.status})
                 </option>
               ))}
           </select>
-          {agents.filter((a) => a.status !== 'offline').length === 0 && (
+          {agents.filter((a) => a.status === 'online' || a.status === 'busy').length === 0 && (
             <p className="text-[11px] text-high">
               No agents online — job will queue until one registers and heartbeats in.
             </p>
