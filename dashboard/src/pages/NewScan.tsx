@@ -57,6 +57,19 @@ export default function NewScan() {
         New Scan
       </h2>
 
+      {err && (
+        <div className="flex items-start justify-between gap-3 text-critical text-[12px] bg-critical/10 border border-critical/30 rounded px-3 py-2">
+          <span>{err}</span>
+          <button
+            type="button"
+            onClick={() => setErr('')}
+            className="text-critical/70 hover:text-critical shrink-0 leading-none text-base"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       <form onSubmit={submit} className="space-y-5">
         {/* Target */}
         <div className="panel p-4 space-y-3">
@@ -207,12 +220,6 @@ export default function NewScan() {
             </p>
           )}
         </div>
-
-        {err && (
-          <p className="text-critical text-[11px] bg-critical/10 border border-critical/30 rounded px-3 py-2">
-            {err}
-          </p>
-        )}
 
         <div className="flex gap-3">
           <button

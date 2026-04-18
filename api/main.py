@@ -102,6 +102,10 @@ async def lifespan(app: FastAPI):
     from api.storage.json_store import JsonScanStore, SCANS_DIR  # noqa: PLC0415
     JsonScanStore(SCANS_DIR)
 
+    # Start the built-in local scan agent so scans work without any external agent.
+    from api.agents.local_agent import start as start_local_agent  # noqa: PLC0415
+    start_local_agent(org_id="")
+
     # Open the web dashboard in the default browser unless suppressed.
     # Set NETLOGIC_NO_BROWSER=1 for headless / Docker / CI environments.
     if _INDEX_HTML.exists() and not os.environ.get("NETLOGIC_NO_BROWSER"):
