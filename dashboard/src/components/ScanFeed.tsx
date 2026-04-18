@@ -14,8 +14,10 @@ function fmtEvent(e: ScanEvent): string {
   const d = e.data ?? {}
   switch (e.type) {
     case 'port': {
-      const p = d as { port?: number; proto?: string; service?: string; state?: string }
-      return `PORT  ${p.port}/${p.proto ?? 'tcp'}  ${p.state ?? 'open'}  ${p.service ?? ''}`
+      const p = d as { port?: number; proto?: string; service?: unknown; state?: string; version?: unknown; product?: string }
+      const svc = typeof p.service === 'string' ? p.service : ''
+      const ver = typeof p.version === 'string' ? p.version : typeof p.product === 'string' ? p.product : ''
+      return `PORT  ${p.port}/${p.proto ?? 'tcp'}  ${p.state ?? 'open'}  ${svc}${ver ? ' ' + ver : ''}`
     }
     case 'vuln': {
       const v = d as { cve_id?: string; title?: string; cvss?: number }
