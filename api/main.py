@@ -37,7 +37,7 @@ _DIST_DIR   = Path(_PROJECT_ROOT) / "dashboard" / "dist"
 _INDEX_HTML = _DIST_DIR / "index.html"
 
 # ── Deferred imports (after path bootstrap) ───────────────────────────────────
-from api.routes import auth, health, jobs, agents, license as license_route  # noqa: E402
+from api.routes import auth, health, jobs, agents, license as license_route, vdb  # noqa: E402
 from api.middleware.audit import AuditMiddleware  # noqa: E402
 
 
@@ -186,6 +186,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router,          prefix="/v1")
     app.include_router(jobs.router,          prefix="/v1")
     app.include_router(agents.router,        prefix="/v1")
+    app.include_router(vdb.router,           prefix="/v1")
 
     # ── React dashboard static files ──────────────────────────────────────────
     # Serve the compiled Vite assets only when the dashboard has been built.
