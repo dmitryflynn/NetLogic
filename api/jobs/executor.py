@@ -104,20 +104,16 @@ def _assign_to_agent(job: ScanJob, agent_id: str) -> bool:
 
 
 def _assign_to_any(job: ScanJob) -> bool:
-    """Pick the first truly idle online agent in the org and assign the job.
+    """Pick the first truly idle online agent and assign the job.
 
-    An agent is considered idle when:
-      • Its heartbeat was received within the last 60 s (status == "online")
-      • Its current_job_id is None (not already running a scan)
-      • Its pending_tasks list is empty (nothing queued but not yet polled)
-
-    Returns True if dispatched, False if no suitable agent was found.
+    Matching rules:
+      • agent.org_id == job.org_id  (same org), OR
+      • agent.org_id == ""          (built-in / global agent, serves all orgs)
     """
-    for agent in agent_registry.list(org_id=job.org_id):
-        # An agent is truly idle when:
-        #   • it is online (heartbeat recent enough)
-        #   • it has no job currently running (current_job_id is None)
-        #   • its pending_tasks queue is empty (nothing queued but not yet polled)
+    for agent in agent_registry.list():
+        # Org filter: same org OR built-in agent (org_id="") serves everyone
+        if agent.org_id and agent.org_id != job.org_id:
+            continue
         if (
             agent.status == "online"
             and agent.current_job_id is None
