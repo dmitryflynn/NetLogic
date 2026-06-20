@@ -15,5 +15,6 @@ Pipeline (this slice implements stages 1–2):
 
 from src.fusion.signals import Signal
 from src.fusion.gate import Verdict, adjudicate
+from src.fusion.adjudicator import run_adjudication, AIVerdict
 
-__all__ = ["Signal", "Verdict", "adjudicate"]
+__all__ = ["Signal", "Verdict", "adjudicate", "run_adjudication", "AIVerdict"]
