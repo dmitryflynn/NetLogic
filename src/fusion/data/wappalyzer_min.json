@@ -1,0 +1,42 @@
+{
+  "_note": "Minimal, NetLogic-authored Wappalyzer-COMPATIBLE fingerprints (zero licensing risk). Drop in the open webappanalyzer (enthec) dataset at src/fusion/data/wappalyzer.json or set NETLOGIC_WAPPALYZER_DATA to use the full ~3,000-tech set; the loader prefers it over this minimal seed.",
+  "_schema": "tech -> { cats, headers{name:pattern}, cookies{name:pattern}, html:[pattern], scriptSrc:[pattern], meta{name:pattern}, url:[pattern], implies:[tech] }. Pattern = regex with optional \\;version:\\1 and \\;confidence:NN tags.",
+  "technologies": {
+    "Nginx": {
+      "cats": [22],
+      "headers": {"Server": "nginx(?:/([\\d.]+))?\\;version:\\1"}
+    },
+    "Apache": {
+      "cats": [22],
+      "headers": {"Server": "Apache(?:/([\\d.]+))?\\;version:\\1"}
+    },
+    "Microsoft-IIS": {
+      "cats": [22],
+      "headers": {"Server": "Microsoft-IIS(?:/([\\d.]+))?\\;version:\\1"}
+    },
+    "Apache Tomcat": {
+      "cats": [22],
+      "headers": {"Server": "Apache-Coyote(?:/([\\d.]+))?\\;version:\\1\\;confidence:75"},
+      "html": ["Apache Tomcat(?:/([\\d.]+))?\\;version:\\1"]
+    },
+    "PHP": {
+      "cats": [27],
+      "headers": {"X-Powered-By": "PHP(?:/([\\d.]+))?\\;version:\\1"}
+    },
+    "WordPress": {
+      "cats": [1],
+      "meta": {"generator": "WordPress ?([\\d.]+)?\\;version:\\1"},
+      "implies": ["PHP\\;confidence:50"]
+    },
+    "Jenkins": {
+      "cats": [13],
+      "headers": {"X-Jenkins": "([\\d.]+)?\\;version:\\1"},
+      "html": ["<title>[^<]*Jenkins[^<]*</title>"]
+    },
+    "Grafana": {
+      "cats": [13],
+      "cookies": {"grafana_session": ""},
+      "html": ["<title>Grafana</title>"]
+    }
+  }
+}
