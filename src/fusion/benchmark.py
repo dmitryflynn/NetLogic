@@ -93,14 +93,22 @@ def score(cases: list[LabeledCase], complete: Optional[Callable] = None,
     Pass `complete` to use one LLM call for all cases (real model), or `complete_for`
     to build a per-case `complete` (used by the ground-truth oracle).
     """
+    def get_decisions(case):
+        comp = complete_for(case) if complete_for else complete
+        return run_pipeline(case, comp)
+    return _aggregate(cases, get_decisions)
+
+
+def _aggregate(cases: list[LabeledCase], decisions_for: Callable[["LabeledCase"], dict]) -> BenchmarkReport:
+    """Score the corpus given a function that yields {subject_key: decision} per case.
+    Shared by score() (runs the pipeline) and the CLI (precomputed decisions)."""
     tp = fp = fn = tn = 0
     raw_fp = 0
     crit_real = crit_reported = crit_fn = 0
     subjects = 0
 
     for case in cases:
-        comp = complete_for(case) if complete_for else complete
-        decisions = run_pipeline(case, comp)
+        decisions = decisions_for(case)
         for skey, gt in case.truth.items():
             subjects += 1
             reported = decisions.get(skey) in _REPORTED
@@ -118,10 +126,8 @@ def score(cases: list[LabeledCase], complete: Optional[Callable] = None,
             else:
                 tn += 1
 
-            # Raw baseline reports EVERY flagged subject → every noise subject is a FP.
             if not is_real:
                 raw_fp += 1
-
             if is_crit:
                 crit_real += 1
                 if reported:
@@ -130,7 +136,7 @@ def score(cases: list[LabeledCase], complete: Optional[Callable] = None,
     precision = tp / (tp + fp) if (tp + fp) else 1.0
     recall = tp / (tp + fn) if (tp + fn) else 1.0
     critical_recall = crit_reported / crit_real if crit_real else 1.0
-    raw_tp = tp + fn  # raw reports all real ones too
+    raw_tp = tp + fn
     raw_precision = raw_tp / (raw_tp + raw_fp) if (raw_tp + raw_fp) else 1.0
     fp_reduction = (raw_fp - fp) / raw_fp if raw_fp else 1.0
     passed = fp_reduction >= MIN_FP_REDUCTION and critical_recall >= REQUIRED_CRITICAL_RECALL
@@ -141,6 +147,11 @@ def score(cases: list[LabeledCase], complete: Optional[Callable] = None,
         critical_fn=crit_fn, raw_fp=raw_fp, raw_precision=raw_precision,
         fp_reduction=fp_reduction, passed=passed,
     )
+
+
+def _score_precomputed(cases: list[LabeledCase], by_name: dict[str, dict]) -> BenchmarkReport:
+    """Score from already-computed per-case decisions (so the CLI doesn't re-call the model)."""
+    return _aggregate(cases, lambda c: by_name[c.name])
 
 
 # ── Ground-truth oracle (upper-bound "perfect AI") ──────────────────────────────
@@ -233,3 +244,81 @@ def demo_corpus() -> list[LabeledCase]:
     }))
 
     return cases
+
+
+# ── CLI ─────────────────────────────────────────────────────────────────────────
+# Run:  python -m src.fusion.benchmark --provider ollama \
+#           --model llama3 --base-url http://my-ollama-cloud:11434/v1
+
+def _real_config(args):
+    """Build a resolved AIConfig from CLI args (real-model mode)."""
+    from src import ai_analyst as aa  # noqa: PLC0415
+    cfg = aa.AIConfig(
+        api_key=(args.api_key or None),
+        provider=args.provider,
+        model=(args.model or None),
+        base_url=(args.base_url or None),
+    ).resolve()
+    usable, reason = cfg.is_usable()
+    if not usable:
+        raise SystemExit(f"AI config not usable: {reason}")
+    return cfg
+
+
+def main(argv=None) -> int:
+    import argparse  # noqa: PLC0415
+
+    p = argparse.ArgumentParser(
+        prog="python -m src.fusion.benchmark",
+        description="Run the fusion-layer benchmark (sensors -> gate -> AI) against a model.",
+    )
+    p.add_argument("--provider", default="ollama",
+                   help="AI provider: ollama, openrouter, openai, anthropic, kimi, qwen, groq, custom (default: ollama)")
+    p.add_argument("--model", default="", help="Model id (e.g. llama3). Empty = provider default.")
+    p.add_argument("--base-url", default="",
+                   help="OpenAI-compatible base URL (e.g. http://my-ollama-cloud:11434/v1)")
+    p.add_argument("--api-key", default="", help="API key if the endpoint needs one (Ollama usually doesn't).")
+    p.add_argument("--oracle", action="store_true",
+                   help="Use the ground-truth oracle (no model) — the perfect-AI upper bound.")
+    p.add_argument("--verbose", "-v", action="store_true", help="Print per-subject decisions.")
+    args = p.parse_args(argv)
+
+    cases = demo_corpus()
+
+    # Resolve each case's completer ONCE (so verbose + scoring don't double-call the model).
+    if args.oracle:
+        label = "ORACLE (perfect-AI upper bound)"
+        completer_for = oracle_complete            # per-case
+    else:
+        from src.fusion.ai import make_completer   # noqa: PLC0415
+        cfg = _real_config(args)
+        print(f"Model: {cfg.provider} / {cfg.model}  @ {cfg.base_url}  (key {'set' if cfg.api_key else 'none'})")
+        completer = make_completer(cfg)
+        completer_for = (lambda _case: completer)  # same completer for all cases
+        label = "REAL MODEL"
+
+    decisions = {c.name: run_pipeline(c, completer_for(c)) for c in cases}
+
+    if args.verbose:
+        print("\nPer-subject decisions:")
+        for c in cases:
+            for (host, port, claim), dec in decisions[c.name].items():
+                print(f"  {c.name:10} {host}:{port:<5} {claim:26} -> {dec}")
+
+    report = _score_precomputed(cases, decisions)
+
+    print()
+    print(f"=== {label} ===")
+    print(report.summary())
+    print(f"  precision   : {report.precision:.0%}   (raw scanner {report.raw_precision:.0%})")
+    print(f"  recall      : {report.recall:.0%}")
+    print(f"  crit-recall : {report.critical_recall:.0%}   (critical FNs: {report.critical_fn})")
+    print(f"  FP reduction: {report.fp_reduction:.0%}   (raw {report.raw_fp} -> pipeline {report.fp})")
+    print(f"  counts      : tp={report.tp} fp={report.fp} fn={report.fn} tn={report.tn}")
+    print(f"  PASS GATE   : FP-cut>=80% AND crit-recall==100%  ->  {'PASS' if report.passed else 'FAIL'}")
+    return 0 if report.passed else 1
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
