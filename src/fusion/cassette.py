@@ -33,7 +33,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-from src.fusion.sensors import HttpResponse, Wappalyzer
+from src.fusion.sensors import HttpResponse, Nuclei, Wappalyzer
 from src.fusion.signals import Signal
 
 _CASSETTE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "cassettes")
@@ -203,6 +203,24 @@ def signals_from_cassette(cassette: Cassette) -> list[Signal]:
     for s in Wappalyzer().detect(primary):
         s.exposure = cassette.exposure
         signals.append(s)
+
+    # 1b. Nuclei-template sensor over each recorded GET path (a fresh client so the
+    #     replay cursors restart). No-op if PyYAML / no templates are present.
+    nuclei = Nuclei()
+    if nuclei.templates:
+        seen_paths: set = set()
+        for inter in cassette.interactions:
+            req = inter.get("request", {})
+            if str(req.get("method", "GET")).upper() != "GET":
+                continue
+            rpath = req.get("path", "/")
+            if rpath in seen_paths:
+                continue
+            seen_paths.add(rpath)
+            resp = CassetteHttpClient(cassette).http_response(rpath)
+            for s in nuclei.detect(resp, path=rpath):
+                s.exposure = cassette.exposure
+                signals.append(s)
 
     # 2. Stateful probes — emit a probe-confirmed vuln Signal on success.
     for probe in cassette.probes:

@@ -7,3 +7,17 @@
 fastapi==0.135.3
 uvicorn[standard]==0.44.0
 pydantic==2.13.0
+
+# Auth: verify IdP-issued (Clerk) OIDC tokens — RS256 signature + JWKS.
+# Pulls in `cryptography` for RSA. Used only by api/auth/oidc.py.
+PyJWT[crypto]==2.12.1
+
+# Postgres (system of record for users/orgs/api_keys/audit). Only needed when
+# NETLOGIC_DATABASE_URL is set; the app runs fully in-memory without these.
+psycopg[binary]==3.2.3
+psycopg-pool==3.2.4
+
+# OPTIONAL — only for the fusion Nuclei-template sensor (src/fusion/sensors/nuclei.py).
+# Imported lazily; without it the Nuclei sensor is disabled and the rest of the
+# pipeline is unaffected. Pure-Python, permissively licensed.
+PyYAML>=6.0
