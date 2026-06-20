@@ -78,6 +78,65 @@ class BenchmarkReport:
             f"{'PASS' if self.passed else 'FAIL'}"
         )
 
+    # ── Exports (research-paper ready) ──────────────────────────────────────────
+
+    def to_dict(self) -> dict:
+        return {
+            "cases": self.cases, "subjects": self.subjects,
+            "precision": round(self.precision, 4), "recall": round(self.recall, 4),
+            "critical_recall": round(self.critical_recall, 4), "critical_fn": self.critical_fn,
+            "raw_precision": round(self.raw_precision, 4),
+            "false_positives": self.fp, "raw_false_positives": self.raw_fp,
+            "fp_reduction": round(self.fp_reduction, 4),
+            "tp": self.tp, "fp": self.fp, "fn": self.fn, "tn": self.tn,
+            "passed": self.passed,
+            "pass_criteria": {"min_fp_reduction": MIN_FP_REDUCTION,
+                              "required_critical_recall": REQUIRED_CRITICAL_RECALL},
+        }
+
+    def to_json(self, indent: int = 2) -> str:
+        import json as _json  # noqa: PLC0415
+        return _json.dumps(self.to_dict(), indent=indent)
+
+    def to_markdown(self, title: str = "NetLogic Fusion-Pipeline Benchmark") -> str:
+        v = "PASS" if self.passed else "FAIL"
+        return "\n".join([
+            f"# {title}",
+            "",
+            f"**Result: {v}**  (gate: FP-reduction ≥ {MIN_FP_REDUCTION:.0%} AND "
+            f"critical-recall = {REQUIRED_CRITICAL_RECALL:.0%})  ·  "
+            f"{self.cases} cases, {self.subjects} subjects",
+            "",
+            "| Metric | Raw scanner | NetLogic pipeline |",
+            "|---|---:|---:|",
+            f"| Precision | {self.raw_precision:.1%} | **{self.precision:.1%}** |",
+            f"| Recall | 100.0% | {self.recall:.1%} |",
+            f"| Critical recall | 100.0% | **{self.critical_recall:.1%}** |",
+            f"| False positives | {self.raw_fp} | **{self.fp}** |",
+            f"| False-positive reduction | — | **{self.fp_reduction:.1%}** |",
+            f"| Critical false negatives | 0 | {self.critical_fn} |",
+            "",
+            f"Confusion: TP={self.tp}, FP={self.fp}, FN={self.fn}, TN={self.tn}.",
+        ])
+
+    def to_latex(self) -> str:
+        p, rp = self.precision * 100, self.raw_precision * 100
+        rec, cr = self.recall * 100, self.critical_recall * 100
+        fpr = self.fp_reduction * 100
+        return "\n".join([
+            r"\begin{tabular}{lrr}",
+            r"\toprule",
+            r"Metric & Raw scanner & NetLogic pipeline \\",
+            r"\midrule",
+            f"Precision & {rp:.1f}\\% & {p:.1f}\\% \\\\",
+            f"Recall & 100.0\\% & {rec:.1f}\\% \\\\",
+            f"Critical recall & 100.0\\% & {cr:.1f}\\% \\\\",
+            f"False positives & {self.raw_fp} & {self.fp} \\\\",
+            f"FP reduction & -- & {fpr:.1f}\\% \\\\",
+            r"\bottomrule",
+            r"\end{tabular}",
+        ])
+
 
 def run_pipeline(case: LabeledCase, complete: Optional[Callable] = None) -> dict[tuple, str]:
     """Run sensors-output → gate → AI on a case; return {subject_key: decision}."""

