@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -85,22 +84,10 @@ def build_user(gray: list[Verdict]) -> str:
     )
 
 
-def _extract_json_array(text: str):
-    """Pull a JSON array out of model output (tolerates fences / surrounding prose)."""
-    if not text:
-        return None
-    m = re.search(r"\[.*\]", text, re.S)
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return None
-
-
 def parse_ai_response(text: str, gray: list[Verdict]) -> dict[int, AIVerdict]:
     """Map the model's JSON array back to {gray_index: AIVerdict}. Tolerant of junk."""
-    arr = _extract_json_array(text)
+    from src.fusion.ai import robust_json_array  # noqa: PLC0415
+    arr = robust_json_array(text)
     out: dict[int, AIVerdict] = {}
     if not isinstance(arr, list):
         return out
@@ -159,20 +146,6 @@ def apply_ai_verdicts(gray: list[Verdict], ai_by_id: dict[int, AIVerdict]) -> No
             v.decision = "potential"
 
 
-def _default_complete(system: str, user: str) -> str:
-    """Default LLM call — reuses src.ai_analyst's transport (not modified here)."""
-    from src import ai_analyst as aa  # noqa: PLC0415
-    cfg = aa.config_from_env().resolve()
-    usable, reason = cfg.is_usable()
-    if not usable:
-        raise RuntimeError(reason)
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    res = aa._call_anthropic(cfg, messages) if cfg.api_style == "anthropic" else aa._call_openai(cfg, messages)
-    if res.error:
-        raise RuntimeError(res.error)
-    return res.markdown
-
-
 def run_adjudication(verdicts: list[Verdict], complete: Optional[CompleteFn] = None) -> list[Verdict]:
     """Adjudicate the gray band of `verdicts` with an LLM, returning the same list
     with gray decisions resolved to confirmed/discarded/potential. Fail-soft."""
@@ -180,7 +153,10 @@ def run_adjudication(verdicts: list[Verdict], complete: Optional[CompleteFn] = N
     if not gray:
         return verdicts
 
-    fn = complete or _default_complete
+    if complete is None:
+        from src.fusion.ai import make_completer  # noqa: PLC0415
+        complete = make_completer()
+    fn = complete
     try:
         text = fn(_SYSTEM, build_user(gray))
         ai_by_id = parse_ai_response(text, gray)
