@@ -1,0 +1,31 @@
+id: apache-tomcat-detect
+
+info:
+  name: Apache Tomcat Detection
+  author: netlogic-seed
+  severity: info
+  description: Seed Nuclei template (replace with the real ProjectDiscovery template set).
+  tags: tech,tomcat,apache
+  classification:
+    cvss-score: 0.0
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}"
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "Apache Tomcat"
+      - type: status
+        status:
+          - 200
+    extractors:
+      - type: regex
+        part: body
+        name: version
+        group: 1
+        regex:
+          - "Apache Tomcat/([0-9.]+)"
