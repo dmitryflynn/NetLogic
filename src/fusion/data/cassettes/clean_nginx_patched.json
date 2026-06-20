@@ -1,0 +1,20 @@
+{
+  "name": "clean-nginx-patched",
+  "label_source": "clean (patched nginx; a version-match CVE lead that is a FALSE positive)",
+  "target": {"host": "172.20.0.7", "port": 443},
+  "exposure": {"reachability": "public", "waf": null},
+  "interactions": [
+    {"request": {"method": "GET", "path": "/", "headers": {}, "body": ""},
+     "response": {"status": 200,
+                  "headers": {"Server": "nginx/1.25.3", "Content-Type": "text/html"},
+                  "body": "<html><head><title>Welcome</title></head><body>It works.</body></html>"}}
+  ],
+  "cve_candidates": [
+    {"claim": "CVE-2021-23017", "cvss": 9.8, "kev": false, "sources": ["nvd"], "reliability": "medium",
+     "evidence": "nginx 1.25.3 banner matched the resolver off-by-one CVE range by version only; resolver directive not configured and the build post-dates the fix"}
+  ],
+  "truth": [
+    {"port": 443, "claim": "CVE-2021-23017", "is_real": false, "severity": "high"},
+    {"port": 443, "claim": "nginx",          "is_real": false, "severity": "low"}
+  ]
+}

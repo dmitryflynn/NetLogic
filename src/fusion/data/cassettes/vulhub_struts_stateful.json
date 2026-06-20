@@ -1,0 +1,34 @@
+{
+  "name": "vulhub-struts-stateful",
+  "label_source": "vulhub:CVE-2018-11776 (seed recording — STATEFUL: GET token, POST payload)",
+  "target": {"host": "172.20.0.6", "port": 8080},
+  "exposure": {"reachability": "public", "waf": null},
+  "interactions": [
+    {"request": {"method": "GET", "path": "/", "headers": {}, "body": ""},
+     "response": {"status": 200,
+                  "headers": {"Server": "nginx/1.18.0", "Set-Cookie": "JSESSIONID=9af12bc; Path=/"},
+                  "body": "<html><head><title>Struts App</title></head><body>Sign in</body></html>"}},
+    {"request": {"method": "GET", "path": "/login", "headers": {}, "body": ""},
+     "response": {"status": 200,
+                  "headers": {"Content-Type": "text/html"},
+                  "body": "<form action=/admin/exec method=post><input name=\"csrf\" value=\"TOK-9f8e7d6c\"></form>"}},
+    {"request": {"method": "POST", "path": "/admin/exec",
+                 "headers": {}, "body": "csrf=TOK-9f8e7d6c&action=%24%7B...%7D"},
+     "response": {"status": 200,
+                  "headers": {"Content-Type": "text/plain"},
+                  "body": "command executed: uid=0(root) gid=0(root) groups=0(root)"}}
+  ],
+  "probes": [
+    {"claim": "CVE-2018-11776", "cvss": 9.8, "kev": true, "exploit_available": true, "severity": "critical",
+     "steps": [
+       {"method": "GET", "path": "/login",
+        "extract": {"token": "name=\"csrf\" value=\"([^\"]+)\""}},
+       {"method": "POST", "path": "/admin/exec", "body": "csrf={token}&action=ognl-payload",
+        "success": "uid=\\d+\\(root\\)"}
+     ]}
+  ],
+  "truth": [
+    {"port": 8080, "claim": "CVE-2018-11776", "is_real": true,  "severity": "critical"},
+    {"port": 8080, "claim": "nginx",          "is_real": false, "severity": "low"}
+  ]
+}

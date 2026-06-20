@@ -1,0 +1,22 @@
+{
+  "name": "clean-wordpress",
+  "label_source": "clean (current WordPress; a corroborated medium CVE lead that is a FALSE positive)",
+  "target": {"host": "172.20.0.8", "port": 443},
+  "exposure": {"reachability": "public", "waf": null},
+  "interactions": [
+    {"request": {"method": "GET", "path": "/", "headers": {}, "body": ""},
+     "response": {"status": 200,
+                  "headers": {"Server": "Apache/2.4.58", "Content-Type": "text/html"},
+                  "body": "<html><head><meta name=\"generator\" content=\"WordPress 6.4.2\"></head><body>Hello</body></html>"}}
+  ],
+  "cve_candidates": [
+    {"claim": "CVE-2023-2745", "cvss": 5.4, "kev": false, "sources": ["nvd", "nuclei"], "reliability": "medium",
+     "evidence": "WordPress 6.4.2 matched an older XSS advisory by version family only; no PoC reproduced and the fix shipped before 6.4.2"}
+  ],
+  "truth": [
+    {"port": 443, "claim": "CVE-2023-2745", "is_real": false, "severity": "medium"},
+    {"port": 443, "claim": "apache",        "is_real": false, "severity": "low"},
+    {"port": 443, "claim": "wordpress",     "is_real": false, "severity": "low"},
+    {"port": 443, "claim": "php",           "is_real": false, "severity": "low"}
+  ]
+}
