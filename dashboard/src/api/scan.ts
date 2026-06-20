@@ -21,6 +21,19 @@ export interface ScanRequest {
   min_cvss: number
   nvd_key?: string
   agent_id?: string
+  // AI analysis + authenticated scanning (Tier 1/3)
+  do_ai?: boolean
+  ai_provider?: string
+  ai_key?: string
+  ai_model?: string
+  ai_base_url?: string
+  ssh_user?: string
+  ssh_key?: string
+  ssh_pass?: string
+  ssh_port?: number
+  // Intelligent agent routing: require capabilities and/or pin to a vantage point
+  required_capabilities?: string[]
+  agent_selector?: Record<string, string>
 }
 
 export interface JobSummary {
@@ -69,6 +82,73 @@ export interface VulnEvent {
   exploitable?: boolean
   exploit_ref?: string
   kev?: boolean   // CISA Known Exploited Vulnerability
+  epss?: number   // EPSS probability of exploitation (0–1)
+}
+
+// One adjudicated finding from the fusion gate + AI.
+export interface FusionRow {
+  subject: string
+  port?: number | null
+  decision: 'confirmed' | 'potential' | 'discarded'
+  impact: 'critical' | 'high' | 'medium' | 'low'
+  pinned: boolean
+  agreement: number
+  rationale?: string
+  ai?: { verdict: string; reason: string } | null
+  safety_override?: boolean
+}
+
+export interface FusionResult {
+  confirmed: FusionRow[]
+  potential: FusionRow[]
+  discarded: FusionRow[]
+  summary: {
+    signals: number
+    confirmed: number
+    potential: number
+    discarded: number
+    ai_adjudicated: number
+  }
+}
+
+// Aggregated deep-scan sections derived from the event stream.
+export interface ScanSections {
+  topology?: Record<string, unknown>
+  exploitability?: { attributes?: Record<string, unknown>[] }
+  webFingerprint?: Record<string, unknown>
+  ai?: { markdown?: string; error?: string; provider?: string; model?: string }
+  fusion?: FusionResult
+  tls?: { results?: Record<string, unknown>[] }
+  headers?: Record<string, unknown>
+  stack?: Record<string, unknown>
+  dns?: Record<string, unknown>
+  authenticated?: Record<string, unknown>
+  scanDiff?: Record<string, unknown>
+}
+
+/** Pull the latest payload for each deep-scan section out of the event list. */
+export function extractSections(events: ScanEvent[]): ScanSections {
+  const types = ['topology', 'service_exploitability', 'web_fingerprint', 'ai', 'fusion',
+    'tls', 'headers', 'stack', 'dns', 'authenticated', 'scan_diff'] as const
+  const last = new Map<string, Record<string, unknown>>()
+  for (const e of events) {
+    if (e.data && types.includes(e.type as typeof types[number])) {
+      last.set(e.type, e.data as Record<string, unknown>)
+    }
+  }
+  return {
+    topology:       last.get('topology'),
+    exploitability: last.get('service_exploitability') as ScanSections['exploitability'],
+    webFingerprint: last.get('web_fingerprint'),
+    ai:             last.get('ai') as ScanSections['ai'],
+    fusion:         last.get('fusion') as unknown as ScanSections['fusion'],
+    tls:            last.get('tls') as ScanSections['tls'],
+    headers:        last.get('headers'),
+    stack:          last.get('stack'),
+    dns:            last.get('dns'),
+    authenticated:  last.get('authenticated'),
+    scanDiff:       last.get('scan_diff'),
+  }
 }
 
 export interface Agent {
@@ -80,6 +160,9 @@ export interface Agent {
   tags: Record<string, string>
   status: 'online' | 'busy' | 'offline' | 'disabled'
   disabled: boolean
+  concurrency: number
+  active_jobs: number
+  load: number
   registered_at: number
   last_heartbeat: number | null
   current_job_id: string | null
@@ -154,6 +237,7 @@ export interface RegisterAgentRequest {
   capabilities: string[]
   version: string
   tags: Record<string, string>
+  concurrency?: number
 }
 
 export interface RegisterAgentResponse {
@@ -205,6 +289,67 @@ export const useVdbSync = () => {
   })
 }
 
+// ── AI settings ───────────────────────────────────────────────────────────────
+
+export interface AiSettings {
+  provider: string
+  model: string
+  base_url: string
+  key_set: boolean
+  key_hint: string
+  inherits_ai?: boolean   // fusion only: using the AI-analysis config (no separate key)
+  providers: string[]
+  presets: Record<string, { base_url: string; model: string }>
+}
+
+export interface AiSettingsUpdate {
+  provider: string
+  api_key?: string   // omit/empty to keep the existing stored key
+  model?: string
+  base_url?: string
+}
+
+export const useAiSettings = () =>
+  useQuery<AiSettings>({
+    queryKey: ['ai-settings'],
+    queryFn: () => api.get('/settings/ai'),
+    staleTime: 30_000,
+  })
+
+export const useSaveAiSettings = () => {
+  const qc = useQueryClient()
+  return useMutation<AiSettings, Error, AiSettingsUpdate>({
+    mutationFn: (body) => api.post('/settings/ai', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ai-settings'] }),
+  })
+}
+
+export const useTestAiSettings = () =>
+  useMutation<{ ok: boolean; error?: string; provider?: string; model?: string }, Error, void>({
+    mutationFn: () => api.post('/settings/ai/test'),
+  })
+
+// ── Fusion adjudicator config (separate provider/model/key) ────────────────────
+export const useFusionSettings = () =>
+  useQuery<AiSettings>({
+    queryKey: ['fusion-settings'],
+    queryFn: () => api.get('/settings/fusion'),
+    staleTime: 30_000,
+  })
+
+export const useSaveFusionSettings = () => {
+  const qc = useQueryClient()
+  return useMutation<AiSettings, Error, AiSettingsUpdate>({
+    mutationFn: (body) => api.post('/settings/fusion', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['fusion-settings'] }),
+  })
+}
+
+export const useTestFusionSettings = () =>
+  useMutation<{ ok: boolean; error?: string; provider?: string; model?: string }, Error, void>({
+    mutationFn: () => api.post('/settings/fusion/test'),
+  })
+
 /**
  * Consume GET /jobs/{id}/stream via fetch + ReadableStream.
  * EventSource cannot send Authorization headers, so we use raw fetch.
@@ -214,20 +359,30 @@ export function useStreamScan(jobId: string | null) {
   const [streaming, setStreaming] = useState(false)
   const [done, setDone] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+  const retriesRef = useRef(0)
 
   useEffect(() => {
     if (!jobId) return
 
+    retriesRef.current = 0
     setEvents([])
     setDone(false)
     setStreaming(true)
 
-    const ctrl = new AbortController()
-    abortRef.current = ctrl
+    let terminated = false
+    let cancelled = false
 
-    ;(async () => {
+    async function connect(): Promise<void> {
+      const ctrl = new AbortController()
+      abortRef.current = ctrl
+
+      // Add a 15s connection timeout to prevent hanging forever
+      const timeoutId = setTimeout(() => ctrl.abort(), 15_000)
+
       try {
         const res = await streamFetch(`/jobs/${jobId}/stream`, ctrl.signal)
+        clearTimeout(timeoutId)
+
         if (!res.ok || !res.body) { setDone(true); setStreaming(false); return }
 
         const reader = res.body.getReader()
@@ -236,36 +391,74 @@ export function useStreamScan(jobId: string | null) {
 
         while (true) {
           const { value, done: eof } = await reader.read()
-          if (eof) break
+          if (eof) {
+            // Process any remaining data in the buffer before closing
+            if (buf.trim()) {
+              const line = buf.trim()
+              if (line.startsWith('data:')) {
+                try {
+                  const ev: ScanEvent = JSON.parse(line.slice(5).trim())
+                  if (ev.type !== 'ping') {
+                    setEvents((prev) => [...prev, ev])
+                    if (ev.type === 'done' || ev.type === 'error') {
+                      setDone(true)
+                      setStreaming(false)
+                      terminated = true
+                      return
+                    }
+                  }
+                } catch { /* skip malformed */ }
+              }
+            }
+            break
+          }
 
           buf += dec.decode(value, { stream: true })
-          const chunks = buf.split('\n\n')
-          buf = chunks.pop() ?? ''
-
-          for (const chunk of chunks) {
-            const line = chunk.trim()
+          // SSE line-delimited parsing: accumulate lines until empty line
+          // (event separator). Never split on \n\n inside JSON values.
+          let lineEnd: number
+          while ((lineEnd = buf.indexOf('\n')) !== -1) {
+            const line = buf.slice(0, lineEnd).trimEnd()
+            buf = buf.slice(lineEnd + 1)
+            if (line === '') {
+              // Empty line = event separator — process accumulated data
+              // (events are single-line in our backend, so nothing to flush)
+              continue
+            }
             if (!line.startsWith('data:')) continue
             try {
-              const ev: ScanEvent = structuredClone(JSON.parse(line.slice(5).trim()))
+              const ev: ScanEvent = JSON.parse(line.slice(5).trim())
               if (ev.type === 'ping') continue
               setEvents((prev) => [...prev, ev])
               if (ev.type === 'done' || ev.type === 'error') {
                 setDone(true)
                 setStreaming(false)
+                terminated = true
                 return
               }
             } catch { /* skip malformed */ }
           }
         }
       } catch (e) {
-        if ((e as Error).name !== 'AbortError') console.error('SSE error', e)
+        if ((e as Error).name === 'AbortError') return
+        console.error('SSE error', e)
       } finally {
+        // Don't reconnect if we received a terminal event or user aborted.
+        if (!terminated && !cancelled && retriesRef.current < 5) {
+          retriesRef.current++
+          const delay = Math.min(1000 * Math.pow(2, retriesRef.current), 15_000)
+          await new Promise((r) => setTimeout(r, delay))
+          if (!cancelled) await connect()
+          return
+        }
         setDone(true)
         setStreaming(false)
       }
-    })()
+    }
 
-    return () => ctrl.abort()
+    connect()
+
+    return () => { cancelled = true; abortRef.current?.abort() }
   }, [jobId])
 
   const ports    = events.filter((e) => e.type === 'port').map((e) => e.data as PortEvent)

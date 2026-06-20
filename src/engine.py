@@ -270,8 +270,9 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
         try:
             from src.fusion.engine_bridge import run_fusion
             from src import ai_analyst
-            fcfg = ai_analyst.build_config(api_key=_g(args, "ai_key") or None, provider=_g(args, "ai_provider") or None,
-                                           model=_g(args, "ai_model") or None, base_url=_g(args, "ai_base_url") or None)
+            # Fusion uses its OWN configured model (NETLOGIC_FUSION_*), falling back to
+            # the AI-analyst config when no separate fusion key is set.
+            fcfg = ai_analyst.fusion_config_from_env()
             art["fusion"] = run_fusion(art, cfg=fcfg)
             _emit("fusion", art["fusion"])
         except Exception as e:
