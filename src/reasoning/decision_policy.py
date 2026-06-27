@@ -40,22 +40,52 @@ class RankedAction:
 
 
 class DecisionPolicy(ABC):
-    """Abstract base for scheduling policies."""
+    """Abstract base for scheduling policies.
+
+    Two ranking surfaces:
+      • `rank_actions` — the Phase 2 SensorStep loop (direct probes).
+      • `rank_candidates` — the Phase 3/5 unified `Candidate` pool (Intent-producing sources:
+        generator / playbook / capability / history). Policies differ by `_score_candidate`,
+        so genuinely different optimization objectives produce genuinely different orderings.
+    """
 
     @abstractmethod
     def rank_actions(self, steps: list[SensorStep], ctx: StepContext,
                      seen: Optional[set] = None) -> list[RankedAction]:
-        """Rank a list of SensorSteps by priority. Higher priority = better.
+        """Rank SensorSteps by priority (highest first), excluding `seen`."""
+        pass
 
-        Args:
-            steps: Available SensorSteps to rank
-            ctx: StepContext with current state + artifacts
-            seen: Set of step names already tried (to skip)
+    @abstractmethod
+    def _score_candidate(self, candidate) -> float:
+        """Policy-specific scalar score for a Candidate. Higher = preferred.
 
-        Returns:
-            Sorted list of RankedActions (highest priority first), excluding seen
+        This is the single point where policies diverge: GreedyPolicy ignores cost,
+        BudgetPolicy maximizes gain-per-cost, FastPolicy minimizes latency, etc.
         """
         pass
+
+    def rank_candidates(self, candidates: list, *, exclude_unmet_prereqs: bool = True,
+                        satisfied: Optional[set] = None) -> list:
+        """Rank a heterogeneous `Candidate` pool. Source-agnostic.
+
+        Returns a list of RankedCandidate, highest priority first. Candidates whose
+        prerequisites are not in `satisfied` are dropped when `exclude_unmet_prereqs` is set.
+        """
+        from src.reasoning.candidate import RankedCandidate  # noqa: PLC0415
+        satisfied = satisfied or set()
+        ranked = []
+        for c in candidates:
+            if exclude_unmet_prereqs and c.prerequisites:
+                if not set(c.prerequisites) <= satisfied:
+                    continue
+            score = self._score_candidate(c)
+            ranked.append(RankedCandidate(
+                candidate=c, priority=round(score, 4),
+                rationale=f"policy={self.__class__.__name__} source={c.source} "
+                          f"gain={c.expected_information_gain:.2f} cost={c.cost_factor():.1f}"))
+        # Stable tie-break: by source then kind, so equal scores order deterministically.
+        ranked.sort(key=lambda r: (-r.priority, r.candidate.source, r.candidate.kind))
+        return ranked
 
     @abstractmethod
     def explain(self) -> str:
@@ -172,6 +202,17 @@ class DefaultDecisionPolicy(DecisionPolicy):
         except Exception:  # noqa: BLE001
             return False
 
+    def _score_candidate(self, candidate) -> float:
+        """Weighted *additive* blend of gain and cost.
+
+        Additive (not ratio) so the weights genuinely change ordering — a global multiplicative
+        weight would cancel and leave ordering invariant (that pure gain/cost ratio is BudgetPolicy).
+        score = w_gain · gain − w_budget · cost_factor.
+        """
+        gain = self.info_gain_weight * candidate.expected_information_gain
+        cost = self.budget_weight * candidate.cost_factor()
+        return gain - cost
+
     def explain(self) -> str:
         """Human-readable explanation of this policy."""
         return (
@@ -180,3 +221,42 @@ class DefaultDecisionPolicy(DecisionPolicy):
             f"history={self.history_weight}): "
             "Combines information gain × entropy reduction ÷ (cost × history discount)"
         )
+
+
+# ── Alternative policies: genuinely different objectives (review point #2) ──
+#
+# Each overrides only `_score_candidate`, so the same candidate pool yields a different ordering
+# per policy. They share the SensorStep path via DefaultDecisionPolicy so the live Phase 2 loop is
+# unaffected unless a policy is explicitly injected.
+
+
+class GreedyPolicy(DefaultDecisionPolicy):
+    """Maximize expected information gain, ignoring cost. 'Learn the most, whatever it takes.'"""
+
+    def _score_candidate(self, candidate) -> float:
+        return candidate.expected_information_gain
+
+    def explain(self) -> str:
+        return "GreedyPolicy: rank by expected_information_gain only (cost ignored)."
+
+
+class BudgetPolicy(DefaultDecisionPolicy):
+    """Maximize information gain *per unit cost*. 'Best bang for the probe.'"""
+
+    def _score_candidate(self, candidate) -> float:
+        return candidate.expected_information_gain / max(0.01, candidate.cost_factor())
+
+    def explain(self) -> str:
+        return "BudgetPolicy: rank by expected_information_gain / cost_factor."
+
+
+class FastPolicy(DefaultDecisionPolicy):
+    """Minimize latency. 'Cheapest/fastest first', gain as tie-breaker via the stable sort."""
+
+    def _score_candidate(self, candidate) -> float:
+        # Higher score = lower latency. Invert estimated time.
+        time_ms = max(1.0, float(candidate.estimated_cost.time_ms))
+        return 1000.0 / time_ms
+
+    def explain(self) -> str:
+        return "FastPolicy: rank by inverse latency (fastest first)."

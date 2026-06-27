@@ -47,10 +47,10 @@ def _make_test_step(name: str = "test_step", base_gain: float = 1.0,
     step = SensorStep(
         name=name,
         persona="service_discovery",
+        run=lambda ctx: None,
         base_gain=base_gain,
         cost=cost,
-        resolves=resolves,
-        probe_spec=lambda t: None,
+        resolves=tuple(resolves),
         applies=lambda ctx: True,
     )
     return step
@@ -91,28 +91,25 @@ class TestDefaultDecisionPolicy:
         assert ranked[0].step.name == "cheap"  # Lower cost should be ranked first
         assert ranked[0].priority > ranked[1].priority
 
-    def test_policy_weighting(self):
-        """Policy weights affect ranking."""
-        # Policy that heavily weights info_gain
-        policy_gain = DefaultDecisionPolicy(info_gain_weight=10.0, budget_weight=0.1)
-        # Policy that heavily weights budget
-        policy_cost = DefaultDecisionPolicy(info_gain_weight=0.1, budget_weight=10.0)
+    def test_sensorstep_ordering_is_weight_invariant(self):
+        """The SensorStep path keeps the legacy multiplicative formula, so global weights
+        cancel and ordering is invariant — this is what preserves equivalence with the Phase 4
+        scheduler. (Weight *sensitivity* is a property of the Candidate path; see
+        test_candidate_policy.py::test_default_weight_sensitivity.)"""
+        policy_a = DefaultDecisionPolicy(info_gain_weight=10.0, budget_weight=0.1)
+        policy_b = DefaultDecisionPolicy(info_gain_weight=0.1, budget_weight=10.0)
 
         state = _make_test_state()
         ctx = _make_test_context(state)
 
-        step_high_gain_high_cost = _make_test_step("hg_hc", base_gain=10.0,
-                                                  cost={"time_ms": 5000, "tokens": 0, "probes": 1})
-        step_low_gain_low_cost = _make_test_step("lg_lc", base_gain=1.0,
-                                                cost={"time_ms": 100, "tokens": 0, "probes": 1})
+        hg = _make_test_step("hg_hc", base_gain=10.0,
+                             cost={"time_ms": 5000, "tokens": 0, "probes": 1})
+        lg = _make_test_step("lg_lc", base_gain=1.0,
+                             cost={"time_ms": 100, "tokens": 0, "probes": 1})
 
-        ranked_gain = policy_gain.rank_actions([step_high_gain_high_cost, step_low_gain_low_cost], ctx)
-        ranked_cost = policy_cost.rank_actions([step_high_gain_high_cost, step_low_gain_low_cost], ctx)
-
-        # gain-focused policy should prefer high gain
-        assert ranked_gain[0].step.name == "hg_hc"
-        # cost-focused policy should prefer low cost
-        assert ranked_cost[0].step.name == "lg_lc"
+        order_a = [r.step.name for r in policy_a.rank_actions([hg, lg], ctx)]
+        order_b = [r.step.name for r in policy_b.rank_actions([hg, lg], ctx)]
+        assert order_a == order_b   # weight-invariant on the SensorStep path
 
     def test_policy_excludes_seen_steps(self):
         """Policy should exclude steps already seen."""

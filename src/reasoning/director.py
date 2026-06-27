@@ -267,11 +267,20 @@ class ReconDirector:
             # (rule packs) — confirms/refutes, satisfies objectives, records contradictions.
             try:
                 from src.reasoning.inference import InferenceEngine  # noqa: PLC0415
-                for s in InferenceEngine().infer(state):
+                inference_steps = InferenceEngine().infer(state)
+                for s in inference_steps:
                     state.execution.explanations.append({
                         "decision": s.decision, "evidence_ids": list(s.evidence_refs),
                         "supporting_obs": [s.rule], "confidence_delta": 0.0,
                         "rule_applied": f"inference:{s.rule}", "ai_summary": ""})
+                # Phase 5 §1: build the irreproducible provenance core (Observation→Inference→
+                # Hypothesis). Additive + read-only — never perturbs the byte-identical invariant.
+                try:
+                    from src.reasoning.provenance import ProvenanceBuilder  # noqa: PLC0415
+                    prov = ProvenanceBuilder().build(state, inference_steps)
+                    state.execution.provenance = prov.to_dict()
+                except Exception:  # noqa: BLE001
+                    pass
             except Exception:  # noqa: BLE001
                 pass
 
