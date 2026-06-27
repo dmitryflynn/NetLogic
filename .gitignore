@@ -44,6 +44,7 @@ release/
 # ─── Scan reports (local output) ─────────────────────────────────────────────
 netlogic_*.json
 netlogic_*.html
+scan_results/
 
 # ─── OS / editor noise ───────────────────────────────────────────────────────
 .DS_Store
@@ -64,7 +65,10 @@ desktop.ini
 !README.md
 !SECURITY.md
 
+# ─── Pytest cache ────────────────────────────────────────────────────────────
+.pytest_cache/
+
 # ─── Scratch / test files ────────────────────────────────────────────────────
 test_write.txt
 NetLogic-Research_test.txt
-setup_netlogic_research.py
+

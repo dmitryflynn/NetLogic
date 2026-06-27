@@ -4,9 +4,12 @@ Safe, read-only active probes that attempt to confirm specific known vulnerabili
 All probes are non-destructive and do not modify target state.
 """
 
+import hashlib
+import random
 import socket
 import struct
 import base64
+import ssl
 import urllib.request
 import urllib.error
 from dataclasses import dataclass, field
@@ -59,20 +62,56 @@ def _raw_http(host: str, port: int, request_bytes: bytes,
 
 def _http_get(host: str, port: int, path: str, scheme: str = "http",
               timeout: float = 5.0, headers: dict = None) -> tuple[Optional[int], Optional[str]]:
-    """Simple HTTP GET returning (status_code, body) or (None, None)."""
+    """Simple HTTP GET returning (status_code, body) or (None, None).
+    Checks the active CDN/edge block baseline: if the response matches the
+    baseline fingerprint, returns (-1, "") so callers skip it."""
     try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
         url = f"{scheme}://{host}:{port}{path}"
         req = urllib.request.Request(url, headers=headers or {})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read(16384).decode("utf-8", errors="replace")
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            status, body = resp.status, resp.read(16384).decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         try:
             body = e.read(4096).decode("utf-8", errors="replace")
         except Exception:
             body = ""
-        return e.code, body
+        status = e.code
     except Exception:
         return None, None
+    return _baseline_filter(status, body)
+
+
+# ── CDN/Edge block baseline ────────────────────────────────────────────────
+# Thread-local (well, module-level — probes run sequentially per port) baseline
+# fingerprint. Set by probe_web_vulnerabilities() before running per-port probes;
+# _http_get checks every response against it and returns (-1, "") on match so
+# the caller treats it as a non-response rather than a confirmed finding.
+
+_BASELINE: Optional[dict] = None
+
+
+def _compute_baseline(host: str, port: int, scheme: str = "http",
+                      timeout: float = 5.0) -> Optional[dict]:
+    """Send GET to a random path and return a fingerprint. Returns None if
+    the target is unreachable (no baseline = not blocked)."""
+    from src.service_prober import _response_baseline as _rb
+    return _rb(host, port, scheme=scheme, timeout=timeout)
+
+
+def _baseline_filter(status: Optional[int], body: Optional[str]) -> tuple[Optional[int], Optional[str]]:
+    """Check a probe response against the active baseline. If it matches, return
+    (-1, "") so the probe treats it as unreachable rather than a confirmed finding."""
+    global _BASELINE
+    if _BASELINE is None or status is None:
+        return status, body
+    from src.service_prober import _is_baseline_block as _ibb
+    body_str = body or ""
+    if _ibb(_BASELINE, status, body_str, None):
+        return -1, ""
+    return status, body
 
 
 # ─── CVE-Specific Probes ─────────────────────────────────────────────────────
@@ -475,10 +514,7 @@ def probe_log4shell_headers(host: str, port: int, scheme: str = "http",
         "X-Forwarded-For": jndi_payload,
         "Referer":       f"https://example.com/{jndi_payload}",
     }
-    status, body = _http_get(host, port, "/", scheme=scheme, timeout=timeout, headers=headers)
-    if status is None:
-        return None
-    # Look for Java-specific error traces that indicate Log4j attempted to process the string
+    log4j_paths = ["/", "/api", "/search", "/form-handler", "/contact", "/login", "/admin"]
     java_error_indicators = [
         "javax.naming.CommunicationException",
         "com.sun.jndi.ldap",
@@ -486,8 +522,12 @@ def probe_log4shell_headers(host: str, port: int, scheme: str = "http",
         "java.lang.reflect",
         "NamingException",
     ]
-    if body and any(ind in body for ind in java_error_indicators):
-        return CVEProbe(
+    for path in log4j_paths:
+        status, body = _http_get(host, port, path, scheme=scheme, timeout=timeout, headers=headers)
+        if status is None:
+            continue
+        if body and any(ind in body for ind in java_error_indicators):
+            return CVEProbe(
             cve_id="CVE-2021-44228",
             title="Log4Shell — Possible Log4j JNDI Processing (Error Leakage)",
             severity="CRITICAL", confirmed=False,
@@ -509,15 +549,22 @@ def probe_iis_shortname(host: str, port: int, scheme: str = "http",
     resp = _raw_http(host, port, req.encode(), timeout=timeout)
     if not resp:
         return None
-    # IIS returns 404 for valid tilde path (file exists but hidden) vs
-    # 400 Bad Request for non-IIS servers — look for HTTP 404 on IIS
-    if "HTTP/1.1 404" in resp and ("IIS" in resp or "X-Powered-By: ASP" in resp):
-        # Distinguish from other 404s: IIS tilde returns specific error code
-        # Do a comparison request
+    def _status_line(r):
+        first = r.split("\r\n", 1)[0]
+        parts = first.split(None, 2)
+        return parts[1] if len(parts) >= 2 and parts[1].isdigit() else None
+
+    is_iis = ("IIS" in resp or "X-Powered-By: ASP" in resp)
+    tilde_status = _status_line(resp)
+    # The tilde-enumeration signal is a DIVERGENCE: a tilde path and a random
+    # invalid path must return *different* status codes. If both return the same
+    # code (e.g. 404 for everything — the normal/secure case) there is no leak.
+    if is_iis and tilde_status:
         resp2_raw = _raw_http(host, port,
-                              b"GET /invalidpath123456789/ HTTP/1.1\r\nHost: " + host.encode() + b"\r\nConnection: close\r\n\r\n",
+                              b"GET /netlogic-nonexistent-xyz123/ HTTP/1.1\r\nHost: " + host.encode() + b"\r\nConnection: close\r\n\r\n",
                               timeout=timeout)
-        if resp2_raw and resp2_raw.startswith("HTTP/1.1 404") and "IIS" in resp:
+        invalid_status = _status_line(resp2_raw) if resp2_raw else None
+        if invalid_status and tilde_status != invalid_status:
             return CVEProbe(
                 cve_id="CVE-2010-2730",
                 title="IIS Tilde Enumeration — 8.3 Filename Disclosure",
@@ -525,7 +572,7 @@ def probe_iis_shortname(host: str, port: int, scheme: str = "http",
                 detail=("IIS detected with tilde-sensitive 404 responses. "
                         "IIS 8.3 short filename enumeration may be possible, "
                         "allowing discovery of hidden files and directories."),
-                evidence="GET /~1/ on IIS server → HTTP 404 (IIS-specific behavior)",
+                evidence=f"GET /~1/ → HTTP {tilde_status} vs invalid path → HTTP {invalid_status} (IIS tilde divergence)",
                 remediation="Disable short filename creation: fsutil 8dot3name set <drive> 1; "
                             "configure IIS to return 404 for all invalid paths uniformly."
             )
@@ -548,6 +595,7 @@ def probe_web_vulnerabilities(target: str, ports: list,
     Run CVE-specific vulnerability probes against discovered HTTP services.
     `ports` is a list of PortResult objects from scanner.py.
     """
+    global _BASELINE
     result = VulnProbeResult(target=target)
     all_port_nums = {p.port for p in ports}
 
@@ -562,6 +610,11 @@ def probe_web_vulnerabilities(target: str, ports: list,
         scheme = "https" if (port_result.tls or port in (443, 8443, 8444)) else "http"
 
         result.probes_run += 1
+
+        # ── CDN/edge block baseline ──────────────────────────────────────
+        # Send a random-path probe first. If every subsequent probe returns
+        # the same block-page response, all findings for this port are FPs.
+        _BASELINE = _compute_baseline(target, port, scheme=scheme, timeout=timeout)
 
         # Universal HTTP probes — run on every HTTP port
         listing = probe_directory_listing(target, port, scheme=scheme, timeout=timeout)
@@ -612,6 +665,8 @@ def probe_web_vulnerabilities(target: str, ports: list,
             grafana = probe_grafana_path_traversal(target, port, scheme=scheme, timeout=timeout)
             if grafana:
                 result.confirmed.append(grafana)
+
+        _BASELINE = None  # clear baseline after per-port probes
 
     # Ghostcat — check AJP port 8009 if found, or try if Tomcat ports exist
     has_tomcat = any(p.port in (8080, 8443) or p.service in ("http-alt", "https-alt")

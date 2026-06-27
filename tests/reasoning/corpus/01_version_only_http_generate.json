@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "version-only critical + unidentified HTTP service → verify + identify_framework",
+  "kind": "generate",
+  "target": "ex.com",
+  "scope": ["ex.com"],
+  "input_artifacts": {
+    "host_result": {"ip": "ex.com", "hostname": "ex.com",
+                    "ports": [{"port": 80, "service": "http", "state": "open"}]},
+    "vuln_matches": [{"port": 80, "service": "http", "product": "apache", "version": "2.4.7",
+      "detection_confidence": "HIGH",
+      "cves": [{"id": "CVE-2021-40438", "cvss_score": 9.0, "kev": false,
+                "exploit_available": true, "description": "mod_proxy SSRF"}]}]
+  },
+  "expect": {
+    "objectives_with_prefix": ["verify:", "identify_framework:"],
+    "hypothesis_reasons_with_prefix": ["identify_framework:"],
+    "intent_goals_with_prefix": ["identify_framework:"],
+    "plan": {"min_plans": 1, "protocols_contain": ["HTTP"]}
+  }
+}

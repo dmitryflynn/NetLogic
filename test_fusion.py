@@ -103,6 +103,16 @@ def test_exploitable_critical_is_pinned():
     assert v.pinned is True and v.decision == "confirmed"
 
 
+def test_version_matched_exploitable_critical_is_not_pinned():
+    """Version-matched signals (e.g. Nuclei content matches) must not be pinned by
+    EPSS/exploit alone — they remain candidate for patch-level verification."""
+    [v] = adjudicate([_sig("nuclei", "CVE-2099-0001", reliability="medium",
+                           cvss=9.8, epss=0.95, version_matched=True)])
+    assert v.pinned is False
+    # Lone + high-impact → gray (AI adjudication), never auto-confirmed
+    assert v.decision == "gray"
+
+
 # ── Deterministic, exposure-aware impact ────────────────────────────────────────
 
 def test_impact_kev_is_critical():
@@ -259,15 +269,17 @@ def test_safety_invariants_hold_across_input_space():
     exploits   = [False, True]
     epsss      = [0.0, 0.3, 0.5, 0.9]
     reaches    = [None, "public", "private", "unknown"]
+    versioned  = [False, True]
 
     checked = 0
-    for src, rel, cvss, kev, expl, epss, reach in itertools.product(
-        sources, rels, cvsses, kevs, exploits, epsss, reaches
+    for src, rel, cvss, kev, expl, epss, reach, vm in itertools.product(
+        sources, rels, cvsses, kevs, exploits, epsss, reaches, versioned
     ):
         exposure = {"reachability": reach} if reach else None
         s = Signal(source=src, kind="vuln", claim="x", host="h", port=1,
                    reliability=rel, cvss=cvss, kev=kev,
-                   exploit_available=expl, epss=epss, exposure=exposure)
+                   exploit_available=expl, epss=epss, exposure=exposure,
+                   version_matched=vm)
         [v] = adjudicate([s])
         checked += 1
 
@@ -298,4 +310,4 @@ def test_safety_invariants_hold_across_input_space():
         # 6. Decisions are always one of the three legal values.
         assert v.decision in ("confirmed", "discarded", "gray")
 
-    assert checked == 4 * 3 * 7 * 2 * 2 * 4 * 4   # full cartesian product exercised
+    assert checked == 4 * 3 * 7 * 2 * 2 * 4 * 4 * 2  # full cartesian product exercised

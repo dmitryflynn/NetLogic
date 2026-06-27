@@ -1,0 +1,6 @@
+{
+  "name": "framework proposal with injected instructions + bad likelihoods",
+  "kind": "framework_proposals",
+  "raw": "[{\"objective\": \"identify_framework:ex.com:80<script>\", \"candidates\": {\"wordpress\": 0.6, \"DROP TABLE\": -5, \"x\": \"NaN\"}}]",
+  "expect_candidates": {"wordpress": 0.6}
+}

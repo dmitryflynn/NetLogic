@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "name": "unambiguous WordPress evidence → confirmed, objective satisfied",
+  "kind": "infer",
+  "build": {
+    "objective": "identify_framework:ex.com:80",
+    "candidates": {"wordpress": 0.5, "spring_boot": 0.5},
+    "observations": ["X-Powered-By: WordPress; wp-content/themes/twentytwenty"]
+  },
+  "expect": {
+    "decisions_contain": ["confirmed"],
+    "objective_satisfied": true,
+    "hypothesis_status": "confirmed"
+  }
+}

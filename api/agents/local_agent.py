@@ -27,6 +27,14 @@ def start(org_id: str = "") -> str:
     """Register the built-in agent and start background threads.  Returns agent_id."""
     from api.agents.registry import agent_registry  # noqa: PLC0415
 
+    # The built-in agent gets a fresh UUID each process start. Without cleanup,
+    # every server restart would leave behind another dead "localhost (built-in)"
+    # record in agents.json (and the Agents dashboard). Prune prior built-ins for
+    # this org first so there is exactly one live built-in agent.
+    for existing in agent_registry.list(org_id=org_id):
+        if existing.org_id == org_id and existing.tags.get("type") == "local":
+            agent_registry.deregister(existing.agent_id)
+
     agent_id, _ = agent_registry.register(
         hostname="localhost (built-in)",
         capabilities=["scan", "tls", "dns", "headers", "osint", "probe", "takeover", "stack"],
@@ -61,11 +69,13 @@ def _heartbeat_loop(agent_id: str) -> None:
 
 def _worker_loop(agent_id: str, org_id: str) -> None:
     from api.agents.registry import agent_registry  # noqa: PLC0415
-    from api.jobs.executor import try_dispatch_queued  # noqa: PLC0415
+    from api.jobs.executor import try_dispatch_queued, reclaim_stale_jobs  # noqa: PLC0415
 
     while True:
         try:
-            # Pick up any jobs that were queued before this agent came online
+            # Self-healing: requeue jobs stranded on agents that went offline,
+            # then dispatch anything queued (including those just reclaimed).
+            reclaim_stale_jobs()
             try_dispatch_queued(org_id=org_id)
 
             job_ids = agent_registry.get_pending_tasks(agent_id)
@@ -92,7 +102,7 @@ def _run_job(agent_id: str, job_id: str, org_id: str) -> None:
     job.status           = "running"
     job.started_at       = time.time()
     job.assigned_agent_id = agent_id
-    agent.current_job_id = job_id
+    agent_registry.mark_active(agent_id, job_id)
 
     try:
         from src.json_bridge import run_streaming_scan   # noqa: PLC0415
@@ -116,16 +126,22 @@ def _run_job(agent_id: str, job_id: str, org_id: str) -> None:
             port    = data.get("port")
             service = data.get("service", "")
             for cve in data["cves"]:
+                refs = cve.get("references") or []
                 job.push_event({"type": "vuln", "data": {
-                    "cve_id":      cve.get("id"),
-                    "cvss":        cve.get("cvss_score"),
-                    "severity":    cve.get("severity"),
-                    "description": cve.get("description", ""),
-                    "port":        port,
-                    "service":     service,
-                    "exploitable": cve.get("exploit_available", False),
-                    "exploit_ref": (cve.get("references") or [None])[0],
-                    "kev":         cve.get("kev", False),
+                    "cve_id":          cve.get("id"),
+                    "cvss":            cve.get("cvss_score"),
+                    "severity":        cve.get("severity"),
+                    "description":     cve.get("description", ""),
+                    "port":            port,
+                    "service":         service,
+                    "exploitable":     cve.get("exploit_available", False),
+                    "exploit_ref":     refs[0] if refs else None,
+                    "references":      refs,
+                    "kev":             cve.get("kev", False),
+                    # EPSS is the primary prioritization signal — carry it (and its
+                    # percentile) through so the dashboard badge and sort work.
+                    "epss":            cve.get("epss", 0.0),
+                    "epss_percentile": cve.get("epss_percentile", 0.0),
                 }})
             for note in (data.get("notes") or []):
                 if note:
@@ -159,6 +175,19 @@ def _run_job(agent_id: str, job_id: str, org_id: str) -> None:
             do_probe    = cfg.do_probe,
             do_takeover = cfg.do_takeover,
             min_cvss    = cfg.min_cvss,
+            do_ai       = getattr(cfg, "do_ai", False),
+            ssh_user    = getattr(cfg, "ssh_user", ""),
+            ssh_key     = getattr(cfg, "ssh_key", ""),
+            ssh_pass    = getattr(cfg, "ssh_pass", ""),
+            ssh_port    = getattr(cfg, "ssh_port", 22),
+            ai_key      = cfg.ai_key.get_secret_value() if getattr(cfg, "ai_key", None) else "",
+            ai_provider = getattr(cfg, "ai_provider", ""),
+            ai_model    = getattr(cfg, "ai_model", ""),
+            ai_base_url = getattr(cfg, "ai_base_url", ""),
+            deep_probe  = getattr(cfg, "deep_probe", False),
+            # Scope AI/fusion key resolution to the org that owns the job — never a
+            # process-global key. Empty string keeps single-tenant/CLI on env config.
+            org_id      = getattr(job, "org_id", "") or "",
             emit_callback = emit,
         )
         job.status   = "completed"
@@ -176,7 +205,7 @@ def _finish(job, agent, error: Optional[str] = None) -> None:
     from api.jobs.manager import job_manager  # noqa: PLC0415
     from api.jobs.executor import try_dispatch_queued  # noqa: PLC0415
 
-    if error:
+    if error and job.status not in ("completed", "failed", "cancelled"):
         job.status = "failed"
         job.error  = error
         job.push_event({"type": "error", "message": error})
@@ -186,7 +215,8 @@ def _finish(job, agent, error: Optional[str] = None) -> None:
     job_manager.persist_job(job)
 
     if agent:
-        agent.current_job_id = None
+        from api.agents.registry import agent_registry  # noqa: PLC0415
+        agent_registry.mark_done(agent.agent_id, job.job_id)
 
     # Pick up the next queued job immediately
     try_dispatch_queued(org_id=job.org_id)

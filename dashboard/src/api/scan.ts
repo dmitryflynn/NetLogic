@@ -116,7 +116,7 @@ export interface ScanSections {
   topology?: Record<string, unknown>
   exploitability?: { attributes?: Record<string, unknown>[] }
   webFingerprint?: Record<string, unknown>
-  ai?: { markdown?: string; error?: string; provider?: string; model?: string }
+  ai?: { markdown?: string; error?: string; provider?: string; model?: string; beyond_cves?: string[] }
   fusion?: FusionResult
   tls?: { results?: Record<string, unknown>[] }
   headers?: Record<string, unknown>
@@ -186,6 +186,40 @@ export const useJob = (jobId: string) =>
       q.state.data?.status === 'running' || q.state.data?.status === 'queued'
         ? 2000
         : false,
+  })
+
+// ── Per-target history / posture timeline ───────────────────────────────────────
+
+export interface TargetScan {
+  job_id: string
+  status: string
+  completed_at: number | null
+  created_at: number
+  progress: number
+  open_ports: number[]
+  severity: { critical: number; high: number; medium: number; low: number }
+  vuln_total: number
+  cves: string[]
+}
+
+export interface TargetHistory {
+  target: string
+  scans: TargetScan[]   // completed first (chronological), then running/queued
+}
+
+export const useTargetHistory = (target: string | null) =>
+  useQuery<TargetHistory>({
+    queryKey: ['target-history', target],
+    queryFn: () => api.get(`/jobs/history/${encodeURIComponent(target as string)}`),
+    enabled: !!target,
+    staleTime: 10_000,
+    refetchOnMount: true,
+    refetchInterval: (query) => {
+      // Poll every 5s if any scan is still running
+      const data = query.state.data
+      if (data && data.scans.some((s) => s.status !== 'completed')) return 5_000
+      return false
+    },
   })
 
 export const useCreateJob = () => {
@@ -329,27 +363,6 @@ export const useTestAiSettings = () =>
     mutationFn: () => api.post('/settings/ai/test'),
   })
 
-// ── Fusion adjudicator config (separate provider/model/key) ────────────────────
-export const useFusionSettings = () =>
-  useQuery<AiSettings>({
-    queryKey: ['fusion-settings'],
-    queryFn: () => api.get('/settings/fusion'),
-    staleTime: 30_000,
-  })
-
-export const useSaveFusionSettings = () => {
-  const qc = useQueryClient()
-  return useMutation<AiSettings, Error, AiSettingsUpdate>({
-    mutationFn: (body) => api.post('/settings/fusion', body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['fusion-settings'] }),
-  })
-}
-
-export const useTestFusionSettings = () =>
-  useMutation<{ ok: boolean; error?: string; provider?: string; model?: string }, Error, void>({
-    mutationFn: () => api.post('/settings/fusion/test'),
-  })
-
 /**
  * Consume GET /jobs/{id}/stream via fetch + ReadableStream.
  * EventSource cannot send Authorization headers, so we use raw fetch.
@@ -466,4 +479,28 @@ export function useStreamScan(jobId: string | null) {
   const progress = events.filter((e) => e.type === 'progress').at(-1)?.data as { percent?: number } | undefined
 
   return { events, ports, vulns, progress, streaming, done }
+}
+
+/** Ask the AI to elaborate on a specific Beyond Known CVEs finding. */
+export async function exploreBeyond(jobId: string, finding: string): Promise<{ markdown: string; error?: string }> {
+  return api.post(`/jobs/${jobId}/explore-beyond`, { finding })
+}
+
+/** Download scan results as a file (JSON, Markdown, or RAW). */
+export async function downloadExport(jobId: string, fmt: 'json' | 'md' | 'raw', filename: string): Promise<void> {
+  const token = window.Clerk?.session ? await window.Clerk.session.getToken() : null
+  const BASE = (import.meta.env.VITE_API_URL ?? '') + '/v1'
+  const res = await fetch(`${BASE}/jobs/${jobId}/export?format=${fmt}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) throw new Error(`Export failed: HTTP ${res.status}`)
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }

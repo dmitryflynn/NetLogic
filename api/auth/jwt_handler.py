@@ -23,24 +23,70 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
+import secrets
 import time
 from typing import Optional
 
-JWT_SECRET: str = os.environ.get("NETLOGIC_JWT_SECRET", "changeme-in-production")
+log = logging.getLogger(__name__)
+
+JWT_SECRET_MIN_LENGTH = 32
+# Placeholder secrets that must never be used to sign real tokens.
+_DEFAULT_JWT_SECRETS = {"", "changeme-in-production", "changeme", "change-me-use-a-long-random-string-here"}
+
+
+def _resolve_jwt_secret() -> str:
+    """Resolve the JWT signing secret at import WITHOUT terminating the process.
+
+    A module-level sys.exit() here made the whole API unimportable (and broke the
+    test suite) whenever the env var was absent. Instead:
+      * an empty/placeholder secret → a random EPHEMERAL secret is generated so
+        the server still runs and signs unforgeable tokens, but they do not
+        survive a restart (operator is warned to set a real secret);
+      * a too-short secret is used as-is with a warning.
+    Use require_strong_jwt_secret() at startup to hard-enforce a strong secret.
+    """
+    secret = os.environ.get("NETLOGIC_JWT_SECRET", "")
+    if secret in _DEFAULT_JWT_SECRETS:
+        log.warning(
+            "NETLOGIC_JWT_SECRET is unset or a default placeholder — using a random "
+            "ephemeral secret for this process. Tokens will NOT survive a restart. "
+            'Set a strong secret (python -c "import secrets; print(secrets.token_hex(32))").'
+        )
+        return secrets.token_hex(32)
+    if len(secret) < JWT_SECRET_MIN_LENGTH:
+        log.warning(
+            "NETLOGIC_JWT_SECRET is shorter than %d characters (got %d) — "
+            "use a stronger secret in production.", JWT_SECRET_MIN_LENGTH, len(secret),
+        )
+    return secret
+
+
+JWT_SECRET: str = _resolve_jwt_secret()
 JWT_DEFAULT_EXPIRY: int = int(os.environ.get("NETLOGIC_JWT_EXPIRY", "3600"))
 
-import warnings as _warnings
-if JWT_SECRET in ("changeme-in-production", "changeme", ""):
-    _warnings.warn(
-        "NETLOGIC_JWT_SECRET is set to a weak default — override in production!",
-        stacklevel=2,
-    )
-elif len(JWT_SECRET) < 32:
-    _warnings.warn(
-        f"NETLOGIC_JWT_SECRET is only {len(JWT_SECRET)} chars — use 32+ chars in production!",
-        stacklevel=2,
-    )
+
+def require_strong_jwt_secret() -> None:
+    """Enforce a production-grade JWT secret. Call at server startup.
+
+    Raises RuntimeError (never sys.exit) so the caller decides how to react.
+    Validates the configured environment value, not the possibly-ephemeral global.
+    """
+    secret = os.environ.get("NETLOGIC_JWT_SECRET", "")
+    if secret in _DEFAULT_JWT_SECRETS:
+        raise RuntimeError(
+            "NETLOGIC_JWT_SECRET must be set to a secure value. Generate one with: "
+            'python -c "import secrets; print(secrets.token_hex(32))"'
+        )
+    if len(secret) < JWT_SECRET_MIN_LENGTH:
+        raise RuntimeError(
+            f"NETLOGIC_JWT_SECRET must be at least {JWT_SECRET_MIN_LENGTH} characters "
+            f"(got {len(secret)})."
+        )
+    weak = [p for p in ("password", "123456", "qwerty") if p in secret.lower()]
+    if weak:
+        raise RuntimeError(f"NETLOGIC_JWT_SECRET contains weak patterns: {', '.join(weak)}")
 
 _HEADER_B64 = (
     base64.urlsafe_b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())

@@ -1,20 +1,14 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { useAuthStore } from '../store/auth'
+import { NavLink, Outlet, Link } from 'react-router-dom'
+import { UserButton } from '@clerk/clerk-react'
 
 const NAV = [
-  { to: '/',        label: 'Scans',  exact: true },
-  { to: '/agents',  label: 'Agents', exact: false },
+  { to: '/',         label: 'Scans',    exact: true },
+  { to: '/targets',  label: 'Targets',  exact: false },
+  { to: '/agents',   label: 'Agents',   exact: false },
+  { to: '/settings', label: 'Settings', exact: false },
 ]
 
 export default function Layout() {
-  const logout = useAuthStore((s) => s.logout)
-  const nav    = useNavigate()
-
-  function handleLogout() {
-    logout()
-    nav('/login', { replace: true })
-  }
-
   return (
     <div className="h-screen flex flex-col bg-base text-text overflow-hidden">
       {/* Top nav */}
@@ -42,20 +36,26 @@ export default function Layout() {
           ))}
         </nav>
 
-        <div className="ml-auto">
-          <button
-            onClick={handleLogout}
-            className="text-[11px] text-text-dim hover:text-text transition-colors"
-          >
-            Sign out
-          </button>
+        <div className="ml-auto flex items-center">
+          <UserButton afterSignOutUrl="/login" />
         </div>
       </header>
 
-      {/* Page content */}
-      <main className="flex-1 overflow-hidden">
+      {/* Page content. overflow-y-auto (not hidden) so pages that render tall
+          content (New Scan, Agents) scroll; pages with their own internal scroll
+          (Dashboard, Scan detail) are h-full and fill this definite flex height. */}
+      <main className="flex-1 min-h-0 overflow-y-auto">
         <Outlet />
       </main>
+
+      {/* Persistent legal footer */}
+      <footer className="shrink-0 h-7 flex items-center justify-center gap-3 px-6 border-t border-border bg-panel text-text-dim text-[10px]">
+        <span>© {new Date().getFullYear()} NetLogic</span>
+        <span aria-hidden>·</span>
+        <Link to="/terms" className="hover:text-text">Terms</Link>
+        <span aria-hidden>·</span>
+        <Link to="/privacy" className="hover:text-text">Privacy</Link>
+      </footer>
     </div>
   )
 }

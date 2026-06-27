@@ -2,16 +2,29 @@
 """NetLogic v2.0 — Attack Surface Mapper & Vulnerability Correlator"""
 
 import argparse
-import sys
-import os
-import time
-import concurrent.futures
 import io
+import json
+import os
+import secrets
+import subprocess
+import sys
+import threading
+import time
+import webbrowser
+from pathlib import Path
 
-# Ensure UTF-8 output on Windows consoles to prevent UnicodeEncodeError for emojis/symbols
+# Ensure UTF-8 output on Windows consoles to prevent UnicodeEncodeError for emojis/symbols.
+# Prefer reconfigure(): it changes only the encoding and PRESERVES the stream's line
+# buffering. Replacing stdout with a brand-new TextIOWrapper makes it block-buffered, so
+# the GUI banner/URL printed before the (blocking) uvicorn.run never flushes to the
+# console. Fall back to a *line-buffered* wrapper on older Pythons that lack reconfigure.
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", line_buffering=True)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.scanner        import scan_host, scan_cidr, COMMON_PORTS, EXTENDED_PORTS
@@ -24,7 +37,7 @@ from src.reporter       import (
     print_service_probe_results, print_vuln_probe_results,
 )
 
-VERSION = "2.0.0"
+VERSION = "3.0.0"
 BANNER = f"""
 {C.CYAN}{C.BOLD}
   ███╗   ██╗███████╗████████╗██╗      ██████╗  ██████╗ ██╗ ██████╗
@@ -52,22 +65,60 @@ def parse_args():
     p.add_argument("--probe",     action="store_true",
                    help="Active service probing: unauthenticated access, default creds, CVE-specific checks")
     p.add_argument("--full",      action="store_true", help="Run ALL checks")
+    p.add_argument("--reason",    action="store_true",
+                   help="Enable the adaptive reasoning loop (observe→reason→act). Deterministic "
+                        "by default; uses AI to augment when an API key is configured.")
+    # ── AI analysis ──
+    p.add_argument("--ai",        action="store_true",
+                   help="Run AI-powered analysis of findings (needs an API key)")
+    p.add_argument("--ai-key",    default="",
+                   help="AI API key (or set NETLOGIC_AI_API_KEY / OPENROUTER_API_KEY)")
+    p.add_argument("--ai-provider", default="",
+                   help="openrouter|openai|anthropic|kimi|qwen|groq|gemini|ollama|custom (default: openrouter)")
+    p.add_argument("--ai-model",  default="", help="Model id (provider default if omitted)")
+    p.add_argument("--ai-base-url", default="", help="Custom OpenAI-compatible base URL")
+    # ── Authenticated scanning + topology + diffing (Tier 3) ──
+    p.add_argument("--ssh-user",  default="", help="Username for authenticated (credentialed) SSH scanning — reads real installed package versions")
+    p.add_argument("--ssh-key",   default="", help="SSH private key path for authenticated scanning")
+    p.add_argument("--ssh-pass",  default="", help="SSH password (requires sshpass; prefer --ssh-key)")
+    p.add_argument("--ssh-port",  type=int, default=22, help="SSH port for authenticated scanning (default: 22)")
+    p.add_argument("--no-diff",   action="store_true", help="Disable change-diff against the previous saved report")
+    p.add_argument("--no-traceroute", action="store_true", help="Skip traceroute in topology mapping")
     p.add_argument("--report",    default="terminal",
                    choices=["terminal", "json", "html", "all"])
     p.add_argument("--out",       default=".", help="Output directory")
     p.add_argument("--cidr",      action="store_true", help="Scan CIDR block")
     p.add_argument("--timeout",   type=float, default=2.0)
     p.add_argument("--threads",   type=int,   default=100)
-    p.add_argument("--json-stream", action="store_true",
-                   help="Newline-delimited JSON stream (Electron GUI mode)")
     p.add_argument("--no-color",  action="store_true")
     p.add_argument("--min-cvss",  type=float, default=4.0,
                    help="Minimum CVSS score to report (default: 4.0)")
+    p.add_argument("--deep-probe", action="store_true",
+                   help="Use per-service agent architecture for deeper, "
+                   "context-isolated probe execution")
+    p.add_argument("--sensor-plan", default="",
+                   help="Override sensor plan: 'show' to inspect AI plan, "
+                   "or JSON (e.g. '{\"takeover\":{\"enabled\":false}}') to override")
     p.add_argument("--nvd-key",   default="",
                    help="NVD API key for higher rate limits (or set NETLOGIC_NVD_KEY env var)")
     p.add_argument("--clear-cache", action="store_true", help="Clear NVD cache and exit")
     p.add_argument("--cache-stats", action="store_true", help="Show NVD cache stats and exit")
     p.add_argument("--preload-cache", action="store_true", help="Pre-populate NVD cache for common products")
+    p.add_argument("--vdb-sync", nargs="?", type=int, const=0, default=None, metavar="N",
+                   help="Sync the local offline CVE database from NVD (optionally only the first N products), then exit")
+    p.add_argument("--vdb-status", action="store_true",
+                   help="Show local offline CVE database freshness/stats and exit")
+    p.add_argument("--gui", "-gui", action="store_true",
+                   help="Start the web dashboard (no other flags allowed)")
+    # ── Fusion benchmark ──
+    p.add_argument("--benchmark", action="store_true",
+                   help="Run the fusion-pipeline benchmark against the labeled cassette corpus and exit")
+    p.add_argument("--benchmark-export", default="",
+                   help="Export the benchmark report to this file path (supports .md, .json)")
+    p.add_argument("--benchmark-ai", action="store_true",
+                   help="Use the configured AI model instead of the ground-truth oracle")
+    p.add_argument("--benchmark-verbose", action="store_true",
+                   help="Print per-subject decisions in benchmark output")
     p.add_argument("--version",   action="version", version=f"NetLogic {VERSION}")
     return p.parse_args()
 
@@ -350,86 +401,28 @@ def print_dns_results(dns, no_color=False):
 
 # ─── Main Single-Host Runner ──────────────────────────────────────────────────
 
-def run_single(target, args):
-    do_tls      = args.tls      or args.full
-    do_headers  = args.headers  or args.full
-    do_takeover = args.takeover or args.full
-    do_osint    = args.osint    or args.full
-    no_color    = args.no_color
+def _write_reports(art: dict, target: str, args):
+    """Render terminal report and write JSON/HTML files for a single host's scan."""
+    host_result          = art["host_result"]
+    vuln_matches         = art["vuln_matches"]
+    osint_result         = art["osint_result"]
+    tls_results          = art["tls_results"]
+    header_audit         = art["header_audit"]
+    stack_result         = art["stack_result"]
+    dns_result           = art["dns_result"]
+    takeover_result      = art["takeover_result"]
+    service_probe_result = art["service_probe_result"]
+    vuln_probe_result    = art["vuln_probe_result"]
+    service_enum_result  = art["service_enum_result"]
+    web_fingerprint      = art["web_fingerprint"]
+    topology             = art["topology"]
+    auth_result          = art["auth_result"]
+    scan_diff            = art["scan_diff"]
+    ai_analysis          = art["ai_analysis"]
+    fusion_result        = art.get("fusion")
+    no_color             = args.no_color
 
-    ports = resolve_ports(args.ports)
-    print(f"[*] Scanning {target} ({len(ports)} ports)…")
-    host_result = scan_host(target, ports=ports, max_workers=args.threads, timeout=args.timeout)
-
-    from src.nvd_lookup import cache_stats
-    stats = cache_stats()
-    cache_note = f"(cache: {stats['entries']} entries)" if stats['entries'] > 0 else "(live NVD queries — first run may be slow)"
-    print(f"[*] Correlating CVEs via NVD API {cache_note}…")
-    vuln_matches = correlate(host_result.ports, min_cvss=getattr(args, "min_cvss", 4.0), verbose=True)
-
-    # ── TLS Analysis ──
-    tls_results = []
-    if do_tls:
-        from src.tls_analyzer import analyze_tls_ports
-        tls_ports = [p.port for p in host_result.ports if p.tls or p.port in (443,8443,993,995,465)]
-        if not tls_ports:
-            tls_ports = [443]
-        print(f"[*] Running TLS analysis on ports {tls_ports}…")
-        tls_results = analyze_tls_ports(target, tls_ports)
-
-    # ── Header Audit ──
-    header_audit = None
-    if do_headers:
-        from src.header_audit import audit_headers
-        http_port = next((p.port for p in host_result.ports if p.service in ("http","https","http-alt","https-alt")), 443)
-        print(f"[*] Auditing HTTP security headers (port {http_port})…")
-        header_audit = audit_headers(target, http_port)
-
-    # ── Takeover Detection ──
-    takeover_result = None
-    if do_takeover:
-        from src.takeover import discover_and_check
-        print(f"[*] Checking subdomains for takeover (CT log discovery)…")
-        takeover_result = discover_and_check(target)
-
-    # ── Stack Fingerprint ──
-    stack_result = None
-    do_stack = args.full or getattr(args, 'stack', False)
-    if do_stack:
-        from src.stack_fingerprint import fingerprint_stack
-        http_port2 = next((p.port for p in host_result.ports
-                          if p.service in ("http","https","http-alt","https-alt")), 443)
-        print(f"[*] Fingerprinting technology stack…")
-        stack_result = fingerprint_stack(target, http_port2)
-
-    # ── DNS Security ──
-    dns_result = None
-    do_dns = args.full or getattr(args, 'dns', False)
-    if do_dns:
-        from src.dns_security import check_dns_security
-        print(f"[*] Checking DNS/email security (SPF, DKIM, DMARC, DNSSEC)…")
-        dns_result = check_dns_security(target)
-
-    # ── OSINT ──
-    osint_result = None
-    if do_osint:
-        print(f"[*] Running passive OSINT…")
-        osint_result = run_osint(target, ip=host_result.ip)
-
-    # ── Service Misconfiguration Probing ──
-    service_probe_result = None
-    vuln_probe_result = None
-    do_probe = args.full or getattr(args, 'probe', False)
-    if do_probe and host_result.ports:
-        from src.service_prober import probe_services
-        from src.vuln_prober    import probe_web_vulnerabilities
-        print(f"[*] Running active service probes (misconfigs, default creds, CVE checks)…")
-        service_probe_result = probe_services(target, host_result.ports, timeout=args.timeout)
-        vuln_probe_result    = probe_web_vulnerabilities(target, host_result.ports, timeout=args.timeout)
-        total_issues = len(service_probe_result.findings) + len(vuln_probe_result.confirmed)
-        print(f"[+] Probe complete — {total_issues} issue(s) found.")
-
-    # ── Output ──
+    # ── Terminal output ──
     if args.report in ("terminal", "all"):
         print_terminal_report(host_result, vuln_matches, osint_result)
         print_tls_results(tls_results, no_color)
@@ -439,35 +432,96 @@ def run_single(target, args):
         print_takeover_results(takeover_result, no_color)
         print_service_probe_results(service_probe_result, no_color)
         print_vuln_probe_results(vuln_probe_result, no_color)
+        if topology is not None:
+            from src.reporter import print_topology
+            print_topology(topology, no_color)
+        if scan_diff is not None:
+            from src.reporter import print_scan_diff
+            print_scan_diff(scan_diff, no_color)
+        if auth_result is not None:
+            from src.reporter import print_auth_result
+            print_auth_result(auth_result, no_color)
+        if web_fingerprint is not None:
+            from src.reporter import print_web_fingerprint
+            print_web_fingerprint(web_fingerprint, no_color)
+        if service_enum_result is not None:
+            from src.reporter import print_service_enum
+            print_service_enum(service_enum_result, no_color)
+        if fusion_result is not None and ai_analysis is None:
+            from src.reporter import print_detected_vulnerabilities
+            print_detected_vulnerabilities(fusion_result, no_color)
+        if ai_analysis is not None:
+            from src.reporter import print_ai_analysis
+            print_ai_analysis(ai_analysis, no_color)
 
     safe_name = target.replace("/","_").replace(":","_")
     ts = time.strftime("%Y%m%d_%H%M%S")
 
+    # ── JSON report ──
     if args.report in ("json", "all"):
         os.makedirs(args.out, exist_ok=True)
-        report = generate_json_report(host_result, vuln_matches, osint_result)
-        # Embed new results in JSON
-        if tls_results:
-            from dataclasses import asdict
-            report["tls"] = [asdict(r) for r in tls_results]
-        if header_audit:
-            from dataclasses import asdict
-            report["headers"] = asdict(header_audit)
-        if takeover_result:
-            from dataclasses import asdict
-            report["takeover"] = asdict(takeover_result)
-        if service_probe_result:
-            from dataclasses import asdict
-            report["service_probes"] = asdict(service_probe_result)
-        if vuln_probe_result:
-            from dataclasses import asdict
-            report["vuln_probes"] = asdict(vuln_probe_result)
+        from src import engine
+        report = engine.build_json_report(art)
         save_json_report(report, os.path.join(args.out, f"netlogic_{safe_name}_{ts}.json"))
 
+    # ── HTML report ──
     if args.report in ("html", "all"):
         os.makedirs(args.out, exist_ok=True)
         html_content = generate_html_report(host_result, vuln_matches, osint_result)
         save_html_report(html_content, os.path.join(args.out, f"netlogic_{safe_name}_{ts}.html"))
+
+
+def run_single(target, args):
+    # ONE scan path: the engine does all gathering (and the GUI calls the same
+    # engine). Here we just run it and render the human report from the artifacts.
+    from src import engine
+    ports = resolve_ports(args.ports)
+    if args.deep_probe:
+        from src.deep import run_deep_scan
+        art = run_deep_scan(target, ports, args)        # emit=None → prints [*] progress
+    else:
+        art = engine.run_scan(target, ports, args)        # emit=None → prints [*] progress
+    _write_reports(art, target, args)
+
+
+def run_multi(targets, args):
+    """Run full scans across multiple targets with cross-host analysis."""
+    from src import orchestrator
+    ports = resolve_ports(args.ports)
+    scan_fn = None
+    if getattr(args, "deep_probe", False):
+        from src.deep import run_deep_scan as scan_fn
+    result = orchestrator.run_multi_scan(targets, ports, args,
+                                         scan_fn=scan_fn)
+
+    # Per-host reports
+    for art, target in zip(result["hosts"], targets):
+        print()
+        _write_reports(art, target, args)
+
+    # Combined JSON report with cross-host context
+    if args.report in ("json", "all"):
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        combined = {
+            "scan_type": "multi-host",
+            "targets": targets,
+            "host_count": result["host_count"],
+            "cross_host_context": result["cross_host_context"],
+            "errors": result["errors"],
+        }
+        safe_name = "_".join(t.replace("/","_").replace(":","_") for t in targets)
+        if len(safe_name) > 100:
+            safe_name = safe_name[:100]
+        os.makedirs(args.out, exist_ok=True)
+        path = os.path.join(args.out, f"netlogic_multi_{safe_name}_{ts}.json")
+        with open(path, "w") as f:
+            json.dump(combined, f, indent=2, default=str)
+        print(f"[+] Combined multi-host report: {path}")
+
+    if result["errors"]:
+        print(f"[!] {len(result['errors'])} host(s) failed to scan:")
+        for t, e in result["errors"]:
+            print(f"    {t}: {e}")
 
 
 def run_cidr(cidr, args):
@@ -486,8 +540,360 @@ def run_cidr(cidr, args):
                              os.path.join(args.out, f"netlogic_{hr.ip}_{ts}.json"))
 
 
+def run_gui():
+    """Start the web dashboard (blocking)."""
+    CONFIG_DIR   = Path.home() / ".netlogic"
+    SECRETS_FILE = CONFIG_DIR / "secrets.json"
+    DIST_DIR     = Path(__file__).parent / "dashboard" / "dist"
+
+    # ── Load or generate secrets ──
+    if SECRETS_FILE.exists():
+        try:
+            data = json.loads(SECRETS_FILE.read_text())
+        except Exception:
+            data = {}
+    else:
+        data = {}
+
+    changed = False
+    for key in ("NETLOGIC_JWT_SECRET", "NETLOGIC_ADMIN_KEY", "NETLOGIC_API_KEY"):
+        if not data.get(key):
+            data[key] = secrets.token_hex(32) if key != "NETLOGIC_ADMIN_KEY" else secrets.token_urlsafe(32)
+            changed = True
+    if changed:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        SECRETS_FILE.write_text(json.dumps(data, indent=2))
+        try:
+            SECRETS_FILE.chmod(0o600)
+        except Exception:
+            pass
+
+    for k, v in data.items():
+        os.environ.setdefault(k, v)
+
+    api_key = data["NETLOGIC_API_KEY"]
+    os.environ["NETLOGIC_API_KEYS"] = f"{api_key}:default"
+    os.environ.setdefault("NETLOGIC_VALID_LICENSES", "NL-LOCAL-DESKTOP")
+    os.environ.setdefault("NETLOGIC_LICENSE_KEY", "NL-LOCAL-DESKTOP")
+    # We open the browser ourselves (below) and the server starts its own built-in
+    # in-process scan agent. Suppress the server's duplicate browser launch so the
+    # dashboard opens in exactly ONE window, not two.
+    os.environ["NETLOGIC_NO_BROWSER"] = "1"
+
+    # ── Build dashboard if needed ──
+    if not (DIST_DIR / "index.html").exists():
+        dash_dir = Path(__file__).parent / "dashboard"
+        if dash_dir.exists():
+            print("[netlogic] Building dashboard for the first time (~30 s)...")
+            try:
+                subprocess.run("npm install", cwd=dash_dir, shell=True, check=True,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run("npm run build", cwd=dash_dir, shell=True, check=True,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print("[netlogic] Dashboard ready.")
+            except subprocess.CalledProcessError:
+                print("[netlogic] Warning: dashboard build failed — API-only mode.")
+            except FileNotFoundError:
+                print("[netlogic] Warning: npm not found — install Node.js for the dashboard.")
+
+    port = int(os.environ.get("NETLOGIC_PORT", "8000"))
+    host = os.environ.get("NETLOGIC_HOST", "0.0.0.0")
+    url  = f"http://localhost:{port}"
+
+    print()
+    print("  ███╗   ██╗███████╗████████╗██╗      ██████╗  ██████╗ ██╗ ██████╗")
+    print("  ████╗  ██║██╔════╝╚══██╔══╝██║     ██╔═══██╗██╔════╝ ██║██╔════╝")
+    print("  ██╔██╗ ██║█████╗     ██║   ██║     ██║   ██║██║  ███╗██║██║")
+    print("  ██║╚██╗██║██╔══╝     ██║   ██║     ██║   ██║██║   ██║██║██║")
+    print("  ██║ ╚████║███████╗   ██║   ███████╗╚██████╔╝╚██████╔╝██║╚██████╗")
+    print("  ╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚══════╝ ╚═════╝  ╚═════╝ ╚═╝ ╚═════╝")
+    print()
+    print(f"  URL:       {url}")
+    print(f"  Agent key: {api_key}")
+    print()
+    print("  Open the URL and sign in with your account to use the dashboard.")
+    print("  The Agent key above is a MACHINE credential — use it only for remote")
+    print("  agents (netlogic_agent.py) and programmatic API access, not to log in.")
+    print("  Press Ctrl+C to stop.")
+    print()
+    # Flush now: uvicorn.run() blocks below, so anything still buffered would never
+    # reach the console until shutdown.
+    sys.stdout.flush()
+
+    threading.Timer(1.5, webbrowser.open, args=(url,)).start()
+
+    # NOTE: the API server starts its own built-in in-process scan agent on startup
+    # (api/main.py lifespan → local_agent.start), which has all scan capabilities.
+    # We deliberately do NOT spawn a second external netlogic_agent.py here — doing so
+    # registered a duplicate "localhost" agent in the fleet. Remote/extra agents are
+    # still added by running netlogic_agent.py manually against this controller.
+
+    import uvicorn  # noqa: PLC0415
+    uvicorn.run("api.main:app", host=host, port=port, log_level="warning")
+
+
+def _load_dotenv() -> None:
+    """Load KEY=VALUE pairs from a project-root .env into the environment.
+
+    Stdlib-only, dependency-free. Existing env vars win (never override the real
+    environment). Called at the START of main() — NOT at import — so importing this
+    module (e.g. in tests, which also import api.main) never silently enables
+    .env-driven features like OIDC.
+    """
+    env_path = Path(__file__).parent / ".env"
+    if not env_path.exists():
+        return
+    try:
+        for raw in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = val
+    except OSError:
+        pass
+
+
+def _run_benchmark(args):
+    """Run the fusion-pipeline benchmark against the labeled cassette corpus and exit."""
+    print(f"{'='*70}")
+    print(f"  NETLOGIC FUSION BENCHMARK")
+    print(f"{'='*70}")
+
+    from src.fusion.corpus import cases_from_cassettes, cassette_to_case
+    from src.fusion.cassette import load_cassettes
+    from src.fusion.benchmark import score_with_oracle, run_pipeline, oracle_complete, score, _score_precomputed, demo_corpus
+    from src.fusion.gate import adjudicate
+
+    cassettes = load_cassettes()
+    cases = cases_from_cassettes()
+
+    # Include the synthetic demo corpus too for broader coverage
+    demo = demo_corpus()
+    all_cases = cases + demo
+    print(f"\n  Dataset: {len(cassettes)} real cassette recordings + {len(demo)} synthetic cases")
+    print(f"           {len(all_cases)} total cases, {sum(len(c.truth) for c in all_cases)} labeled subjects")
+
+    from src.fusion.ai import make_completer
+
+    if args.benchmark_ai:
+        from src import ai_analyst as aa
+        cfg = aa.config_from_env()
+        usable, reason = cfg.is_usable()
+        if not usable:
+            print(f"\n  ERROR: {reason}")
+            print(f"  Set NETLOGIC_AI_API_KEY or paste a key in ~/.netlogic/secrets.json")
+            sys.exit(1)
+        print(f"\n  AI model: {cfg.provider} / {cfg.model}  @ {cfg.base_url}")
+        completer = make_completer(cfg)
+        r = score(all_cases, complete=completer)
+        label = f"REAL MODEL ({cfg.provider}/{cfg.model})"
+    else:
+        r = score_with_oracle(all_cases)
+        label = "ORACLE (perfect-AI upper bound)"
+
+    print(f"\n  {label}")
+    print(f"  {'─'*60}")
+    print(f"  {'':>30} {'Raw scanner':>15} {'Pipeline':>15}")
+    print(f"  {'':>30} {'─────────────':>15} {'────────':>15}")
+    print(f"  {'Precision':>30} {r.raw_precision:>14.1%} {r.precision:>14.1%}")
+    print(f"  {'Recall':>30} {'100.0%':>15} {r.recall:>14.1%}")
+    print(f"  {'Critical recall':>30} {'100.0%':>15} {r.critical_recall:>14.1%}")
+    print(f"  {'False positives':>30} {r.raw_fp:>15} {r.fp:>15}")
+    print(f"  {'FP reduction':>30} {'—':>15} {r.fp_reduction:>13.1%}")
+    print(f"  {'Critical FNs':>30} {0:>15} {r.critical_fn:>15}")
+    print(f"  {'─'*60}")
+
+    verdict = f"{'✅ PASS' if r.passed else '❌ FAIL'}"
+    print(f"\n  Verdict: {verdict}")
+    print(f"  Gate: FP reduction ≥ 80% AND critical recall = 100%")
+    if r.passed:
+        print(f"  Target: {r.fp_reduction:.1%} ≥ 80% ✓ | critical recall {r.critical_recall:.0%} = 100% ✓")
+    else:
+        if r.fp_reduction < 0.80:
+            print(f"  ✗ FP reduction {r.fp_reduction:.1%} < 80%")
+        if r.critical_recall < 1.0:
+            print(f"  ✗ Critical recall {r.critical_recall:.0%} < 100% ({r.critical_fn} critical FNs)")
+
+    if args.benchmark_verbose:
+        print(f"\n  Per-subject decisions:")
+        for c in all_cases:
+            dec = run_pipeline(c, oracle_complete(c))
+            for (host, port, claim), d in sorted(dec.items()):
+                gt = c.truth_for(host, port, claim) or {}
+                tag = "✓" if gt.get("is_real") else "✗"
+                print(f"    {c.name:24} {host}:{port:<5} {claim:30} -> {d:12} (truth: {tag})")
+
+    # Export report
+    if args.benchmark_export:
+        import json as _json
+        path = args.benchmark_export.lower()
+        if path.endswith(".json"):
+            content = r.to_json()
+        else:
+            content = _yc_report_markdown(r, cassettes, all_cases, mode_label=label)
+        with open(args.benchmark_export, "w", encoding="utf-8") as fh:
+            fh.write(content + "\n" if not content.endswith("\n") else content)
+        print(f"\n  Report exported → {args.benchmark_export}")
+
+
+def _yc_report_markdown(r, cassettes, all_cases, mode_label: str = "") -> str:
+    """YC-ready benchmark report."""
+    from src.fusion.benchmark import MIN_FP_REDUCTION, REQUIRED_CRITICAL_RECALL
+    is_oracle = "ORACLE" in (mode_label or "").upper()
+    # Honest mode disclosure — the numbers mean very different things depending on
+    # the adjudicator. The oracle is a PERFECT-AI UPPER BOUND (ceiling), not what a
+    # real model achieves; never present it as measured product performance.
+    mode_note = (
+        "> **Measurement mode: ORACLE (perfect-AI upper bound).** These figures are the "
+        "*theoretical ceiling* the pipeline reaches if the AI adjudicator is always correct — "
+        "they are NOT real-model results. Run `--benchmark-ai` with a configured model for "
+        "measured performance before citing these numbers externally."
+        if is_oracle else
+        f"> **Measurement mode: {mode_label or 'real model'}** — measured against the labeled corpus."
+    )
+    lines = [
+        "# NetLogic Fusion-Pipeline Benchmark Report",
+        "",
+        f"**Date:** _auto_  ·  **Dataset:** {len(cassettes)} real HTTP cassettes (Vulhub) + {len(all_cases) - len(cassettes)} synthetic edge cases",
+        "",
+        mode_note,
+        "",
+        "> _Internal benchmark on a small labeled corpus — directional evidence, not "
+        "production-scale or independent validation._",
+        "",
+        "---",
+        "",
+        "## Verdict",
+        "",
+        f"**{'✅ PASS' if r.passed else '❌ FAIL'}** — all gates satisfied" if r.passed else f"**❌ FAIL** — gates not met",
+        "",
+        f"| Gate | Threshold | Actual |",
+        f"|---|---:|---:|",
+        f"| False-positive reduction | ≥ {MIN_FP_REDUCTION:.0%} | **{r.fp_reduction:.1%}** {'✓' if r.fp_reduction >= MIN_FP_REDUCTION else '✗'} |",
+        f"| Critical recall | = {REQUIRED_CRITICAL_RECALL:.0%} | **{r.critical_recall:.0%}** {'✓' if r.critical_recall >= REQUIRED_CRITICAL_RECALL else '✗'} |",
+        "",
+        "---",
+        "",
+        "## Aggregate Results",
+        "",
+        f"**{r.cases} cases, {r.subjects} labeled subjects**",
+        "",
+        "| Metric | Raw scanner | NetLogic pipeline | Improvement |",
+        "|---|---:|---:|---:|",
+        f"| Precision | {r.raw_precision:.1%} | **{r.precision:.1%}** | +{r.precision - r.raw_precision:.1%} |",
+        f"| Recall | 100.0% | {r.recall:.1%} | — |",
+        f"| Critical recall | 100.0% | **{r.critical_recall:.0%}** | — |",
+        f"| False positives | {r.raw_fp} | **{r.fp}** | **-{r.fp_reduction:.1%}** |",
+        f"| Critical false negatives | 0 | {r.critical_fn} | — |",
+        "",
+        "Confusion matrix: "
+        f"TP={r.tp}, FP={r.fp}, FN={r.fn}, TN={r.tn}",
+        "",
+        "---",
+        "",
+        "## Dataset Details",
+        "",
+        "| Cassette | Label | Interactions | Truth subjects | Probes |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for c in cassettes:
+        n_int = len(getattr(c, 'interactions', []) or [])
+        n_truth = len(getattr(c, 'truth', []) or [])
+        n_probes = len(getattr(c, 'probes', []) or [])
+        label = getattr(c, 'label_source', '?') or '?'
+        lines.append(
+            f"| {c.name:30} | {label:45} | {n_int} | {n_truth} | {n_probes} |"
+        )
+
+    lines += [
+        "",
+        "### Dataset Sources",
+        "",
+        "- **Vulhub cassettes:** Recorded HTTP interactions from real vulnerable Docker environments (Log4Shell, Struts2), captured via recording proxy with ground-truth labels.",
+        "- **Clean cassettes:** Recordings from patched/current-version targets (nginx, WordPress) — these should produce NO real findings (all sensor output is noise).",
+        "- **Synthetic cases:** Hand-authored edge cases exercising specific gate invariants (pinned KEV, auto-confirmed by corroboration, lone low-impact noise, safety-floor cost).",
+        "",
+        "### Methodology",
+        "",
+        "1. Each cassette contains raw HTTP request/response pairs replayed through the real sensor pipeline (NVD correlation, Wappalyzer fingerprinting, Nuclei templates).",
+        "2. Sensors produce `Signal` objects — the same pipeline that runs in a live `netlogic --full` scan.",
+        "3. The fusion gate (`adjudicate()`) deterministically classifies each signal as `confirmed`, `discarded`, or `gray` without spending an AI token.",
+        "4. Gray-band items are handed to the AI adjudicator (or the ground-truth oracle in benchmark mode).",
+        "5. The final verdict is scored against the ground truth: `confirmed` + `potential` = reported; `discarded` = suppressed.",
+        "",
+        "### Safety Guarantees (Architectural, not Prompt-Based)",
+        "",
+        "- KEV-listed and probe-confirmed findings are **structurally pinned** — the AI cannot drop them.",
+        "- High/critical impact items in the gray band can be promoted or demoted to `potential` (report + verify) but the AI can **never** discard them.",
+        "- AI failure (timeout, parse error, garbage output) defaults to `potential` — nothing real is ever silently dropped.",
+        "- The benchmark harness **fails closed**: if critical recall drops below 100%, the pipeline gate returns FAIL.",
+        "",
+        "---",
+        "",
+        "## Key Design Decision: Why This Matters",
+        "",
+        "Most AI security tools feed raw scanner output directly into an LLM, burning tokens on every finding — "
+        "including the 80-90% that are inventory noise. NetLogic's fusion layer uses a deterministic agreement "
+        "gate to settle certain cases *before* the AI is ever called:",
+        "",
+        "- **KEV/probe-confirmed** → auto-confirmed (pinned, un-droppable)",
+        "- **≥2 independent sensors + ≥1 high-reliability** → auto-confirmed (no AI token)",
+        "- **Lone low-reliability low/medium impact** → auto-discarded (noise filter)",
+        "- **Everything else (the gray band)** → AI adjudication (token cost ∝ ambiguity, not asset count)",
+        "",
+        f"This architecture delivers **{r.fp_reduction:.0%} fewer false positives** than a raw scanner while "
+        f"guaranteeing **{r.critical_recall:.0%} critical recall** — no real critical vulnerability is ever dropped.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def main():
+    _load_dotenv()
     args = parse_args()
+
+    # ── Fusion benchmark mode ──
+    if args.benchmark:
+        _run_benchmark(args)
+        return
+
+    # ── GUI mode ──
+    if args.gui:
+        # Reject any other flags when --gui is used
+        # Only check boolean (store_true) flags — they default to False.
+        # Flags with truthy defaults (--ports=quick, --report=terminal, etc.)
+        # are harmless when left at their defaults.
+        bool_flags = ["tls", "headers", "takeover", "osint", "stack", "dns",
+                       "probe", "full", "ai", "deep_probe", "no_diff",
+                       "no_traceroute", "cidr", "no_color", "clear_cache",
+                       "preload_cache", "cache_stats", "vdb_status"]
+        if any(getattr(args, f) for f in bool_flags):
+            print("error: --gui cannot be combined with scan flags", file=sys.stderr)
+            sys.exit(1)
+        value_flags = ["ai_key", "ai_provider", "ai_model", "ai_base_url",
+                       "ssh_user", "ssh_key", "ssh_pass", "ports", "report",
+                       "out", "timeout", "threads", "min_cvss", "nvd_key",
+                       "vdb_sync"]
+        # For value flags, check they're different from their defaults
+        defaults = {"ports": "quick", "timeout": 2.0, "threads": 100,
+                    "min_cvss": 4.0, "report": "terminal", "out": ".",
+                    "ssh_port": 22, "ai_key": "", "ai_provider": "",
+                    "ai_model": "", "ai_base_url": "", "ssh_user": "",
+                    "ssh_key": "", "ssh_pass": "", "nvd_key": ""}
+        for f in value_flags:
+            val = getattr(args, f, None)
+            if val is not None and val != defaults.get(f):
+                print(f"error: --gui cannot be combined with --{f.replace('_', '-')}", file=sys.stderr)
+                sys.exit(1)
+        if args.target:
+            print("error: --gui does not take a target argument", file=sys.stderr)
+            sys.exit(1)
+        run_gui()
+        return
 
     if args.clear_cache:
         clear_cache()
@@ -504,31 +910,23 @@ def main():
         if not args.target:
             return
 
+    # ── Offline VDB management (sync/status) — run and exit ──
+    if args.vdb_status:
+        from src.vdb_syncer import print_status
+        print_status()
+        return
+    if args.vdb_sync is not None:
+        from src.vdb_syncer import run_vdb_sync, print_status
+        print(f"[*] Syncing local offline CVE database from NVD"
+              f"{f' (first {args.vdb_sync} products)' if args.vdb_sync else ''}…")
+        run_vdb_sync(limit=args.vdb_sync)
+        print()
+        print_status()
+        return
+
     if not args.target:
         print("error: target is required", file=sys.stderr)
         sys.exit(1)
-
-    if hasattr(args, 'json_stream') and args.json_stream:
-        from src.json_bridge import run_streaming_scan, emit
-        ports = resolve_ports(args.ports)
-        try:
-            run_streaming_scan(
-                target=args.target, ports=ports, timeout=args.timeout,
-                threads=args.threads,
-                do_osint=(args.osint or args.full),
-                cidr=args.cidr,
-                do_tls=(args.tls or args.full),
-                do_headers=(args.headers or args.full),
-                do_stack=(getattr(args, 'stack', False) or args.full),
-                do_dns=(getattr(args, 'dns', False) or args.full),
-                do_probe=(getattr(args, 'probe', False) or args.full),
-                do_takeover=(getattr(args, 'takeover', False) or args.full),
-                do_full=args.full,
-                min_cvss=getattr(args, 'min_cvss', 4.0),
-            )
-        except Exception as e:
-            emit("error", message=str(e))
-        return
 
     if not args.no_color:
         print(BANNER)
@@ -536,10 +934,25 @@ def main():
         print(f"NetLogic v{VERSION}\n")
     print(f"  For authorized use only.\n")
 
+    # Detect comma-separated multi-target scans
+    targets = [t.strip() for t in args.target.split(",")] if "," in args.target else [args.target]
+
+    if args.deep_probe and args.cidr:
+        print("[!] --deep-probe + --cidr: deep-probe mode not supported for CIDR scans; "
+              "falling back to standard CIDR scan.", file=sys.stderr)
+        args.deep_probe = False
+
+    if args.deep_probe and len(targets) > 1:
+        print("[!] --deep-probe with multi-target: each host is scanned independently "
+              "via the deep-probe architecture.", file=sys.stderr)
+
     if args.cidr:
         run_cidr(args.target, args)
+    elif len(targets) > 1:
+        run_multi(targets, args)
     else:
-        run_single(args.target, args)
+        run_single(targets[0], args)
+
 
 if __name__ == "__main__":
     main()

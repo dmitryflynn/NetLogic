@@ -1,16 +1,11 @@
 """
-NetLogic — Fusion layer (vertical slice, experimental).
+NetLogic — Fusion layer (sensors → deterministic gate → AI adjudication).
 
-This package is the "sensors → deterministic gate → (AI) adjudication" core from
-the architecture design. It is SELF-CONTAINED and not yet wired into the live scan
-pipeline — it can be imported, tested, and measured in isolation. Deleting this
-package fully reverts the experiment; no existing module imports it.
-
-Pipeline (this slice implements stages 1–2):
+Pipeline:
   1. Sensors emit evidence-bearing `Signal`s (signals.py).
   2. A deterministic `adjudicate()` gate auto-confirms / auto-discards / routes the
      gray band, with KEV/probe-confirmed criticals pinned UN-DROPPABLE (gate.py).
-  3. (next increments) AI adjudication of the gray band + graph-based synthesis.
+  3. AI adjudication + graph-based synthesis (adjudicator.py, synthesis.py).
 """
 
 from src.fusion.signals import Signal

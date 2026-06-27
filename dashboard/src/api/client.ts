@@ -1,15 +1,23 @@
 /**
- * Thin fetch wrapper that attaches the JWT from Zustand and handles errors.
- * All API functions return typed data or throw an Error with a message.
+ * Thin fetch wrapper that attaches the live Clerk session token and handles
+ * errors. All API functions return typed data or throw an Error with a message.
  */
 
 const BASE = (import.meta.env.VITE_API_URL ?? '') + '/v1'
 
-function getToken(): string | null {
+// Clerk attaches a global `window.Clerk` once ClerkProvider mounts. We read the
+// current session token per request (Clerk auto-refreshes it), so there is no
+// long-lived credential stored anywhere in the app.
+declare global {
+  interface Window {
+    Clerk?: { session?: { getToken: () => Promise<string | null> } }
+  }
+}
+
+async function getToken(): Promise<string | null> {
   try {
-    const raw = localStorage.getItem('netlogic-auth')
-    if (!raw) return null
-    return (JSON.parse(raw)?.state?.token as string) ?? null
+    const session = window.Clerk?.session
+    return session ? await session.getToken() : null
   } catch {
     return null
   }
@@ -20,7 +28,7 @@ async function request<T>(
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const token = getToken()
+  const token = await getToken()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (token) headers['Authorization'] = `Bearer ${token}`
 
@@ -53,8 +61,8 @@ export const api = {
 }
 
 /** Raw fetch for SSE streams (needs auth header, EventSource doesn't support it). */
-export function streamFetch(path: string, signal: AbortSignal): Promise<Response> {
-  const token = getToken()
+export async function streamFetch(path: string, signal: AbortSignal): Promise<Response> {
+  const token = await getToken()
   const headers: Record<string, string> = {}
   if (token) headers['Authorization'] = `Bearer ${token}`
   return fetch(`${BASE}${path}`, { headers, signal })

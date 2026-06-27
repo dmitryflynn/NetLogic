@@ -1,0 +1,6 @@
+{
+  "name": "model tries to smuggle a new host as an evidence type",
+  "kind": "evidence_types",
+  "raw": "[\"http_headers\", \"host:evil.com\", \"probe://10.0.0.5\"]",
+  "expect_evidence": ["http_headers"]
+}

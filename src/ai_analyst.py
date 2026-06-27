@@ -33,6 +33,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 
 # Upstream errors that are worth retrying: gateway/timeout/overload/rate-limit.
@@ -60,6 +61,7 @@ PROVIDER_PRESETS: dict[str, tuple[str, str, str]] = {
     "kimi":       ("https://api.moonshot.ai/v1",    "kimi-k2.6",                  "openai"),
     "qwen":       ("https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "qwen-plus", "openai"),
     "groq":       ("https://api.groq.com/openai/v1","llama-3.3-70b-versatile",    "openai"),
+    "gemini":     ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.0-flash", "openai"),
     "ollama":     ("http://localhost:11434/v1",    "llama3",                      "openai"),
 }
 
@@ -72,6 +74,7 @@ PROVIDER_KEY_ENV_VARS: dict[str, tuple[str, ...]] = {
     "kimi": ("KIMI_API_KEY", "MOONSHOT_API_KEY"),
     "qwen": ("DASHSCOPE_API_KEY", "QWEN_API_KEY"),
     "groq": ("GROQ_API_KEY",),
+    "gemini": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
     "custom": (),
     "ollama": (),
 }
@@ -155,38 +158,68 @@ class AIAnalysis:
 
 # ─── Config construction ──────────────────────────────────────────────────────
 
+def _secrets_dict() -> dict:
+    """Read ~/.netlogic/secrets.json (if it exists) for CLI-free AI config."""
+    try:
+        p = Path(os.environ.get("NETLOGIC_DATA_DIR") or (Path.home() / ".netlogic")) / "secrets.json"
+        return json.loads(p.read_text()) if p.exists() else {}
+    except Exception:
+        return {}
+
+
 def config_from_env() -> AIConfig:
-    """Build an AIConfig from environment variables."""
-    provider = (os.environ.get("NETLOGIC_AI_PROVIDER") or "openrouter").lower().strip()
+    """Build an AIConfig from environment variables, falling back to secrets.json."""
+    secrets = _secrets_dict()
+    provider = (os.environ.get("NETLOGIC_AI_PROVIDER") or secrets.get("NETLOGIC_AI_PROVIDER") or "openrouter").lower().strip()
+
+    def _val(key: str) -> Optional[str]:
+        v = os.environ.get(key)
+        if not v:
+            v = secrets.get(key)
+        return _clean(v)
+
     cfg = AIConfig(
-        api_key=_key_from_env(provider),
+        api_key=_key_from_env(provider) or _clean(secrets.get("NETLOGIC_AI_API_KEY")),
         provider=provider,
-        model=_clean(os.environ.get("NETLOGIC_AI_MODEL")),
-        base_url=_clean(os.environ.get("NETLOGIC_AI_BASE_URL")),
+        model=_val("NETLOGIC_AI_MODEL"),
+        base_url=_val("NETLOGIC_AI_BASE_URL"),
     )
     return cfg.resolve()
 
 
-def fusion_has_separate_config() -> bool:
-    """True if a fusion-specific provider/key is configured (vs inheriting the AI one)."""
-    return bool(os.environ.get("NETLOGIC_FUSION_API_KEY") or os.environ.get("NETLOGIC_FUSION_PROVIDER"))
+def config_for_org(org_id: Optional[str], role: str = "ai") -> AIConfig:
+    """Resolve the AI config for a specific organisation (multi-tenant key isolation).
 
+    A scan resolves the key belonging to the org that owns the job — never a
+    process-global one. The 'fusion' role inherits the org's 'ai' settings when
+    it has none of its own.
 
-def fusion_config_from_env() -> AIConfig:
-    """AI config for the FUSION adjudicator. Reads NETLOGIC_FUSION_* so it can use a
-    different provider/model/key than the AI-analyst report. Falls back to the AI
-    config when no fusion-specific settings are present (one key powers both)."""
-    if not fusion_has_separate_config():
+    Fallback policy is exposure-aware:
+      • No org context (CLI / desktop, org_id="") → env config (unchanged).
+      • Org HAS stored settings → use them, key as stored (no env borrow).
+      • Org has NO settings, single-tenant (no Postgres) → env config (desktop).
+      • Org has NO settings, multi-tenant (Postgres) → an unusable empty config
+        (AI is skipped) — we never lend one tenant another's/global key.
+    """
+    if not org_id:
         return config_from_env()
-    provider = (os.environ.get("NETLOGIC_FUSION_PROVIDER") or "openrouter").lower().strip()
-    key = os.environ.get("NETLOGIC_FUSION_API_KEY") or _key_from_env(provider)
-    cfg = AIConfig(
-        api_key=key,
-        provider=provider,
-        model=_clean(os.environ.get("NETLOGIC_FUSION_MODEL")),
-        base_url=_clean(os.environ.get("NETLOGIC_FUSION_BASE_URL")),
-    )
-    return cfg.resolve()
+    try:
+        from api.settings_store import org_settings_store  # noqa: PLC0415
+        from api import db  # noqa: PLC0415
+    except Exception:
+        return config_from_env()
+
+    rec = org_settings_store.get(org_id, role)
+    if rec is None and role == "fusion":
+        rec = org_settings_store.get(org_id, "ai")          # fusion inherits ai
+    if rec is not None:
+        cfg = AIConfig(api_key=rec.get("api_key") or None, provider=rec.get("provider") or "openrouter",
+                       model=_clean(rec.get("model")), base_url=_clean(rec.get("base_url")))
+        return cfg.resolve()
+
+    if db.is_enabled():
+        return AIConfig(provider="openrouter").resolve()    # isolated: no shared fallback
+    return config_from_env()                                 # single-tenant convenience
 
 
 def build_config(api_key: Optional[str] = None, provider: Optional[str] = None,

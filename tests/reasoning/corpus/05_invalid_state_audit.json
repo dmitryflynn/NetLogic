@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "corrupt state → the validator itself must flag the right codes",
+  "kind": "audit",
+  "build": {
+    "orphan_objective": {"name": "needs_missing", "deps": ["does_not_exist"]},
+    "confirmed_without_evidence": true
+  },
+  "expect": {
+    "audit_codes_contain": ["orphan-objective-dependency", "confirmed-without-evidence"]
+  }
+}

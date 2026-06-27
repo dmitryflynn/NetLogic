@@ -23,6 +23,7 @@ interface Vuln {
   exploitable?: boolean
   exploit_ref?: string
   kev?:         boolean
+  epss?:        number   // EPSS probability of exploitation (0–1)
 }
 
 const SEV_COLORS: Record<string, string> = {
@@ -57,6 +58,14 @@ export default function VulnCard({ vuln }: { vuln: Vuln }) {
         </span>
         {vuln.cvss != null && (
           <span className="text-[11px] font-mono text-text-dim shrink-0">{vuln.cvss.toFixed(1)}</span>
+        )}
+        {vuln.epss != null && vuln.epss > 0 && (
+          <span
+            className={`text-[10px] font-mono shrink-0 ${vuln.epss >= 0.5 ? 'text-critical' : vuln.epss >= 0.1 ? 'text-high' : 'text-text-dim'}`}
+            title="EPSS — probability of exploitation in the wild"
+          >
+            EPSS {(vuln.epss * 100).toFixed(vuln.epss >= 0.1 ? 0 : 1)}%
+          </span>
         )}
         <span className="font-medium text-[12px] text-text-bright flex-1 text-left">{vuln.title ?? vuln.cve_id ?? 'Unknown'}</span>
         {vuln.kev && (

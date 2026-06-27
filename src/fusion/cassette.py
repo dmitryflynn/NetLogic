@@ -234,6 +234,7 @@ def signals_from_cassette(cassette: Cassette) -> list[Signal]:
                 cvss=float(probe.get("cvss", 0.0)),
                 kev=bool(probe.get("kev", False)),
                 exploit_available=bool(probe.get("exploit_available", False)),
+                observed_data={"evidence": evidence[:400], "steps": len(probe.get("steps", []))},
                 exposure=cassette.exposure,
             ))
 
@@ -241,17 +242,43 @@ def signals_from_cassette(cassette: Cassette) -> list[Signal]:
     #    AI must adjudicate). One signal per source so corroboration is modeled honestly.
     for cand in cassette.cve_candidates:
         for src in (cand.get("sources") or ["nvd"]):
+            evidence_text = cand.get("evidence", "")
             signals.append(Signal(
                 source=src, kind="vuln", claim=cand["claim"],
                 host=cassette.host, port=cassette.port, service="http",
                 reliability=cand.get("reliability", "medium"),
-                evidence=cand.get("evidence", ""),
+                evidence=evidence_text,
                 cvss=float(cand.get("cvss", 0.0)),
                 kev=bool(cand.get("kev", False)),
                 exploit_available=bool(cand.get("exploit_available", False)),
+                observed_data={"banner": evidence_text[:400], "matched_sources": cand.get("sources", [src])},
                 exposure=cassette.exposure,
             ))
     return signals
+
+
+def build_cassette_context(cassette: Cassette) -> dict:
+    """Build host-level context from a cassette for the AI adjudicator (proactive
+    discovery of issues not flagged by sensors)."""
+    http_responses = []
+    for inter in cassette.interactions:
+        req = inter.get("request", {})
+        resp = inter.get("response", {})
+        body = resp.get("body", "")
+        http_responses.append({
+            "method": req.get("method", "GET"),
+            "path": req.get("path", "/"),
+            "status": resp.get("status", 200),
+            "headers": resp.get("headers", {}),
+            "body_snippet": body[:300] + ("..." if len(body) > 300 else ""),
+        })
+    return {
+        "host": cassette.host,
+        "port": cassette.port,
+        "exposure": cassette.exposure,
+        "open_ports": [{"port": cassette.port, "protocol": "tcp", "service": "http"}],
+        "http_responses": http_responses,
+    }
 
 
 def cassette_truth(cassette: Cassette) -> dict:

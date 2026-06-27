@@ -1,0 +1,6 @@
+{
+  "name": "spring_boot",
+  "confirm": ["x-application-context", "whitelabel error page", "/actuator", "jsessionid"],
+  "refute": ["server: microsoft-iis", "wp-content"],
+  "contradiction": []
+}

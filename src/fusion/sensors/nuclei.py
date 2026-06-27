@@ -322,8 +322,6 @@ class Nuclei:
 
                 matched = self._eval_matchers(matchers, matchers_condition, resp)
                 if not matched:
-                    if stop_at_first:
-                        break
                     continue
 
                 extracted = _run_extractors(extractors, resp)
@@ -336,6 +334,7 @@ class Nuclei:
 
                 # Severity is deliberately NOT passed to Signal — the gate
                 # computes its own impact from KEV/CVSS/EPSS.
+                body_snippet = resp.html[:500] + ("..." if len(resp.html) > 500 else "") if resp.html else ""
                 signal = Signal(
                     source="nuclei",
                     kind="vuln" if tmpl.cve_id else "exposure",
@@ -349,6 +348,13 @@ class Nuclei:
                     cvss=tmpl.cvss,
                     kev=tmpl.kev,
                     epss=tmpl.epss,
+                    version_matched=True,
+                    observed_data={
+                        "response_status": resp.status,
+                        "response_headers": dict(resp.headers),
+                        "body_snippet": body_snippet,
+                        "matched_path": path,
+                    },
                     raw_metadata={
                         "template_id": tmpl.id,
                         "template_name": tmpl.name,

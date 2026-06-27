@@ -3,3 +3,7 @@
 
 pytest==9.0.3
 httpx==0.28.1
+
+# Security gates run in CI (and locally): SAST + dependency CVE audit.
+bandit==1.9.4
+pip-audit==2.9.0

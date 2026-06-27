@@ -141,8 +141,9 @@ class BenchmarkReport:
 def run_pipeline(case: LabeledCase, complete: Optional[Callable] = None) -> dict[tuple, str]:
     """Run sensors-output → gate → AI on a case; return {subject_key: decision}."""
     verdicts = adjudicate(case.signals)
-    run_adjudication(verdicts, complete=complete)
-    return {(v.host, v.port, v.claim.lower().strip()): v.decision for v in verdicts}
+    verdicts, new_verdicts = run_adjudication(verdicts, complete=complete)
+    all_verdicts = verdicts + new_verdicts
+    return {(v.host, v.port, v.claim.lower().strip()): v.decision for v in all_verdicts}
 
 
 def score(cases: list[LabeledCase], complete: Optional[Callable] = None,
@@ -220,7 +221,13 @@ def oracle_complete(case: LabeledCase) -> Callable[[str, str], str]:
     a perfect adjudicator. Measures what the deterministic machinery + safety floors
     deliver when the AI is right; the real model is measured by swapping this out."""
     def complete(system: str, user: str) -> str:
-        items = json.loads(user.split("```json", 1)[1].rsplit("```", 1)[0])
+        # Extract items from the OBSERVATIONS: section (new format with host context)
+        obs_marker = "OBSERVATIONS:\n```json"
+        if obs_marker in user:
+            items_json = user.split(obs_marker, 1)[1].rsplit("```", 1)[0]
+        else:
+            items_json = user.split("```json", 1)[1].rsplit("```", 1)[0]
+        items = json.loads(items_json)
         out = []
         for it in items:
             gt = case.truth_for(it.get("host"), it.get("port"), it.get("subject"))
@@ -306,18 +313,21 @@ def demo_corpus() -> list[LabeledCase]:
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────────
-# Run:  python -m src.fusion.benchmark --provider ollama \
-#           --model llama3 --base-url http://my-ollama-cloud:11434/v1
 
 def _real_config(args):
-    """Build a resolved AIConfig from CLI args (real-model mode)."""
+    """Build a resolved AIConfig from CLI args (real-model mode), falling back to
+    env / ~/.netlogic/secrets.json."""
     from src import ai_analyst as aa  # noqa: PLC0415
-    cfg = aa.AIConfig(
-        api_key=(args.api_key or None),
-        provider=args.provider,
-        model=(args.model or None),
-        base_url=(args.base_url or None),
-    ).resolve()
+    explicit = bool(args.provider or args.api_key or args.model or args.base_url)
+    if explicit:
+        cfg = aa.AIConfig(
+            api_key=(args.api_key or None),
+            provider=(args.provider or "openrouter"),
+            model=(args.model or None),
+            base_url=(args.base_url or None),
+        ).resolve()
+    else:
+        cfg = aa.config_from_env()
     usable, reason = cfg.is_usable()
     if not usable:
         raise SystemExit(f"AI config not usable: {reason}")
@@ -331,12 +341,12 @@ def main(argv=None) -> int:
         prog="python -m src.fusion.benchmark",
         description="Run the fusion-layer benchmark (sensors -> gate -> AI) against a model.",
     )
-    p.add_argument("--provider", default="ollama",
-                   help="AI provider: ollama, openrouter, openai, anthropic, kimi, qwen, groq, custom (default: ollama)")
-    p.add_argument("--model", default="", help="Model id (e.g. llama3). Empty = provider default.")
+    p.add_argument("--provider", default="",
+                   help="AI provider (default: from env / ~/.netlogic/secrets.json).")
+    p.add_argument("--model", default="", help="Model id (overrides config file).")
     p.add_argument("--base-url", default="",
-                   help="OpenAI-compatible base URL (e.g. http://my-ollama-cloud:11434/v1)")
-    p.add_argument("--api-key", default="", help="API key if the endpoint needs one (Ollama usually doesn't).")
+                   help="OpenAI-compatible base URL (overrides config file).")
+    p.add_argument("--api-key", default="", help="API key (overrides config file / env var).")
     p.add_argument("--oracle", action="store_true",
                    help="Use the ground-truth oracle (no model) — the perfect-AI upper bound.")
     p.add_argument("--verbose", "-v", action="store_true", help="Print per-subject decisions.")

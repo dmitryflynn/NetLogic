@@ -12,7 +12,6 @@ Flow:
 """
 
 import re
-import os
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
@@ -44,6 +43,8 @@ class CVE:
     has_metasploit: bool = False
     has_public_exploit: bool = False
     exploit_refs: list[str] = field(default_factory=list)
+    epss: float = 0.0              # EPSS probability of exploitation (0–1)
+    epss_percentile: float = 0.0   # EPSS percentile rank (0–1)
 
 
 @dataclass
@@ -181,6 +182,9 @@ BANNER_PATTERNS = [
     # ProFTPD
     (r"ProFTPD ([\d.]+)",                "proftpd"),
 
+    # Pure-FTPd
+    (r"Pure-FTPd",                       "pure-ftpd"),
+
     # Confluence
     (r"Confluence/([\d.]+)",                   "confluence"),
     (r"X-Confluence-Request-Time",             "confluence"),
@@ -217,7 +221,28 @@ BANNER_PATTERNS = [
     (r"X-Influxdb-Version:\s*([\d.]+)",        "influxdb"),
     (r'Server:\s*CouchDB/([\d.]+)',            "couchdb"),
     (r"RabbitMQ ([\d.]+)",                     "rabbitmq"),
+    (r"ActiveMQ/([\d.]+)",                     "activemq"),
+    (r"ActiveMQ ([\d.]+)",                     "activemq"),
+    (r"MiniServ/([\d.]+)",                     "webmin"),    # Webmin's HTTP server
     (r"lighttpd/([\d.]+)",                     "lighttpd"),
+
+    # ── Edge / VPN appliances — the most-exploited products in CISA KEV. Often
+    # version-less in the banner (the appliance hides it), so these usually
+    # identify the high-risk ASSET (product) for the AI/fusion layer; a version
+    # is captured when the device leaks one. Markers are distinctive (cookies /
+    # vendor paths / product strings) to keep false positives near zero.
+    (r"Set-Cookie:\s*NSC_",                    "netscaler"),   # Citrix ADC/NetScaler (CVE-2023-3519)
+    (r"Citrix(?:[^\n]{0,40}?)Gateway",         "netscaler"),
+    (r"Set-Cookie:\s*SVPNCOOKIE",              "fortios"),     # Fortinet FortiGate SSL-VPN
+    (r"FortiGate",                             "fortios"),
+    (r"Set-Cookie:\s*BIGipServer",             "big-ip"),      # F5 BIG-IP (CVE-2022-1388)
+    (r"Server:\s*BIG-IP",                      "big-ip"),
+    (r"/dana-na/",                             "pulse-connect-secure"),  # Ivanti/Pulse (CVE-2024-21887)
+    (r"GlobalProtect",                         "pan-os"),      # Palo Alto (CVE-2024-3400)
+    (r"VMware vCenter(?:[^\n]{0,40}?)([\d.]+)", "vcenter"),    # CVE-2021-21972 / Log4j
+    (r"X-Zimbra",                              "zimbra"),      # Zimbra (CVE-2022-27925)
+    (r"Zimbra(?:\s+Collaboration)?",           "zimbra"),
+    (r"SonicWALL|SonicWall",                   "sonicwall"),
     (r"GlassFish(?:[^/]*)/([\d.]+)",           "glassfish"),
     (r"ColdFusion[/ ]([\d.]+)",                "coldfusion"),
     (r"X-Powered-By:.*ColdFusion",             "coldfusion"),
@@ -225,7 +250,7 @@ BANNER_PATTERNS = [
     (r"X-OWA-Version:\s*([\d.]+)",             "exchange"),
     (r"X-FEServer:",                           "exchange"),
     (r"MicrosoftSharePointTeamServices:\s*([\d.]+)", "sharepoint"),
-    (r"RFB (\d{3})\.(\d{3})",                  "vnc"),
+    (r"RFB (\d{3}\.\d{3})",                    "vnc"),
     (r"OpenLDAP/([\d.]+)",                     "openldap"),
     (r'"solr-spec-version"\s*:\s*"([\d.]+)"',  "solr"),
     (r"MinIO Object Storage",                  "minio"),
@@ -260,6 +285,10 @@ def extract_product_version(banner_obj) -> tuple[Optional[str], Optional[str]]:
 
     # Raw string banner
     raw = getattr(banner_obj, 'raw', '') or str(banner_obj) or ''
+    # Coerce bytes → str: the regexes below are str patterns, so a bytes banner
+    # (e.g. raw socket payload passed straight in) would raise TypeError.
+    if isinstance(raw, (bytes, bytearray)):
+        raw = bytes(raw).decode('utf-8', errors='replace')
     if not raw:
         return None, None
 
@@ -285,18 +314,69 @@ def extract_product_version(banner_obj) -> tuple[Optional[str], Optional[str]]:
         if mapped is None:
             continue
         if len(key) > 3 and key in raw_lower:
-            # Try to find a version number nearby
-            vm = re.search(r'[\s/v]([\d]+\.[\d]+(?:\.[\d]+)?)', raw)
+            # Find a version number that appears AFTER the product name, and never
+            # mistake the "HTTP/1.1" protocol token (which precedes the Server
+            # header) for the product version — that fired CVEs on every
+            # version-less HTTP banner.
+            after = raw[raw_lower.find(key) + len(key):]
+            after = re.sub(r'(?i)\bHTTP/\d(?:\.\d)?', ' ', after)
+            vm = re.search(r'[\s/v_-]([\d]+\.[\d]+(?:\.[\d]+)?)', after)
             version = vm.group(1) if vm else None
             return key, version
 
     return None, None
 
 
-def infer_product_from_service(service: str, port: int) -> Optional[str]:
+# OS family that a port-inferred product implies. Used to avoid guessing an
+# OS-incompatible daemon (e.g. a Linux FTP server on a Windows/IIS host).
+_PORT_PRODUCT_OS = {
+    "vsftpd": "unix", "apache": "unix", "openssh": "unix", "dovecot": "unix",
+    "postfix": "unix", "bind": "unix", "samba": "unix", "cups": "unix",
+    "nfs": "unix", "rpcbind": "unix", "proftpd": "unix", "openldap": "unix",
+    "snmpd": "unix", "tomcat": "unix",
+    "mssql": "windows", "rdp": "windows", "smb": "windows",
+}
+
+
+def infer_host_os(ports) -> Optional[str]:
+    """Best-effort host OS family from confirmed banners across ALL open ports.
+
+    A single strong signal (an IIS banner, an Ubuntu/Apache string) lets us avoid
+    cross-OS misattribution when guessing products for ports that returned no
+    banner. Returns 'windows', 'unix', or None when signals are absent/conflicting.
+    """
+    windows_signals = ("microsoft-iis", "microsoft", "win32", "win64", "windows",
+                       "ms-wbt", "iis/")
+    unix_signals = ("ubuntu", "debian", "unix", "linux", "apache", "openssh",
+                    "nginx", "mod_", "centos", "red hat", "redhat", "freebsd", ".el")
+    win = unix = 0
+    for p in ports:
+        b = getattr(p, 'banner', None)
+        raw  = (getattr(b, 'raw', '') or '').lower() if b else ''
+        prod = (getattr(b, 'product', '') or '').lower() if b else ''
+        svc  = (getattr(p, 'service', '') or '').lower()
+        hay = f"{raw} {prod} {svc}"
+        if any(s in hay for s in windows_signals):
+            win += 1
+        if any(s in hay for s in unix_signals):
+            unix += 1
+    if win and not unix:
+        return "windows"
+    if unix and not win:
+        return "unix"
+    return None  # unknown or conflicting — don't claim
+
+
+def infer_product_from_service(service: str, port: int,
+                               host_os: Optional[str] = None) -> Optional[str]:
     """
     When no banner is available, infer likely product from service name and port.
     Used for CVE lookups when banner grabbing failed.
+
+    ``host_os`` (from infer_host_os) suppresses OS-incompatible guesses — e.g. on a
+    confirmed Windows/IIS host we won't claim port 21 is vsftpd or 443 is Apache.
+    Suppressing a wrong guess is better than asserting one: a bad product name
+    drives bad CVE correlation downstream.
     """
     service_lower = (service or "").lower()
     port_map = {
@@ -333,9 +413,19 @@ def infer_product_from_service(service: str, port: int) -> Optional[str]:
     }
     # If the service name itself maps to a known product, prefer that
     mapped = PRODUCT_KEYWORD_MAP.get(service_lower)
-    if mapped:
-        return service_lower
-    return port_map.get(port)
+    candidate = service_lower if mapped else port_map.get(port)
+    # SMB ports are ambiguous: Windows runs SMB (EternalBlue/SMBGhost), Linux runs
+    # Samba (SambaCry). Disambiguate by host OS so the right CVE family applies and
+    # Linux Samba CVEs aren't attributed to a Windows host (or vice versa).
+    if port in (139, 445) and not mapped:
+        candidate = "smb" if host_os == "windows" else "samba"
+    if not candidate:
+        return None
+    # Drop guesses that contradict the detected host OS.
+    cand_os = _PORT_PRODUCT_OS.get(candidate)
+    if host_os and cand_os and cand_os != host_os:
+        return None
+    return candidate
 
 
 # ─── Risk Scoring ─────────────────────────────────────────────────────────────
@@ -417,6 +507,10 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
     if not nvd_ok and verbose:
         print("  [!] NVD API unreachable — offline signatures only", file=sys.stderr)
 
+    # Determine the host OS family once, from all confirmed banners, so per-port
+    # product inference doesn't guess Linux daemons on a Windows host (or vice versa).
+    host_os = infer_host_os(ports)
+
     # ── Step 1: build a lookup map from offline signatures first ─────────────
     # keyed by port so we can merge NVD results into the same VulnMatch object
     offline_by_port: dict[int, VulnMatch] = {}
@@ -435,7 +529,7 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
             product = None
             version = None
         if not product:
-            product = infer_product_from_service(service, port)
+            product = infer_product_from_service(service, port, host_os)
 
         if banner and product and version:
             _confidence = "HIGH"
@@ -450,25 +544,31 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
             continue
 
         if not version:
+            # No version → no version-confirmed CVE match is possible. We only
+            # surface factual misconfigurations here, never presence-based CVE
+            # guesses (those are left to the AI to reason about from the facts).
+            note = None
             if product == "redis":
-                offline_by_port[port] = VulnMatch(
-                    port=port, service=service, product=product, version=None,
-                    cves=[], risk_score=5.0,
-                    notes=["⚠ Redis instance appears to be unprotected (no authentication required)"],
-                    source="misconfig", detection_confidence="MEDIUM",
-                )
+                note = "⚠ Redis instance appears to be unprotected (no authentication required)"
             elif product == "telnet":
+                note = "⚠ Telnet is an insecure protocol (unencrypted)"
+            if note:
                 offline_by_port[port] = VulnMatch(
                     port=port, service=service, product=product, version=None,
-                    cves=[], risk_score=4.0,
-                    notes=["⚠ Telnet is an insecure protocol (unencrypted)"],
-                    source="misconfig", detection_confidence="MEDIUM",
+                    cves=[], risk_score=(5.0 if product == "redis" else 4.0),
+                    notes=[note], source="misconfig", detection_confidence="MEDIUM",
                 )
             continue
 
         matched_offline = []
         for prod_key, ver_fn, cve_id, cvss, sev, vec, desc in OFFLINE_SIGS:
-            if prod_key not in (product or '').lower():
+            if not _product_matches(prod_key, product):
+                continue
+            # Skip presence-based signatures entirely. A "lambda v: True" sig fires
+            # on product presence regardless of patch level (it matches even an
+            # impossibly-high version) — that's a guess, not a finding. The AI
+            # raises these from the facts (e.g. "exposed SMB → consider EternalBlue").
+            if _is_version_independent(ver_fn):
                 continue
             if version and not ver_fn(version):
                 continue
@@ -477,21 +577,139 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
             matched_offline.append(CVE(
                 id=cve_id, description=desc, cvss_score=cvss,
                 severity=sev, vector=vec, published="",
-                exploit_available=(cve_id in PUBLIC_EXPLOIT_CVE_IDS or cvss >= 9.0),
+                exploit_available=(cve_id in PUBLIC_EXPLOIT_CVE_IDS),
                 has_metasploit=(cve_id in METASPLOIT_CVE_IDS),
                 has_public_exploit=(cve_id in PUBLIC_EXPLOIT_CVE_IDS),
             ))
 
         if matched_offline:
+            # The same CVE id can be listed under more than one version threshold
+            # for a product (data dup, occasionally with differing CVSS). Collapse
+            # to one entry per id — highest CVSS wins — so a single finding is never
+            # double-counted in the CVE list or the risk breadth bonus.
+            _by_id: dict[str, CVE] = {}
+            for c in matched_offline:
+                prev = _by_id.get(c.id)
+                if prev is None or c.cvss_score > prev.cvss_score:
+                    _by_id[c.id] = c
+            matched_offline = list(_by_id.values())
             matched_offline.sort(key=lambda c: c.cvss_score, reverse=True)
             notes = []
-            if not version:
-                notes.append("Version unknown — showing CVEs that may apply to this product")
+
+            raw_banner = getattr(banner, 'raw', '') or str(banner) if banner else ''
+            precision = _match_precision(product, version, raw_banner)
+            risk = calculate_risk(matched_offline)
+            confidence = _confidence
+            if precision == "potential":
+                confidence = "POTENTIAL"
+                # De-rank below genuine confirmed findings so unverified matches
+                # never dominate the report or masquerade as a confirmed critical.
+                risk = min(risk, 5.9)
+                if product in _COARSE_VERSION_PRODUCTS:
+                    notes.insert(0,
+                        f"⚠ POTENTIAL (unverified): '{product} {version}' is a product "
+                        "version, not a patch level — these CVEs ship fixes via platform "
+                        "updates the banner can't reveal. Likely a false positive unless "
+                        "the host is unpatched. Verify with an authenticated/active check.")
+                else:
+                    notes.insert(0,
+                        "⚠ POTENTIAL (unverified): the banner shows a distribution that "
+                        "backports security fixes without changing the version number, so "
+                        "these CVEs may already be patched. Verify before reporting.")
+
             offline_by_port[port] = VulnMatch(
                 port=port, service=service, product=product, version=version,
-                cves=matched_offline, risk_score=calculate_risk(matched_offline),
-                notes=notes, source="offline", detection_confidence=_confidence,
+                cves=matched_offline, risk_score=risk,
+                notes=notes, source="offline", detection_confidence=confidence,
             )
+
+    # ── Step 1.5: enrich from the local VDB when NVD is unreachable ──────────
+    # The synced offline VDB holds tens of thousands of cached CVEs — far richer
+    # than the hand-curated OFFLINE_SIGS — so it provides real offline breadth.
+    # Skipped when NVD is up (NVD is authoritative and already merged below).
+    if not nvd_ok:
+        try:
+            from src.vdb_engine import vdb_engine
+            vdb_ready = vdb_engine.is_initialized()
+        except Exception:
+            vdb_ready = False
+        if vdb_ready:
+            for port_result in ports:
+                port    = port_result.port
+                service = getattr(port_result, 'service', '') or ''
+                banner  = getattr(port_result, 'banner', None)
+
+                product, version = None, None
+                if banner:
+                    product, version = extract_product_version(banner)
+                if product and product.startswith('http'):
+                    product = version = None
+                if not product:
+                    product = infer_product_from_service(service, port, host_os)
+                if not product or not version:
+                    continue
+
+                # Only take version-CONFIRMED VDB rows. The POTENTIAL rows (no
+                # version range on record) include ancient/irrelevant CVEs — e.g.
+                # a 1999 OpenSSH CVE "matching" 8.9 — which would tank precision.
+                # Famous version-less CVEs are already covered by the presence-based
+                # signatures above.
+                try:
+                    vdb_hits = [h for h in vdb_engine.local_match(product, version)
+                                if h.cvss >= min_cvss
+                                and getattr(h, "match_status", "POTENTIAL") == "CONFIRMED"]
+                except Exception:
+                    vdb_hits = []
+                if not vdb_hits:
+                    continue
+
+                vdb_cves = [CVE(
+                    id=h.id, description=h.description, cvss_score=h.cvss,
+                    severity=h.severity, vector="", published="",
+                    exploit_available=(h.kev or h.has_msf or h.id in PUBLIC_EXPLOIT_CVE_IDS),
+                    kev=h.kev, has_metasploit=h.has_msf,
+                    has_public_exploit=(h.id in PUBLIC_EXPLOIT_CVE_IDS),
+                ) for h in vdb_hits]
+
+                raw_banner = getattr(banner, 'raw', '') or str(banner) if banner else ''
+                precision = _match_precision(product, version, raw_banner)
+                has_kev = any(c.kev for c in vdb_cves)
+                # A VDB row marked POTENTIAL had no version range to confirm against.
+                all_potential = all(getattr(h, "match_status", "POTENTIAL") == "POTENTIAL"
+                                    for h in vdb_hits)
+
+                existing = offline_by_port.get(port)
+                if existing:
+                    seen = {c.id for c in existing.cves}
+                    for c in vdb_cves:
+                        if c.id not in seen:
+                            existing.cves.append(c)
+                            seen.add(c.id)
+                    existing.cves.sort(key=lambda c: c.cvss_score, reverse=True)
+                    existing.risk_score = calculate_risk(existing.cves)
+                    existing.source = "vdb+offline"
+                    if existing.detection_confidence == "POTENTIAL":
+                        existing.risk_score = min(existing.risk_score, 5.9)
+                else:
+                    confidence = "HIGH"
+                    notes = []
+                    if (precision == "potential" or all_potential) and not has_kev:
+                        confidence = "POTENTIAL"
+                        notes.insert(0,
+                            "⚠ POTENTIAL (unverified): matched against the local CVE database "
+                            "but the exact patch level isn't confirmed (coarse version, distro "
+                            "backport, or no version range on record). Verify before reporting.")
+                    risk = calculate_risk(vdb_cves)
+                    if confidence == "POTENTIAL":
+                        risk = min(risk, 5.9)
+                    if has_kev:
+                        kev_ids = [c.id for c in vdb_cves if c.kev]
+                        notes.append(f"★ CISA KEV: {', '.join(kev_ids[:3])} — actively exploited in the wild")
+                    offline_by_port[port] = VulnMatch(
+                        port=port, service=service, product=product, version=version,
+                        cves=vdb_cves, risk_score=risk, notes=notes,
+                        source="vdb", detection_confidence=confidence,
+                    )
 
     # ── Step 2: if NVD is reachable, query and merge per port ────────────────
     if nvd_ok:
@@ -507,7 +725,7 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
                 product = None
                 version = None
             if not product:
-                product = infer_product_from_service(service, port)
+                product = infer_product_from_service(service, port, host_os)
 
             if banner and product and version:
                 _confidence = "HIGH"
@@ -534,6 +752,12 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
 
             nvd_converted = [_nvd_to_cve(c) for c in nvd_cves]
 
+            raw_banner = getattr(banner, 'raw', '') or str(banner) if banner else ''
+            precision = _match_precision(product, version, raw_banner)
+            # A CISA KEV hit means the CVE is actively exploited in the wild — that
+            # is real signal, so a KEV present keeps the finding at confirmed grade
+            # even on a backporting distro (the operator should still verify patch).
+
             # Merge: start from offline CVEs for this port, add NVD ones not already present
             existing = offline_by_port.get(port)
             if existing:
@@ -545,8 +769,12 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
                 existing.cves.sort(key=lambda c: c.cvss_score, reverse=True)
                 existing.risk_score = calculate_risk(existing.cves)
                 existing.source = "nvd+offline"
-                if _confidence == "HIGH" and existing.detection_confidence != "HIGH":
+                # Never upgrade a POTENTIAL match back to HIGH — precision is a hard
+                # ceiling set by what the banner can actually prove.
+                if _confidence == "HIGH" and existing.detection_confidence not in ("HIGH", "POTENTIAL"):
                     existing.detection_confidence = _confidence
+                if existing.detection_confidence == "POTENTIAL":
+                    existing.risk_score = min(existing.risk_score, 5.9)
                 if any(c.kev for c in existing.cves):
                     kev_ids = [c.id for c in existing.cves if c.kev]
                     kev_note = f"★ CISA KEV: {', '.join(kev_ids[:3])} — actively exploited in the wild"
@@ -557,20 +785,46 @@ def correlate(ports, min_cvss: float = 4.0, verbose: bool = False) -> list[VulnM
                 notes = []
                 if not version:
                     notes.append("Version unknown — showing all known CVEs for this product")
-                if any(c.kev for c in nvd_converted):
+                confidence = _confidence
+                risk = calculate_risk(nvd_converted)
+                has_kev = any(c.kev for c in nvd_converted)
+                # Demote unverifiable backport/coarse-version matches — unless a KEV
+                # is present (actively-exploited CVEs warrant urgent verification).
+                if precision == "potential" and not has_kev:
+                    confidence = "POTENTIAL"
+                    risk = min(risk, 5.9)
+                    notes.insert(0,
+                        "⚠ POTENTIAL (unverified): version/patch level can't be confirmed "
+                        "from the banner (coarse product version or a distro that backports "
+                        "fixes). These may already be patched — verify before reporting.")
+                if has_kev:
                     kev_ids = [c.id for c in nvd_converted if c.kev]
                     notes.append(f"★ CISA KEV: {', '.join(kev_ids[:3])} — actively exploited in the wild")
                 offline_by_port[port] = VulnMatch(
                     port=port, service=service, product=product, version=version,
-                    cves=nvd_converted, risk_score=calculate_risk(nvd_converted),
-                    notes=notes, source="nvd", detection_confidence=_confidence,
+                    cves=nvd_converted, risk_score=risk,
+                    notes=notes, source="nvd", detection_confidence=confidence,
                 )
 
     results = list(offline_by_port.values())
+
+    # Attach EPSS (exploit-probability) scores so consumers can prioritise by what
+    # is actually likely to be exploited, not just CVSS. Fails soft when offline.
+    try:
+        from src.epss import enrich_with_epss
+        enrich_with_epss(results)
+        # Within each port, order CVEs by real-world urgency: KEV, then EPSS, then CVSS.
+        for vm in results:
+            vm.cves.sort(key=lambda c: (getattr(c, "kev", False),
+                                        getattr(c, "epss", 0.0),
+                                        c.cvss_score), reverse=True)
+    except Exception:
+        pass
+
     results.sort(key=lambda m: m.risk_score, reverse=True)
 
     total_cves = sum(len(m.cves) for m in results)
-    source_tag = "nvd+offline" if nvd_ok else "offline"
+    source_tag = "nvd+offline" if nvd_ok else ", ".join(sorted({m.source for m in results}) or ["offline"])
     if verbose:
         print(f"Total CVEs found: {total_cves} ({len(results)} port(s), source: {source_tag})", file=sys.stderr)
     return results
@@ -589,6 +843,100 @@ def _ver_in_range(v: str, low: str, high: str) -> bool:
     return _ver_lte(low, v) and _ver_lte(v, high)
 
 
+def _ver_lt_branch(v: str, branch_fixes: dict) -> bool:
+    """Branch-aware vulnerability test for products with parallel release lines.
+
+    A plain `_ver_lt(v, "9.0.31")` wrongly fires on a *patched* 8.5.51 (because
+    8.5.51 < 9.0.31). This instead checks v against the fixed version of ITS OWN
+    major.minor branch. Versions on a branch not listed return False — an unknown
+    branch is never assumed vulnerable, which kills cross-branch over-firing.
+
+    branch_fixes: {"9.0": "9.0.31", "8.5": "8.5.51", "7.0": "7.0.100"}
+    """
+    if not v:
+        return False
+    nums = [p for p in re.split(r'[^0-9]+', str(v).strip()) if p]
+    if len(nums) < 2:
+        return False
+    for branch, fixed in branch_fixes.items():
+        bparts = branch.split('.')
+        if nums[:len(bparts)] == bparts:
+            return _ver_lt(v, fixed)
+    return False
+
+
+# ─── Match Precision (false-positive suppression) ────────────────────────────
+# A version pulled from a banner is only trustworthy enough to CONFIRM a CVE when
+# that version number is actually patch-precise. Two common cases break that
+# assumption and produce the bulk of false positives:
+#
+#   1. Coarse product versions — e.g. "Microsoft-IIS/10.0" is ONE banner value
+#      for every Windows Server 2016/2019/2022 patch level. The http.sys CVEs
+#      that "match" it are fixed by monthly Windows Updates, which the banner
+#      cannot reveal. Matching them is a hint, never a confirmation.
+#   2. Distro backports — Ubuntu/Debian/RHEL ship security fixes WITHOUT bumping
+#      the upstream version ("OpenSSH 6.6.1p1 Ubuntu-2ubuntu2.13" is patched far
+#      beyond what "6.6.1" implies). Treating the upstream number as the patch
+#      level flags long-since-fixed CVEs on nearly every Linux host.
+#
+# When either holds, findings are tagged POTENTIAL (not CONFIRMED), de-ranked,
+# and annotated so the operator verifies before reporting.
+
+_COARSE_VERSION_PRODUCTS = {"iis"}
+
+_BACKPORT_MARKERS = (
+    "ubuntu", "debian", "raspbian", "red hat", "redhat", "rhel", "centos",
+    ".el", "~deb", "+deb", "fips", "amzn", "amazon", "suse",
+    "sles", "oracle linux", "rocky", "almalinux",
+)
+
+
+def _match_precision(product: str, version: str, raw_banner: str) -> str:
+    """Classify how much trust a banner-version CVE match deserves.
+
+    Returns "confirmed" only when the banner version is genuinely patch-precise.
+    Returns "potential" for coarse product versions (e.g. IIS major version) or
+    when the banner shows a distro that backports fixes without bumping the
+    version — in those cases a version match is a lead, not proof.
+    """
+    p = (product or "").lower()
+    raw = (raw_banner or "").lower()
+    if p in _COARSE_VERSION_PRODUCTS:
+        return "potential"
+    if any(marker in raw for marker in _BACKPORT_MARKERS):
+        return "potential"
+    return "confirmed"
+
+
+def _product_matches(prod_key: str, product: str) -> bool:
+    """Whether an offline-signature product key applies to a detected product.
+
+    Exact or whole-token match only. A naive substring check ('php' in 'phpmyadmin')
+    fired PHP CVEs on phpMyAdmin, Tomcat keys on 'tomcat-foo', etc. — a real
+    false-positive source.
+    """
+    p = (product or "").lower()
+    if not p:
+        return False
+    if prod_key == p:
+        return True
+    return prod_key in re.split(r'[^a-z0-9]+', p)
+
+
+def _is_version_independent(ver_fn) -> bool:
+    """True if an offline signature's version test ignores the version (lambda v: True).
+
+    Probed by asking whether an impossibly-high version still 'matches'. A real
+    threshold (`< x`, `== x`, `startswith`) returns False; an always-true sig
+    returns True. Such matches flag a famous CVE on product presence alone and are
+    never version-confirmed, so callers force them to POTENTIAL.
+    """
+    try:
+        return bool(ver_fn("999999.999.999"))
+    except Exception:
+        return False
+
+
 # ─── Offline Fallback Signatures ─────────────────────────────────────────────
 # Used when NVD API is unreachable. Kept lean — just the most critical/common.
 
@@ -598,9 +946,8 @@ OFFLINE_SIGS = [
     ("openssh", lambda v: _ver_lt(v, "7.7"),   "CVE-2018-15473", 5.3, "MEDIUM",   "", "OpenSSH < 7.7 username enumeration via timing side-channel."),
     ("openssh", lambda v: _ver_lt(v, "7.2"),   "CVE-2016-3115",  7.5, "HIGH",     "", "OpenSSH < 7.2p2 X11 Forwarding Bypass — possible bypass of restricted shells."),
     ("openssh", lambda v: _ver_lt(v, "2.9.9"), "CVE-2001-0529",  10.0,"CRITICAL", "", "OpenSSH < 2.9.9 Remote root compromise (channel code)."),
-    ("apache",  lambda v: _ver_lt(v, "2.4.58"),"CVE-2023-45662", 7.5, "HIGH",     "", "Apache HTTP Request Smuggling DoS."),
     ("apache",  lambda v: _ver_lt(v, "2.4.55"),"CVE-2022-22720", 9.8, "CRITICAL", "", "Apache HTTP request smuggling via unclosed inbound connections."),
-    ("apache",  lambda v: _ver_lt(v, "2.4.51"),"CVE-2021-40438", 9.0, "CRITICAL", "", "Apache mod_proxy SSRF via unix: URI scheme."),
+    ("apache",  lambda v: _ver_lt(v, "2.4.49"),"CVE-2021-40438", 9.0, "CRITICAL", "", "Apache mod_proxy SSRF via unix: URI scheme (fixed in 2.4.49)."),
     ("apache",  lambda v: v == "2.4.49",       "CVE-2021-41773", 9.8, "CRITICAL", "", "Apache 2.4.49 path traversal + RCE — massively exploited. Metasploit module."),
     ("apache",  lambda v: _ver_lt(v, "2.4.39"),"CVE-2019-0211",  9.8, "CRITICAL", "", "Apache CARPE DIEM — local privilege escalation to root."),
     ("apache",  lambda v: _ver_lt(v, "2.2.34"),"CVE-2017-9798",  7.5, "HIGH",     "", "Apache Optionsbleed — memory disclosure via OPTIONS request."),
@@ -615,9 +962,9 @@ OFFLINE_SIGS = [
     ("redis",   lambda v: _ver_lt(v, "5.0.14"),"CVE-2022-0543",  10.0,"CRITICAL", "", "Redis Lua sandbox escape — unauthenticated RCE (Debian/Ubuntu packages)."),
     ("redis",   lambda v: _ver_lt(v, "4.0.0"), "CVE-2018-8300",  8.8, "HIGH",     "", "Redis unprotected instance (No Auth) enabling system takeover via public SSH key drop."),
     ("vsftpd",  lambda v: v == "2.3.4",        "CVE-2011-2523",  10.0,"CRITICAL", "", "vsftpd 2.3.4 backdoor — username with :) opens root shell on port 6200."),
-    ("tomcat",  lambda v: _ver_lt(v, "9.0.31"),"CVE-2020-1938",  9.8, "CRITICAL", "", "Ghostcat: Tomcat AJP file read/include — RCE if file upload possible."),
-    ("tomcat",  lambda v: _ver_lt(v, "8.5.23"),"CVE-2017-12615", 9.8, "CRITICAL", "", "Tomcat JSP Upload Bypass RCE via HTTP PUT (Windows only)."),
-    ("tomcat",  lambda v: _ver_lt(v, "7.0.100"),"CVE-2020-9484", 9.8, "CRITICAL", "", "Tomcat deserialization RCE via PersistentManager + FileStore."),
+    ("tomcat",  lambda v: _ver_lt_branch(v, {"9.0":"9.0.31","8.5":"8.5.51","7.0":"7.0.100"}), "CVE-2020-1938",  9.8, "CRITICAL", "", "Ghostcat: Tomcat AJP file read/include — RCE if file upload possible."),
+    ("tomcat",  lambda v: _ver_lt_branch(v, {"7.0":"7.0.81"}), "CVE-2017-12615", 9.8, "CRITICAL", "", "Tomcat 7.0.x JSP Upload Bypass RCE via HTTP PUT (Windows only)."),
+    ("tomcat",  lambda v: _ver_lt_branch(v, {"10.0":"10.0.0","9.0":"9.0.35","8.5":"8.5.55","7.0":"7.0.104"}), "CVE-2020-9484", 9.8, "CRITICAL", "", "Tomcat deserialization RCE via PersistentManager + FileStore."),
     ("iis",     lambda v: v and v.startswith("10."), "CVE-2022-21907", 9.8, "CRITICAL", "", "IIS HTTP Protocol Stack wormable pre-auth RCE (Windows Server 2019/2022)."),
     ("iis",     lambda v: _ver_lt(v, "8.6"),        "CVE-2015-1635",  10.0,"CRITICAL", "", "MS15-034: IIS HTTP.sys remote code execution via Range header (IIS ≤ 8.5)."),
     ("iis",     lambda v: v and v.startswith("10."), "CVE-2021-31166", 9.8, "CRITICAL", "", "IIS HTTP.sys UAF Remote Code Execution / Blue Screen DoS (IIS 10.0)."),
@@ -636,9 +983,9 @@ OFFLINE_SIGS = [
     ("mysql",   lambda v: _ver_lt(v, "5.5.24"),"CVE-2012-2122",  7.5, "HIGH",     "", "MySQL authentication bypass probability bug in memcmp()."),
     ("memcached",lambda v: True,               "CVE-2018-1000115",7.5,"HIGH",     "", "Memcached UDP amplification DDoS — 50,000x factor, used in 1.7Tbps attack."),
     ("memcached",lambda v: _ver_lt(v, "1.4.33"),"CVE-2016-8704", 9.8, "CRITICAL", "", "Memcached SASL integer overflow leading to RCE."),
-    ("openssl", lambda v: _ver_lt(v, "3.0.7"), "CVE-2022-3602",  9.8, "CRITICAL", "", "OpenSSL v3 Punycode vulnerability — stack buffer overflow."),
+    ("openssl", lambda v: _ver_in_range(v, "3.0.0", "3.0.6"), "CVE-2022-3602",  9.8, "CRITICAL", "", "OpenSSL 3.0.0–3.0.6 Punycode stack buffer overflow (3.0.x only)."),
     ("openssl", lambda v: _ver_lt(v, "1.1.1u"),"CVE-2023-0286",  7.4, "HIGH",     "", "OpenSSL X.400 ASN.1 type confusion — potential RCE or DoS."),
-    ("openssl", lambda v: _ver_lt(v, "1.0.2"),  "CVE-2014-0160", 7.5, "HIGH",     "", "Heartbleed — OpenSSL TLS heartbeat memory disclosure. Private key extraction possible."),
+    ("openssl", lambda v: _ver_in_range(v, "1.0.1", "1.0.1f"), "CVE-2014-0160", 7.5, "HIGH",     "", "Heartbleed — OpenSSL 1.0.1–1.0.1f TLS heartbeat memory disclosure (fixed 1.0.1g)."),
     ("openssl", lambda v: _ver_lt(v, "1.0.2"),  "CVE-2014-0224", 7.5, "HIGH",     "", "OpenSSL CCS Injection vulnerability (MiTM decryption)."),
     ("samba",   lambda v: _ver_lt(v, "4.15.5"),"CVE-2021-44142", 9.9, "CRITICAL", "", "Samba out-of-bounds heap write in VFS fruit module — pre-auth RCE."),
     ("samba",   lambda v: _ver_lt(v, "4.13.17"),"CVE-2021-44141",8.8, "HIGH",     "", "Samba information leak via SMB1 UNIX extensions."),
@@ -698,7 +1045,6 @@ OFFLINE_SIGS = [
     ("cisco",    lambda v: True,                "CVE-2020-3118",  9.8, "CRITICAL", "", "Cisco IOS CDP protocol unauthenticated remote code execution."),
     ("ivanti",   lambda v: True,                "CVE-2023-46805", 8.2, "HIGH",     "", "Ivanti Connect Secure authentication bypass."),
     ("ivanti",   lambda v: True,                "CVE-2024-21887", 9.1, "CRITICAL", "", "Ivanti Connect Secure command injection RCE."),
-    ("zscaler",  lambda v: True,                "CVE-2024-xxxxx", 9.8, "CRITICAL", "", "Check NVD for latest critical vulnerabilities on Zscaler / networking equipment."),
     ("squid",    lambda v: _ver_lt(v, "4.15"),  "CVE-2021-28651", 7.5, "HIGH",     "", "Squid Proxy URN processing buffer overflow / DoS."),
     ("haproxy",  lambda v: _ver_lt(v, "2.2.17"),"CVE-2021-40346", 8.6, "HIGH",     "", "HAProxy HTTP request smuggling vulnerability."),
     ("openvpn",  lambda v: _ver_lt(v, "2.4.9"), "CVE-2020-11810", 7.5, "HIGH",     "", "OpenVPN double free vulnerability leading to DoS/RCE."),
@@ -766,7 +1112,6 @@ OFFLINE_SIGS = [
     ("iis",      lambda v: v and v.startswith("6."), "CVE-2017-7269",  9.8, "CRITICAL", "", "IIS 6.0 WebDAV buffer overflow RCE (ExplodingCan)."),
 
     # Grafana
-    ("grafana",  lambda v: _ver_lt(v, "9.2.4"),  "CVE-2021-43798", 7.5, "HIGH",     "", "Grafana unauthenticated path traversal — read arbitrary files on the server."),
     ("grafana",  lambda v: _ver_lt(v, "8.3.10"), "CVE-2022-21703", 8.8, "HIGH",     "", "Grafana CSRF → RCE via datasource configuration."),
     ("grafana",  lambda v: _ver_lt(v, "7.5.15"), "CVE-2022-31097", 8.8, "HIGH",     "", "Grafana stored XSS via AlertManager Matcher."),
     # Kibana
@@ -822,48 +1167,6 @@ OFFLINE_SIGS = [
     ("manageengine",lambda v: _ver_lt(v, "10.5"),"CVE-2021-44515", 9.8, "CRITICAL", "", "ManageEngine Desktop Central unauthenticated RCE via /client-manager endpoint."),
 
 ]
-
-
-def _offline_correlate(ports, min_cvss: float = 4.0) -> list[VulnMatch]:
-    """Fallback correlator using hardcoded signatures when NVD is offline."""
-    results = []
-    for port_result in ports:
-        port    = port_result.port
-        service = getattr(port_result, 'service', '') or ''
-        banner  = getattr(port_result, 'banner', None)
-
-        product, version = None, None
-        if banner:
-            product, version = extract_product_version(banner)
-        if not product:
-            product = infer_product_from_service(service, port)
-        if not product or not version:
-            continue
-
-        matched = []
-        for prod_key, ver_fn, cve_id, cvss, sev, vec, desc in OFFLINE_SIGS:
-            if prod_key not in (product or '').lower():
-                continue
-            if version and not ver_fn(version):
-                continue
-            if cvss < min_cvss:
-                continue
-            matched.append(CVE(
-                id=cve_id, description=desc, cvss_score=cvss,
-                severity=sev, vector=vec, published="",
-                exploit_available=(cvss >= 9.0),
-            ))
-
-        if matched:
-            matched.sort(key=lambda c: c.cvss_score, reverse=True)
-            results.append(VulnMatch(
-                port=port, service=service, product=product, version=version,
-                cves=matched, risk_score=calculate_risk(matched),
-                notes=["⚠ NVD offline — using built-in signatures (limited coverage)"],
-                source="offline",
-            ))
-    results.sort(key=lambda m: m.risk_score, reverse=True)
-    return results
 
 
 # Backward compat alias

@@ -1,6 +1,6 @@
 import { useState, FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useCreateJob, useAgents, type ScanRequest } from '../api/scan'
+import { useNavigate, Link } from 'react-router-dom'
+import { useCreateJob, useAgents, useAiSettings, type ScanRequest } from '../api/scan'
 
 const DEFAULT: ScanRequest = {
   target:      '',
@@ -17,6 +17,15 @@ const DEFAULT: ScanRequest = {
   timeout:     2,
   threads:     100,
   min_cvss:    4.0,
+  do_ai:       false,
+  ai_provider: '',
+  ai_key:      '',
+  ai_model:    '',
+  ai_base_url: '',
+  ssh_user:    '',
+  ssh_key:     '',
+  ssh_pass:    '',
+  ssh_port:    22,
 }
 
 export default function NewScan() {
@@ -24,17 +33,32 @@ export default function NewScan() {
   const [err,  setErr]  = useState('')
   const create          = useCreateJob()
   const { data: agents = [] } = useAgents()
+  const { data: ai }    = useAiSettings()
   const nav             = useNavigate()
 
   function toggle(key: keyof ScanRequest) {
     setForm((prev) => {
       const next = { ...prev, [key]: !prev[key] }
       // do_full overrides individual flags in the UI
-      if (key === 'do_full' && !prev.do_full) {
-        Object.assign(next, {
-          do_tls: true, do_headers: true, do_stack: true,
-          do_dns: true, do_osint: true, do_probe: true, do_takeover: true,
-        })
+      if (key === 'do_full') {
+        if (prev.do_full) {
+          // Unchecking full — clear all sub-options
+          Object.assign(next, {
+            do_tls: false, do_headers: false, do_stack: false,
+            do_dns: false, do_osint: false, do_probe: false, do_takeover: false,
+          })
+        } else {
+          // Checking full — enable all sub-options
+          Object.assign(next, {
+            do_tls: true, do_headers: true, do_stack: true,
+            do_dns: true, do_osint: true, do_probe: true, do_takeover: true,
+          })
+        }
+      } else {
+        // Unchecking a sub-option while full is on — clear full
+        if (prev.do_full && !next[key]) {
+          next.do_full = false
+        }
       }
       return next
     })
@@ -43,8 +67,30 @@ export default function NewScan() {
   async function submit(e: FormEvent) {
     e.preventDefault()
     setErr('')
+    // Validate custom port list
+    if (form.ports.startsWith('custom=')) {
+      const raw = form.ports.slice(7)
+      const parts = raw.split(',').map((s) => s.trim()).filter(Boolean)
+      if (parts.length === 0) {
+        setErr('Custom port list is empty.')
+        return
+      }
+      for (const p of parts) {
+        const n = parseInt(p, 10)
+        if (isNaN(n) || n < 1 || n > 65535) {
+          setErr(`Invalid port "${p}" — must be 1–65535.`)
+          return
+        }
+      }
+    }
+    // AI provider/key/model come from server-side Settings (configure once),
+    // not per-scan — the scan just toggles do_ai on.
+    const payload: ScanRequest = {
+      ...form,
+      target: form.target.trim(),
+    }
     try {
-      const job = await create.mutateAsync(form)
+      const job = await create.mutateAsync(payload)
       nav(`/scans/${job.job_id}`)
     } catch (ex) {
       setErr((ex as Error).message)
@@ -161,6 +207,45 @@ export default function NewScan() {
               </label>
             ))}
           </div>
+        </div>
+
+        {/* AI Analysis + Authenticated scanning */}
+        <div className="panel p-4 space-y-3">
+          <p className="section-title">AI &amp; Authenticated Scan</p>
+          <label className="flex items-center gap-2 text-[12px] text-text-dim cursor-pointer select-none hover:text-text">
+            <input type="checkbox" checked={!!form.do_ai} onChange={() => toggle('do_ai')} className="accent-accent" />
+            AI analysis &amp; attack-chain reasoning
+            <span className="text-[10px] text-text-dim/70">(auto-enables deep detection)</span>
+          </label>
+          {form.do_ai && (
+            <div className="text-[11px] pt-1">
+              {ai?.key_set ? (
+                <span className="text-text-dim">
+                  Using <span className="text-text">{ai.provider}{ai.model ? ` · ${ai.model}` : ''}</span> from{' '}
+                  <Link to="/settings" className="text-accent hover:underline">Settings</Link>.
+                </span>
+              ) : (
+                <span className="text-medium">
+                  No AI key configured — set one in{' '}
+                  <Link to="/settings" className="text-accent hover:underline">Settings</Link>,
+                  or AI analysis will be skipped.
+                </span>
+              )}
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-2 pt-1">
+            <input className="input text-[11px]" placeholder="SSH user (authenticated scan)"
+              value={form.ssh_user ?? ''} onChange={(e) => setForm({ ...form, ssh_user: e.target.value })} />
+            <input className="input text-[11px]" placeholder="SSH port" type="number"
+              value={form.ssh_port ?? 22} onChange={(e) => setForm({ ...form, ssh_port: parseInt(e.target.value) || 22 })} />
+            <input className="input text-[11px]" placeholder="SSH private key path"
+              value={form.ssh_key ?? ''} onChange={(e) => setForm({ ...form, ssh_key: e.target.value })} />
+            <input className="input text-[11px]" placeholder="SSH password (needs sshpass)" type="password"
+              value={form.ssh_pass ?? ''} onChange={(e) => setForm({ ...form, ssh_pass: e.target.value })} />
+          </div>
+          <p className="text-[10px] text-text-dim/70">
+            Authenticated scanning reads real installed package versions (patch-level ground truth). Key auth recommended.
+          </p>
         </div>
 
         {/* Tuning */}
