@@ -23,15 +23,20 @@
     },
     "asarUnpack": [
       "netlogic.py",
-      "src/**/*"
+      "netlogic_server.py",
+      "netlogic_agent.py",
+      "src/**/*",
+      "api/**/*"
     ],
     "files": [
       "electron/**/*",
-      "renderer/**/*",
       "src/**/*",
+      "api/**/*",
+      "dashboard/dist/**/*",
       "netlogic.py",
-      "build/netlogic.png",
-      "build/netlogic.ico"
+      "netlogic_server.py",
+      "netlogic_agent.py",
+      "build/netlogic.png"
     ],
     "extraResources": [
       {

@@ -82,7 +82,7 @@ def _impact_of(signals: list[Signal]) -> str:
     # Exposure context: a private/internal-only reachability demotes one band
     # (still real, but lower real-world blast radius). "unknown" never demotes —
     # absence of reachability evidence is not evidence of safety.
-    reach = {(s.exposure or {}).get("reachability") for s in signals}
+    reach = {(s.exposure if isinstance(s.exposure, dict) else {}).get("reachability") for s in signals}
     if reach and reach <= {"private"}:  # every signal that has exposure says private
         base = _demote(base, 1)
     return base
@@ -90,13 +90,17 @@ def _impact_of(signals: list[Signal]) -> str:
 
 def _is_pinned(signals: list[Signal], impact: str) -> bool:
     """Un-droppable: KEV, a high-reliability probe confirmation, or a critical with a
-    real exploit/high EPSS. The AI is never allowed to suppress these."""
+    real exploit/high EPSS (unless version-matched — those must remain candidate
+    for patch-level verification)."""
     if any(s.kev for s in signals):
         return True
     if any(s.is_probe_confirmed for s in signals):
         return True
-    if impact == "critical" and any(s.exploit_available or s.epss >= _EPSS_PIN for s in signals):
-        return True
+    # Version-matched signals (e.g. Nuclei banner matches) never pin by EPSS/exploit
+    # alone — the finding is only version-level, not patch-level confirmed.
+    if not any(s.version_matched for s in signals):
+        if impact == "critical" and any(s.exploit_available or s.epss >= _EPSS_PIN for s in signals):
+            return True
     return False
 
 
@@ -110,11 +114,21 @@ def _adjudicate_group(signals: list[Signal]) -> Verdict:
     has_high = any(s.reliability == "high" for s in signals)
     pinned = _is_pinned(signals, impact)
 
+    # Version-only: all signals are banner/version matches, none probe-confirmed
+    # or KEV. Patch level cannot be verified from a banner alone (distros backport
+    # security fixes without bumping the version number). Only blocks false
+    # auto-conformation — normal discard rules still apply for low-impact noise.
+    version_only = not pinned and all(s.version_matched for s in signals)
+
     if pinned:
         decision, rationale = "confirmed", "pinned (KEV / probe-confirmed / exploitable critical) — un-droppable"
     elif agreement >= _AGREE_CONFIRM and has_high:
-        decision = "confirmed"
-        rationale = f"{agreement} independent sources corroborate, ≥1 high-reliability"
+        if version_only:
+            decision = "gray"
+            rationale = f"{agreement} independent sources agree by version, but patch level unverifiable from banner — needs patch-level verification"
+        else:
+            decision = "confirmed"
+            rationale = f"{agreement} independent sources corroborate, ≥1 high-reliability"
     elif agreement <= 1 and not has_high and impact in ("low", "medium") and not pinned:
         # Lone, low/medium-impact, no high-reliability sensor, no corroboration → noise.
         # Note: anything high/critical is never auto-discarded — it goes to the AI.

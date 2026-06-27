@@ -68,11 +68,19 @@ class TestCVECorrelation(unittest.TestCase):
         cves = [c for m in matches for c in m.cves]
         self.assertGreater(len(cves), 0)
 
-    def test_openssh_new_no_cves(self):
-        # 9.3p2+ is fully patched; 9.9 should have no CVEs
+    def test_openssh_new_no_offline_false_positives(self):
+        # A modern OpenSSH (9.9) must not trip the legacy OFFLINE signatures, which
+        # all target < 9.3. (We can't assert "zero CVEs" anymore: live NVD legitimately
+        # returns newer CVEs whose version ranges include 9.9 — that's correct behavior.)
         matches = correlate([_make_port_result(22, "ssh", "openssh", "9.9.0")])
-        cves = [c for m in matches for c in m.cves if c.id.startswith("CVE")]
-        self.assertEqual(len(cves), 0)
+        cve_ids = {c.id for m in matches for c in m.cves}
+        legacy_offline = {
+            "CVE-2023-38408", "CVE-2021-41617", "CVE-2018-15473",
+            "CVE-2016-3115", "CVE-2001-0529",
+        }
+        leaked = legacy_offline & cve_ids
+        self.assertEqual(leaked, set(),
+                         f"Legacy offline sigs misfired on OpenSSH 9.9: {leaked}")
 
     def test_redis_misconfiguration_flagged(self):
         matches = correlate([_make_port_result(6379, "redis")])

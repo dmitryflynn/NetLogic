@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import type { ScanSections, FusionRow } from '../api/scan'
 import Markdown from './Markdown'
 
@@ -53,9 +54,22 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
   )
 }
 
-export default function ScanSections({ s }: { s: ScanSections }) {
+export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
+  s: ScanSections
+  onExplore?: (finding: string) => void
+  exploreMd?: Record<string, string>
+  exploring?: string | null
+}) {
   const arr = (x: unknown) => (Array.isArray(x) ? (x as Record<string, unknown>[]) : [])
   const str = (x: unknown) => (x == null ? '' : String(x))
+  const deepDiveRef = useRef<HTMLDivElement | null>(null)
+
+  // Scroll deep-dive section into view when a new elaboration arrives
+  useEffect(() => {
+    if (exploreMd && Object.keys(exploreMd).length > 0 && deepDiveRef.current) {
+      deepDiveRef.current.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [exploreMd])
 
   return (
     <>
@@ -64,7 +78,19 @@ export default function ScanSections({ s }: { s: ScanSections }) {
         <Panel title={`AI Analyst${s.ai.model ? ` · ${s.ai.provider}/${s.ai.model}` : ''}`}>
           {s.ai.error
             ? <p className="text-high">⚠ {s.ai.error}</p>
-            : <Markdown text={s.ai.markdown ?? ''} />}
+            : <Markdown text={s.ai.markdown ?? ''} onExplore={onExplore} exploring={exploring} />}
+          {/* Inline explore elaborations (Beyond CVEs deep-dives) */}
+          {exploreMd && Object.entries(exploreMd).length > 0 && (
+            <div ref={deepDiveRef} className="mt-3 border-t border-border pt-3 space-y-3">
+              {Object.entries(exploreMd).map(([finding, md]) => (
+                <div key={finding} className="border border-accent/20 rounded p-3 bg-elevated/50">
+                  <p className="text-[11px] text-text-dim mb-1">⟐ Deep dive: {finding}</p>
+                  <Markdown text={md} exploring={exploring} />
+                </div>
+              ))}
+            </div>
+          )}
+          {exploring && <p className="text-[11px] text-text-dim mt-2 italic">⟐ Exploring…</p>}
         </Panel>
       )}
 

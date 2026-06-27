@@ -423,6 +423,21 @@ def test_cve_template_populates_signal_fields():
     assert s.kev is True
     assert s.epss == 0.95
     assert s.kind == "vuln"
+    assert s.version_matched is True
+
+
+def test_nuclei_signal_includes_observed_data():
+    sigs = _nucleus(T_CVE).detect(_resp(html="CVE-2099 evidence here", status=200, headers={"Server": "IIS/10.0"}))
+    assert len(sigs) == 1
+    view = sigs[0].ai_view()
+    od = view.get("observed_data")
+    assert od is not None
+    assert od["response_status"] == 200
+    assert od["response_headers"]["Server"] == "IIS/10.0"
+    assert "CVE-2099" in od["body_snippet"]
+    assert od["matched_path"] == "/"
+    # Sensor name must NOT leak into observed_data
+    assert "nuclei" not in str(od)
 
 
 def test_cve_template_flow_through_gate():

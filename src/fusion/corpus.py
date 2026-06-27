@@ -52,10 +52,10 @@ def main(argv=None) -> int:
         description="Run the fusion benchmark over an HTTP-cassette corpus (Vulhub + clean).",
     )
     p.add_argument("--cassettes", default="", help="Directory of cassette .json files (default: bundled seeds).")
-    p.add_argument("--provider", default="ollama", help="AI provider (default: ollama).")
-    p.add_argument("--model", default="", help="Model id (e.g. glm-5:cloud).")
-    p.add_argument("--base-url", default="", help="OpenAI-compatible base URL (e.g. https://ollama.com/v1).")
-    p.add_argument("--api-key", default="", help="API key if the endpoint needs one.")
+    p.add_argument("--provider", default="", help="AI provider (default: from env / ~/.netlogic/secrets.json).")
+    p.add_argument("--model", default="", help="Model id (overrides config file).")
+    p.add_argument("--base-url", default="", help="OpenAI-compatible base URL (overrides config file).")
+    p.add_argument("--api-key", default="", help="API key (overrides config file / env var).")
     p.add_argument("--oracle", action="store_true", help="Use the ground-truth oracle (no model).")
     p.add_argument("--verbose", "-v", action="store_true", help="Print per-subject decisions.")
     p.add_argument("--export", default="", help="Write the report to this path.")
@@ -73,12 +73,21 @@ def main(argv=None) -> int:
     else:
         from src.fusion.ai import make_completer  # noqa: PLC0415
         from src import ai_analyst as aa  # noqa: PLC0415
-        cfg = aa.AIConfig(api_key=(args.api_key or None), provider=args.provider,
-                          model=(args.model or None), base_url=(args.base_url or None)).resolve()
+        # If no explicit CLI args, fall back to env / ~/.netlogic/secrets.json
+        explicit = bool(args.provider or args.api_key or args.model or args.base_url)
+        if explicit:
+            cfg = aa.AIConfig(
+                api_key=(args.api_key or None),
+                provider=(args.provider or "openrouter"),
+                model=(args.model or None),
+                base_url=(args.base_url or None),
+            ).resolve()
+        else:
+            cfg = aa.config_from_env()
         usable, reason = cfg.is_usable()
         if not usable:
             raise SystemExit(f"AI config not usable: {reason}")
-        print(f"Model: {cfg.provider} / {cfg.model}  @ {cfg.base_url}  (key {'set' if cfg.api_key else 'none'})")
+        print(f"  Model: {cfg.provider} / {cfg.model}  @ {cfg.base_url}  (key {'set' if cfg.api_key else 'none'})")
         completer = make_completer(cfg)
         completer_for = (lambda _c: completer)
         label = "REAL MODEL"

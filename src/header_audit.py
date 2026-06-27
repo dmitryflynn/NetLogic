@@ -17,9 +17,7 @@ Covers:
 """
 
 import ssl
-import socket
 import urllib.request
-import urllib.parse
 import urllib.error
 import re
 from dataclasses import dataclass, field
@@ -54,10 +52,46 @@ class HeaderAuditResult:
 
 # ─── Header Fetcher ──────────────────────────────────────────────────────────────
 
+PROBE_ORIGIN = "https://evil.bad"
+
+
+def _flatten_headers(msg) -> dict:
+    """
+    Collapse an email.message.Message (urllib response headers) into a
+    case-insensitive dict, preserving DUPLICATE headers.
+
+    HTTP headers are case-insensitive, so keys are lowercased. Duplicate
+    headers must NOT be silently dropped: ``dict(msg)`` keeps only the first
+    occurrence, which would hide extra Set-Cookie headers (and any other
+    repeated header) from the audit and cause false negatives. Multiple
+    Set-Cookie headers are joined with newlines (the cookie check splits on
+    "\n"); any other repeated header is joined with ", " per RFC 7230.
+    """
+    if msg is None:
+        return {}
+    out: dict = {}
+    try:
+        items = msg.items()
+    except Exception:
+        # Fall back to a plain mapping if it is not a Message-like object.
+        return {str(k).lower(): str(v) for k, v in dict(msg).items()}
+    for k, v in items:
+        lk = k.lower()
+        v = "" if v is None else str(v)
+        if lk in out:
+            sep = "\n" if lk == "set-cookie" else ", "
+            out[lk] = out[lk] + sep + v
+        else:
+            out[lk] = v
+    return out
+
+
 def fetch_headers(url: str, timeout: float = 8.0) -> tuple[dict, int]:
     """
     Fetch HTTP headers from a URL. Returns (headers_dict, status_code).
-    Follows one redirect, ignores cert errors.
+    Follows redirects (urllib default), ignores cert errors. Never raises:
+    on any failure returns ({}, 0) so the caller can produce a sane
+    "could not audit" result instead of a misleading all-missing report.
     """
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -66,25 +100,32 @@ def fetch_headers(url: str, timeout: float = 8.0) -> tuple[dict, int]:
     req = urllib.request.Request(url, headers={
         "User-Agent": "Mozilla/5.0 (compatible; NetLogic/1.0; Security Scanner)",
         "Accept": "text/html,application/xhtml+xml,*/*",
-        "Origin": "https://evil.bad",
+        "Origin": PROBE_ORIGIN,
     })
 
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-            headers = dict(resp.headers)
-            headers["_request_origin"] = "https://evil.bad"
-            return {k.lower(): v for k, v in headers.items()}, resp.status
+            headers = _flatten_headers(resp.headers)
+            headers["_request_origin"] = PROBE_ORIGIN
+            return headers, resp.status
     except urllib.error.HTTPError as e:
-        headers = dict(e.headers) if e.headers else {}
-        return {k.lower(): v for k, v in headers.items()}, e.code
+        # A 4xx/5xx still carries response headers worth auditing.
+        headers = _flatten_headers(e.headers)
+        headers["_request_origin"] = PROBE_ORIGIN
+        return headers, e.code
     except Exception:
         return {}, 0
 
 
 # ─── Individual Header Checks ────────────────────────────────────────────────────
 
-def check_hsts(headers: dict) -> Optional[HeaderFinding]:
+def check_hsts(headers: dict, is_https: bool = True) -> Optional[HeaderFinding]:
     val = headers.get("strict-transport-security", "")
+    if not is_https:
+        # HSTS is only meaningful over HTTPS — browsers ignore it on plain
+        # HTTP responses. Flagging it "missing" on an HTTP-only target is a
+        # false positive, so skip the check entirely for non-TLS responses.
+        return None
     if not val:
         return HeaderFinding(
             severity="HIGH", cvss=7.4,
@@ -99,7 +140,7 @@ def check_hsts(headers: dict) -> Optional[HeaderFinding]:
 
     issues = []
     # max-age check
-    m = re.search(r"max-age=(\d+)", val, re.IGNORECASE)
+    m = re.search(r"max-age\s*=\s*(\d+)", val, re.IGNORECASE)
     max_age = int(m.group(1)) if m else 0
     if max_age < 31536000:
         issues.append(f"max-age={max_age} is below recommended 31536000 (1 year)")
@@ -140,7 +181,7 @@ def check_csp(headers: dict) -> Optional[HeaderFinding]:
         issues.append("'unsafe-inline' defeats XSS protection for inline scripts/styles")
     if "unsafe-eval" in val:
         issues.append("'unsafe-eval' allows eval() — major XSS vector")
-    if re.search(r"(?:script-src|default-src)\s+['\"]?\*", val):
+    if re.search(r"(?:script-src|default-src)\b[^;]*(?<![\w.-])\*(?![\w.-])", val):
         issues.append("Wildcard (*) in script-src allows scripts from any origin")
     if "default-src" not in val and "script-src" not in val:
         issues.append("No script-src or default-src directive — scripts unrestricted")
@@ -162,8 +203,9 @@ def check_xframe(headers: dict) -> Optional[HeaderFinding]:
     val = headers.get("x-frame-options", "")
     csp = headers.get("content-security-policy", "")
 
-    # CSP frame-ancestors supersedes X-Frame-Options
-    if "frame-ancestors" in csp:
+    # CSP frame-ancestors supersedes X-Frame-Options if restrictive
+    fa = re.search(r"frame-ancestors\s+([^;]+)", csp, re.IGNORECASE)
+    if fa and fa.group(1).strip() != "*":
         return None
 
     if not val:
@@ -204,7 +246,7 @@ def check_xcto(headers: dict) -> Optional[HeaderFinding]:
             recommendation="Add: X-Content-Type-Options: nosniff",
             present=False
         )
-    if val.lower().strip() != "nosniff":
+    if val.lower().strip().rstrip(";") != "nosniff":
         return HeaderFinding(
             severity="LOW", cvss=3.1,
             header="X-Content-Type-Options",
@@ -353,9 +395,6 @@ def check_cache_control(headers: dict) -> Optional[HeaderFinding]:
 def check_cross_origin_policies(headers: dict) -> list[HeaderFinding]:
     findings = []
     corp = headers.get("cross-origin-resource-policy", "")
-    coep = headers.get("cross-origin-embedder-policy", "")
-    coop = headers.get("cross-origin-opener-policy", "")
-
     if not corp:
         findings.append(HeaderFinding(
             severity="INFO", cvss=0.0,
@@ -393,8 +432,8 @@ def check_cookies(headers: dict) -> list[HeaderFinding]:
         samesite = re.search(r"samesite=(\w+)", lower)
         if not samesite:
             issues.append("missing SameSite attribute — CSRF risk")
-        elif samesite.group(1) == "none" and "secure" in lower:
-            issues.append("SameSite=None requires Secure flag")
+        elif samesite.group(1) == "none" and "secure" not in lower:
+            issues.append("SameSite=None requires Secure flag — cookie will be rejected")
 
         if issues:
             findings.append(HeaderFinding(
@@ -410,16 +449,6 @@ def check_cookies(headers: dict) -> list[HeaderFinding]:
 
 
 # ─── Scoring ─────────────────────────────────────────────────────────────────────
-
-HEADER_WEIGHTS = {
-    "Strict-Transport-Security":    15,
-    "Content-Security-Policy":      20,
-    "X-Frame-Options":              10,
-    "X-Content-Type-Options":        5,
-    "Referrer-Policy":               5,
-    "Permissions-Policy":            5,
-    "Cross-Origin-Resource-Policy":  5,
-}
 
 def calculate_score(findings: list[HeaderFinding], headers: dict) -> tuple[int, str]:
     deductions = 0
@@ -446,16 +475,21 @@ def audit_headers(target: str, port: int = 443, timeout: float = 8.0) -> HeaderA
     result = HeaderAuditResult(target=target, url=url)
     headers, status = fetch_headers(url, timeout)
     result.status_code = status
+    is_https = (scheme == "https")
 
     if not headers:
-        # Try HTTP fallback
+        # Try HTTP fallback when HTTPS was unreachable.
         if scheme == "https":
             url_http = f"http://{target}/"
             headers, status = fetch_headers(url_http, timeout)
             result.status_code = status
             result.url = url_http
+            is_https = False
 
     if not headers:
+        # Connection failed entirely. Return a sane "could not audit" result:
+        # status_code stays 0 and no findings are emitted, so the report shows
+        # an empty audit rather than falsely claiming every header is missing.
         return result
 
     result.server_banner = headers.get("server", "")
@@ -463,7 +497,7 @@ def audit_headers(target: str, port: int = 443, timeout: float = 8.0) -> HeaderA
 
     # Run all checks
     checks = [
-        check_hsts(headers),
+        check_hsts(headers, is_https),
         check_csp(headers),
         check_xframe(headers),
         check_xcto(headers),
@@ -487,6 +521,10 @@ def audit_headers(target: str, port: int = 443, timeout: float = 8.0) -> HeaderA
         "x-frame-options", "x-content-type-options", "referrer-policy",
         "permissions-policy",
     ]
+    if not is_https:
+        # HSTS is not applicable over plain HTTP; don't report it as "missing".
+        security_headers = [h for h in security_headers
+                            if h != "strict-transport-security"]
     result.headers_present = [h for h in security_headers if h in headers]
     result.headers_missing  = [h for h in security_headers if h not in headers]
 

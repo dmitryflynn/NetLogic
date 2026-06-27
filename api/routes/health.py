@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 import time
 
 from fastapi import APIRouter
@@ -30,20 +29,26 @@ async def health() -> dict:
     """
     checks: dict[str, str] = {}
 
-    # Check 1: storage directory is writable
+    # Check 1: storage directory is present and writable.
+    # NOTE: /health is public (unauthenticated, used by Docker/LB probes), so we
+    # must NOT leak internal details. Report only "ok"/"error" — never the
+    # SCANS_DIR absolute path or the raw exception text.
+    # PERF: this endpoint is hammered by load balancers, and the handler is async
+    # (single-worker event loop). A per-probe tempfile create+fsync+delete blocks
+    # the loop and serializes ALL concurrent requests (~2s p50 under load). Use a
+    # cheap stat-based writability check instead — no blocking write per probe.
     from api.storage.json_store import SCANS_DIR  # noqa: PLC0415
     try:
-        os.makedirs(SCANS_DIR, exist_ok=True)
-        with tempfile.NamedTemporaryFile(dir=SCANS_DIR, delete=True):
-            pass
-        checks["storage"] = "ok"
-    except Exception as exc:
-        checks["storage"] = f"error: {exc}"
+        checks["storage"] = "ok" if (os.path.isdir(SCANS_DIR) and os.access(SCANS_DIR, os.W_OK)) else "error"
+    except Exception:
+        checks["storage"] = "error"
 
-    # Check 2: JWT secret is configured and non-default
+    # Check 2: JWT secret is configured and non-default.
+    # Reported as "ok"/"error" only — telling an anonymous caller the secret is
+    # "weak or default" hands a probing attacker a misconfiguration hint.
     jwt_secret = os.environ.get("NETLOGIC_JWT_SECRET", "")
     if not jwt_secret or jwt_secret == _DEFAULT_JWT_SECRET or len(jwt_secret) < _MIN_SECRET_LENGTH:
-        checks["config"] = "warning: weak or default JWT secret"
+        checks["config"] = "error"
     else:
         checks["config"] = "ok"
 

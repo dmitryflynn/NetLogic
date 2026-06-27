@@ -29,6 +29,79 @@ jobs:
           NETLOGIC_NO_BROWSER: "1"
         run: pytest test_*.py -v --tb=short
 
+  postgres-integration:
+    name: Postgres integration (live DB)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: netlogic
+          POSTGRES_PASSWORD: netlogic
+          POSTGRES_DB: netlogic
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U netlogic"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements-api.txt -r requirements-dev.txt
+      - name: Run live Postgres tests (migrations + durable jobs + per-org keys)
+        # Exercises the real SQL the offline suite can only check structurally —
+        # this is the gate that catches migration/ordering/query regressions.
+        env:
+          NETLOGIC_DATABASE_URL: postgresql://netlogic:netlogic@localhost:5432/netlogic
+          NETLOGIC_SECRETS_KEY: ci-fernet-key-placeholder-overwritten-below
+          NETLOGIC_JWT_SECRET: ci-test-secret-that-is-long-enough-for-tests
+          NETLOGIC_ADMIN_KEY: ci-admin-key
+          NETLOGIC_NO_BROWSER: "1"
+        run: |
+          export NETLOGIC_SECRETS_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+          pytest test_pg_integration.py test_pg_jobs.py test_db.py -v --tb=short
+
+  fusion-benchmark:
+    name: Fusion benchmark (FP-reduction gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements-api.txt -r requirements-dev.txt
+      - name: Run fusion pipeline tests (gate + adjudicator + benchmark harness)
+        run: python -m pytest test_fusion.py test_fusion_benchmark.py test_fusion_adjudicator.py test_fusion_engine_bridge.py -v --tb=short
+      - name: Run benchmark against cassette corpus (oracle, offline)
+        run: python netlogic.py --benchmark --benchmark-export /tmp/benchmark-report.md
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: fusion-benchmark-report
+          path: /tmp/benchmark-report.md
+
+  security:
+    name: Security gates (SAST + dependency audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements-api.txt -r requirements-dev.txt
+      - name: SAST (bandit) — fail on HIGH severity
+        run: bandit -r src api --severity-level high
+      - name: Dependency CVE audit (pip-audit)
+        run: pip-audit -r requirements-api.txt
+
   build-dashboard:
     name: Dashboard build + type-check
     runs-on: ubuntu-latest

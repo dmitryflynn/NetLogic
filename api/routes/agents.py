@@ -68,6 +68,8 @@ def _auth_agent(
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     if not creds or not agent.verify_token(creds.credentials):
         raise HTTPException(status_code=401, detail="Invalid or missing agent token.")
+    if agent.disabled:
+        raise HTTPException(status_code=403, detail="Agent is deactivated.")
     return agent
 
 
@@ -103,6 +105,7 @@ async def register_agent(
             version=payload.version,
             tags=payload.tags,
             org_id=org_id,
+            concurrency=payload.concurrency,
         )
     except ValueError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
@@ -172,18 +175,15 @@ async def get_pending_tasks(
     job_ids = agent_registry.get_pending_tasks(agent_id)
     tasks = []
     for job_id in job_ids:
-        job = job_manager.get(job_id, org_id=agent.org_id)
-        if job and job.status == "queued":
-            job.status = "running"
+        job = job_manager.try_claim(job_id, org_id=agent.org_id)
+        if job:
             job.started_at = time.time()
-            # Only update current_job_id for the first accepted job so we don't
-            # overwrite it on each iteration (the field is a single value, not a
-            # list; in normal operation there is at most one task per poll).
-            if agent.current_job_id is None:
-                agent.current_job_id = job_id
+            # Move the job into the agent's active set so capacity/load tracking
+            # reflects work in progress (supports concurrency > 1).
+            agent_registry.mark_active(agent_id, job_id)
             tasks.append({
                 "job_id": job.job_id,
-                "config": job.config.model_dump(),
+                "config": job.config.task_dump(),
             })
     return tasks
 
@@ -261,7 +261,7 @@ async def complete_task(
 
     # Ignore completion calls for jobs already in a terminal state (e.g. cancelled).
     if job.status not in ("running", "queued"):
-        agent.current_job_id = None
+        agent_registry.mark_done(agent_id, job_id)
         return {"job_id": job_id, "status": job.status}
 
     if payload.error:
@@ -275,7 +275,7 @@ async def complete_task(
     job.progress = 100.0
     job.completed_at = time.time()
     job.push_sentinel()        # wake + close all SSE consumers
-    agent.current_job_id = None
+    agent_registry.mark_done(agent_id, job_id)
     job_manager.persist_job(job)
 
     # Agent is now idle — dispatch any waiting jobs immediately.
@@ -295,8 +295,16 @@ async def complete_task(
 async def list_agents(
     org_id: str = Depends(require_org),
 ) -> list[dict]:
-    """Return status summary for every agent belonging to the caller's organisation."""
-    return [_agent_summary(a) for a in agent_registry.list(org_id=org_id)]
+    """Return status for the caller's agents plus shared/global (built-in) agents.
+
+    Shared agents (org_id="") are shown read-only — their token is redacted so a
+    tenant can see the fleet's capacity without being able to impersonate an agent
+    it doesn't own.
+    """
+    return [
+        _agent_summary(a, reveal_token=(a.org_id == org_id))
+        for a in agent_registry.list_visible(org_id)
+    ]
 
 
 # ── GET /agents/{id} ─────────────────────────────────────────────────────────
@@ -315,7 +323,7 @@ async def get_agent(
     agent = agent_registry.get(agent_id, org_id=org_id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
-    return _agent_summary(agent)
+    return _agent_summary(agent, reveal_token=True)
 
 
 # ── DELETE /agents/{id} ───────────────────────────────────────────────────────
@@ -360,7 +368,7 @@ async def activate_agent(
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     agent_registry.set_disabled(agent_id, disabled=False)
     audit_log("agent_activated", agent_id=agent_id, org_id=org_id)
-    return _agent_summary(agent)
+    return _agent_summary(agent, reveal_token=True)
 
 
 # ── POST /agents/{id}/deactivate ──────────────────────────────────────────────
@@ -381,13 +389,13 @@ async def deactivate_agent(
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     agent_registry.set_disabled(agent_id, disabled=True)
     audit_log("agent_deactivated", agent_id=agent_id, org_id=org_id)
-    return _agent_summary(agent)
+    return _agent_summary(agent, reveal_token=True)
 
 
 # ── Shared helper ─────────────────────────────────────────────────────────────
 
 
-def _agent_summary(agent: Agent) -> dict:
+def _agent_summary(agent: Agent, reveal_token: bool = False) -> dict:
     return {
         "agent_id":       agent.agent_id,
         "org_id":         agent.org_id,
@@ -397,8 +405,11 @@ def _agent_summary(agent: Agent) -> dict:
         "tags":           agent.tags,
         "status":         agent.status,
         "disabled":       agent.disabled,
+        "concurrency":    agent.concurrency,
+        "active_jobs":    len(agent.active_jobs),
+        "load":           agent.load,
         "registered_at":  agent.registered_at,
         "last_heartbeat": agent.last_heartbeat,
         "current_job_id": agent.current_job_id,
-        "token":          agent.token_plaintext,
+        "token":          agent.token_plaintext if reveal_token else "",
     }

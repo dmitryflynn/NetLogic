@@ -6,7 +6,8 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.scanner import parse_banner, ServiceBanner, resolve_target
-from src.json_bridge import emit, _vuln_to_dict
+from src.engine import _vuln_to_dict
+from src.json_bridge import emit
 from src.cve_correlator import VulnMatch, CVE
 from api.jobs.manager import job_manager, ScanJob
 from api.models.scan_request import ScanRequest

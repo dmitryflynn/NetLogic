@@ -8,7 +8,7 @@ Covers:
   • require_org dependency: happy path, missing header, bad token
   • JobManager org_id isolation: create, get (own/cross), list (filtered)
   • AgentRegistry org_id isolation: register, get (own/cross), list (filtered)
-  • Auth routes: POST /auth/token, POST /auth/keys, GET /auth/keys, DELETE /auth/keys/{key}
+   • Auth routes: POST /auth/token, POST /auth/keys, GET /auth/keys, DELETE /auth/keys
 """
 
 from __future__ import annotations
@@ -145,6 +145,20 @@ class TestApiKeyStore(unittest.TestCase):
         self.assertEqual(len(key), 32)
         self.assertTrue(all(c in "0123456789abcdef" for c in key))
 
+    def test_keys_are_hashed_at_rest(self):
+        """The plaintext key must never appear in the store's internal state."""
+        import hashlib
+        store = self._fresh_store()
+        key = store.create("hash-org")
+        # The raw key is not a stored value anywhere…
+        self.assertNotIn(key, store._store)
+        blob = repr(store._store)
+        self.assertNotIn(key, blob)
+        # …only its sha256 is the lookup index.
+        self.assertIn(hashlib.sha256(key.encode()).hexdigest(), store._store)
+        # …and lookup still works against the plaintext.
+        self.assertEqual(store.lookup(key), "hash-org")
+
 
 class TestVerifyAdmin(unittest.TestCase):
 
@@ -223,8 +237,10 @@ class TestJobManagerOrgIsolation(unittest.TestCase):
     def setUp(self):
         from api.jobs.manager import JobManager
         from unittest.mock import MagicMock
+        import threading
         self.manager = JobManager.__new__(JobManager)
         self.manager._jobs = {}
+        self.manager._lock = threading.RLock()
         self.manager.store = MagicMock()
 
     def _make_request(self, target: str = "10.0.0.1"):
@@ -366,6 +382,40 @@ class TestAuthRoutes(unittest.IsolatedAsyncioTestCase):
         resp = self.client.post("/v1/auth/token", json={"api_key": "bad-key"})
         self.assertEqual(resp.status_code, 401)
 
+    def test_jwt_does_not_embed_raw_api_key(self):
+        """Security: the minted JWT must NOT contain the raw long-lived API key."""
+        import base64
+        import json as _json
+        resp = self.client.post(
+            "/v1/auth/keys", json={"org_id": "leak-test"}, headers=self._admin_headers()
+        )
+        api_key = resp.json()["api_key"]
+        token = self.client.post("/v1/auth/token", json={"api_key": api_key}).json()["token"]
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        claims = _json.loads(base64.urlsafe_b64decode(payload_b64))
+        # The full key must not appear anywhere in the token payload…
+        self.assertNotIn(api_key, _json.dumps(claims))
+        # …and sub should carry only a non-secret hint.
+        self.assertTrue(claims["sub"].startswith("apikey:"))
+        self.assertNotEqual(claims["sub"], f"apikey:{api_key}")
+
+    def test_create_key_rejects_invalid_org_id(self):
+        resp = self.client.post(
+            "/v1/auth/keys", json={"org_id": "bad org!"}, headers=self._admin_headers()
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    def test_admin_endpoint_rate_limited(self):
+        """The 11th admin request from one IP within the window is throttled (429)."""
+        bad = {"X-Admin-Key": "wrong-but-rate-limited"}
+        codes = [
+            self.client.post("/v1/auth/keys", json={"org_id": "x"}, headers=bad).status_code
+            for _ in range(11)
+        ]
+        self.assertTrue(all(c == 403 for c in codes[:10]), codes)
+        self.assertEqual(codes[10], 429)
+
     def test_create_key_wrong_admin_returns_403(self):
         resp = self.client.post(
             "/v1/auth/keys",
@@ -393,10 +443,12 @@ class TestAuthRoutes(unittest.IsolatedAsyncioTestCase):
         )
         api_key = resp.json()["api_key"]
 
-        # Revoke it
-        rev_resp = self.client.delete(
-            f"/v1/auth/keys/{api_key}",
-            headers=self._admin_headers(),
+        # Revoke it (key in body, not URL, to avoid proxy log leakage)
+        import json as _json
+        rev_resp = self.client.request(
+            "DELETE", "/v1/auth/keys",
+            content=_json.dumps({"key": api_key}),
+            headers={**self._admin_headers(), "Content-Type": "application/json"},
         )
         self.assertEqual(rev_resp.status_code, 204)
 

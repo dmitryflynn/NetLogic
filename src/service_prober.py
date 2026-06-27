@@ -4,9 +4,13 @@ Checks for unauthenticated access, default credentials, and dangerous service
 exposures across discovered open ports. All probes are safe and read-only.
 """
 
+import hashlib
+import random
 import socket
 import json
 import base64
+import struct
+import ssl
 import urllib.request
 import urllib.error
 from dataclasses import dataclass, field
@@ -50,9 +54,12 @@ def _http_get(host: str, port: int, path: str = "/", scheme: str = "http",
               timeout: float = 4.0, headers: dict = None) -> Optional[tuple]:
     """HTTP GET — returns (status_code, headers_dict, body_str) or None on error."""
     try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
         url = f"{scheme}://{host}:{port}{path}"
         req = urllib.request.Request(url, headers=headers or {})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             body = resp.read(16384).decode("utf-8", errors="replace")
             return resp.status, dict(resp.headers), body
     except urllib.error.HTTPError as e:
@@ -63,6 +70,61 @@ def _http_get(host: str, port: int, path: str = "/", scheme: str = "http",
         return e.code, dict(e.headers), body
     except Exception:
         return None
+
+
+# ── CDN/Edge Block-Page Baseline Fingerprinting ─────────────────────────────
+# When a CDN (Cloudflare, CloudFront, Akamai, etc.) blocks scanning traffic,
+# every HTTP path returns the identical block-page response. The probe engine
+# must detect this and discard all findings that are just the block page.
+
+_RND_SEG = "xyz"
+
+
+def _random_path() -> str:
+    """A random path that should not exist on any real server."""
+    return f"/{_RND_SEG}{random.randint(100000, 999999)}/{random.randint(100000, 999999)}"
+
+
+def _response_baseline(host: str, port: int, scheme: str = "http",
+                       timeout: float = 4.0) -> Optional[dict]:
+    """Probe a nonexistent path and return a fingerprint of the response.
+    
+    Returns None if the host is unreachable (no baseline = not blocked).
+    """
+    result = _http_get(host, port, _random_path(), scheme=scheme, timeout=timeout)
+    if not result:
+        return None
+    status, hdrs, body = result
+    return {
+        "status": status,
+        "body_len": len(body),
+        "body_hash": hashlib.sha256(body.encode("utf-8", errors="replace")).hexdigest(),
+        "body_prefix": body[:120],
+        "server": (hdrs.get("Server", "") or "").lower() if hdrs else "",
+        "cf_ray": hdrs.get("cf-ray") if hdrs else None,
+    }
+
+
+def _is_baseline_block(baseline: dict, status: int, body: str, hdrs: dict | None = None) -> bool:
+    """True if a probe response matches the CDN/edge block baseline.
+    
+    A match means the response is the SAME block page, not a real finding.
+    """
+    if baseline is None:
+        return False
+    # Different status codes → not a block page
+    if status != baseline["status"]:
+        return False
+    # Same body hash (or same body prefix for very small bodies) → block page
+    body_hash = hashlib.sha256(body.encode("utf-8", errors="replace")).hexdigest()
+    if body_hash == baseline["body_hash"]:
+        return True
+    # Similar body length + same prefix → likely edge block variant
+    bl = baseline["body_len"]
+    body_len = len(body)
+    if abs(body_len - bl) <= max(20, bl * 0.1) and body[:60] == baseline["body_prefix"][:60]:
+        return True
+    return False
 
 
 # ─── Service-Specific Checks ─────────────────────────────────────────────────
@@ -119,11 +181,11 @@ def check_mongodb_noauth(host: str, port: int = 27017, timeout: float = 3.0) -> 
         b"\x00\x00\x00\x00"   # numberToSkip
         b"\x01\x00\x00\x00"   # numberToReturn (-1 or 1)
     ) + bson_doc
-    import struct
-    packet = struct.pack("<I", len(header) + 4) + header[4:]
-    # Simpler: just use the full packet with length pre-calculated
-    full_len = 4 + len(header)
-    packet = struct.pack("<I", full_len) + header
+    # messageLength is the TOTAL length of the message (including the 4-byte
+    # length field itself), so replace the leading placeholder in-place rather
+    # than prepending a second length prefix (which produced a malformed packet
+    # the server silently rejected → missed detections).
+    packet = struct.pack("<I", len(header)) + header[4:]
 
     resp = _tcp_send_recv(host, port, packet, timeout, recv=1024)
     if resp and len(resp) > 20:
@@ -445,6 +507,17 @@ def check_http_admin_panels(host: str, port: int, scheme: str = "http",
     """Probe well-known admin panel and sensitive file paths on HTTP services."""
     findings = []
 
+    # ── CDN/Edge block baseline ──────────────────────────────────────────
+    # Send a request to a random path first. If that returns the same response
+    # as later probes, the target is behind an edge block page, not exposing
+    # the actual service. Every path is indistinguishable — all findings are
+    # false positives.
+    baseline = _response_baseline(host, port, scheme=scheme, timeout=timeout)
+    if baseline is not None:
+        # If the baseline is a 403/401/block-page, we still run probes but
+        # discard any that match the baseline response fingerprint.
+        pass
+
     targets = [
         # (path, label, severity, body_keywords_that_confirm)
         ("/.env",                 "Environment File",            "CRITICAL", ["PASSWORD", "SECRET", "API_KEY", "DB_"]),
@@ -459,26 +532,33 @@ def check_http_admin_panels(host: str, port: int, scheme: str = "http",
         ("/settings.py",          "Django Settings",             "HIGH",     ["SECRET_KEY", "PASSWORD"]),
         ("/server-status",        "Apache Server-Status",        "MEDIUM",   ["Apache", "requests currently"]),
         ("/server-info",          "Apache Server-Info",          "MEDIUM",   ["Apache", "Module"]),
-        ("/manager/html",         "Tomcat Manager",              "HIGH",     []),
-        ("/host-manager/html",    "Tomcat Host Manager",         "HIGH",     []),
+        ("/manager/html",         "Tomcat Manager",              "HIGH",     ["Tomcat", "Manager Application", "tomcat"]),
+        ("/host-manager/html",    "Tomcat Host Manager",         "HIGH",     ["Tomcat", "Host Manager", "tomcat"]),
         ("/jmx-console",          "JBoss JMX Console",           "CRITICAL", ["JMX", "MBean"]),
         ("/web-console",          "JBoss Web Console",           "CRITICAL", ["jboss", "JBoss"]),
         ("/adminer.php",          "Adminer DB Tool",             "HIGH",     ["Adminer", "adminer"]),
         ("/phpmyadmin",           "phpMyAdmin",                  "HIGH",     ["phpMyAdmin", "pma_"]),
         ("/pma",                  "phpMyAdmin (alt path)",       "HIGH",     ["phpMyAdmin", "pma_"]),
-        ("/actuator",             "Spring Actuator Root",        "HIGH",     ["links", "self", "actuator"]),
+        ("/actuator",             "Spring Actuator Root",        "HIGH",     ["_links", "self", "actuator"]),
         ("/actuator/env",         "Spring Actuator /env",        "CRITICAL", ["propertySources", "systemEnvironment"]),
-        ("/actuator/heapdump",    "Spring Actuator /heapdump",   "CRITICAL", []),
+        ("/actuator/heapdump",    "Spring Actuator /heapdump",   "CRITICAL", ["JAVA PROFILE", "HPROF"]),
         ("/actuator/httptrace",   "Spring Actuator /httptrace",  "MEDIUM",   ["traces", "request"]),
         ("/actuator/mappings",    "Spring Actuator /mappings",   "MEDIUM",   ["mappings", "dispatcherServlets"]),
         ("/swagger-ui.html",      "Swagger UI",                  "LOW",      ["swagger", "Swagger"]),
         ("/swagger-ui/",          "Swagger UI (v3)",             "LOW",      ["swagger", "Swagger"]),
         ("/api-docs",             "OpenAPI Docs",                "LOW",      ["swagger", "openapi", "paths"]),
         ("/v2/api-docs",          "Swagger v2 Docs",             "LOW",      ["swagger", "paths", "definitions"]),
-        ("/graphql",              "GraphQL Endpoint",            "MEDIUM",   []),
-        ("/api/graphql",          "GraphQL (alt)",               "MEDIUM",   []),
+        ("/graphql",              "GraphQL Endpoint",            "MEDIUM",   ["__schema", "GraphQL", "\"data\"", "\"errors\"", "graphql"]),
+        ("/api/graphql",          "GraphQL (alt)",               "MEDIUM",   ["__schema", "GraphQL", "\"data\"", "\"errors\"", "graphql"]),
         ("/__debug__/",           "Django Debug Toolbar",        "HIGH",     ["djdt", "Django"]),
         ("/trace",                "Spring Trace Endpoint",       "MEDIUM",   ["timestamp", "info"]),
+        # CVE-dense app-server surfaces (non-destructive GETs; distinctive bodies
+        # so a generic 200 can't trip them — FP discipline preserved).
+        ("/console/login/LoginForm.jsp", "WebLogic Admin Console", "HIGH",   ["WebLogic", "weblogic", "console"]),
+        ("/wls-wsat/CoordinatorPortType", "WebLogic WS-AT (CVE-2017-10271 surface)", "HIGH", ["wsat", "CoordinatorPortType", "Web Services"]),
+        ("/script",               "Jenkins Script Console (RCE)", "CRITICAL", ["Groovy", "groovy", "Script Console"]),
+        ("/solr/admin/cores",     "Apache Solr Admin",           "HIGH",     ["responseHeader", "lucene", "\"cores\""]),
+        ("/jolokia/version",      "Jolokia/JMX Endpoint",        "HIGH",     ["\"agent\"", "jolokia", "protocol"]),
     ]
 
     for path, label, base_sev, keywords in targets:
@@ -486,6 +566,14 @@ def check_http_admin_panels(host: str, port: int, scheme: str = "http",
         if not result:
             continue
         status, hdrs, body = result
+
+        # ── CDN/edge block filter ──────────────────────────────────────────
+        # If this response matches the block page baseline, discard it.
+        # This catches Cloudflare 403s, CloudFront blocks, WAF blocks, etc.
+        # on ANY path including auth-protected panel paths.
+        if _is_baseline_block(baseline, status, body, hdrs):
+            continue
+
         # Only care about 200, 401 (for auth-protected panels)
         if status == 404 or status in (301, 302, 303, 307, 308):
             continue
@@ -496,8 +584,19 @@ def check_http_admin_panels(host: str, port: int, scheme: str = "http",
                                                    "/jmx-console", "/web-console"):
             continue  # Auth is enforced — expected
 
-        # Confirm by body keywords
-        if keywords:
+        # Tomcat manager/host-manager protected by Basic auth: the 401/403 itself
+        # (challenge for these specific paths) is the evidence that the panel exists.
+        auth_protected_panel = (
+            status in (401, 403)
+            and path in ("/manager/html", "/host-manager/html", "/jmx-console", "/web-console")
+        )
+
+        # Confirm by body keywords. Every CRITICAL/HIGH path carries a distinctive
+        # signature so a generic 200 (e.g. an SPA catch-all route) cannot trip a
+        # high-severity finding — false positives are the cardinal sin here.
+        if auth_protected_panel:
+            confirmed = True
+        elif keywords:
             body_lower = body.lower()
             confirmed = any(kw.lower() in body_lower for kw in keywords)
         else:

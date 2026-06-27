@@ -11,7 +11,7 @@ interface Port {
 }
 
 function str(v: unknown): string {
-  if (!v) return ''
+  if (v == null) return ''
   if (typeof v === 'string') return v
   if (typeof v === 'object') {
     const o = v as Record<string, unknown>

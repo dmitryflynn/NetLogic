@@ -1,37 +1,34 @@
 """
-NetLogic - JSON Stream Bridge
-Wraps the scanner to emit newline-delimited JSON events for the Electron frontend.
-Each line is a JSON object: {"type": "...", "data": {...}} or {"type": "error", "message": "..."}
+NetLogic - JSON Stream Bridge (GUI / API)
+=========================================
+Thin adapter: turns the shared scan engine's events into newline-delimited JSON
+for the Electron frontend / REST API. It does NOT contain its own scan logic —
+single-host scans delegate to src.engine.run_scan(), the SAME path the CLI uses,
+so every feature added to the engine reaches the GUI automatically.
 
-API mode: pass emit_callback to run_streaming_scan() to redirect events to a
-caller-supplied function instead of stdout. The callback signature is:
-    callback(event_type: str, data: dict | None, message: str | None) -> None
-This uses thread-local storage so concurrent scans in separate threads each have
-their own callback and never interfere with each other.
+Each emitted line: {"type": "...", "data": {...}} or {"type": "error", "message": "..."}
+
+API mode: pass emit_callback to redirect events to a caller-supplied function
+instead of stdout. Signature: callback(event_type, data|None, message|None).
+Thread-local so concurrent scans don't interfere.
 """
 
-import sys
 import json
-import time
 import threading
 from dataclasses import asdict
 
-from src.scanner import scan_host, scan_cidr, COMMON_PORTS, EXTENDED_PORTS
+from src.scanner import scan_cidr
 from src.cve_correlator import correlate
-from src.osint import run_osint
 
-# Thread-local storage: each scan thread stores its own emit callback here.
-# When None (the default), emit() writes to stdout as before.
 _tls = threading.local()
 
 
 def emit(event_type: str, data=None, message: str = None):
-    """Write a single JSON event."""
+    """Write/route a single JSON event."""
     callback = getattr(_tls, "emit_callback", None)
     if callback is not None:
         callback(event_type, data, message)
     else:
-        # Standard JSON output for CLI/Electron
         obj = {"type": event_type}
         if message is not None:
             obj["message"] = message
@@ -47,268 +44,77 @@ def run_streaming_scan(target: str, ports: list, timeout: float,
                        do_full: bool = False, do_probe: bool = False,
                        do_takeover: bool = False,
                        min_cvss: float = 4.0,
-                       emit_callback=None):
-    """Execute a scan and stream results as JSON events.
+                       do_ai: bool = False, ssh_user: str = "", ssh_key: str = "",
+                       ssh_pass: str = "", ssh_port: int = 22,
+                       ai_key: str = "", ai_provider: str = "", ai_model: str = "",
+                       ai_base_url: str = "", org_id: str = "",
+                       deep_probe: bool = False,
+                       emit_callback=None,
+                       **extra):
+    """Execute a scan and stream results as JSON events via the shared engine.
 
-    Args:
-        emit_callback: Optional callable(event_type, data, message) that
-            receives each event instead of stdout.  Used by the REST API layer.
-            Must be None for normal CLI / Electron usage.
+    emit_callback: optional callable(event_type, data, message) used by the REST
+    API layer; None for normal CLI/Electron usage (stdout).
+    Accepts **extra for forward-compatibility with future scan options.
     """
-    # Register the callback in thread-local storage so every emit() call in
-    # this thread (including helpers like _scan_streaming) automatically uses it.
     if emit_callback is not None:
         _tls.emit_callback = emit_callback
     try:
-        _run_streaming_scan_inner(
-            target=target, ports=ports, timeout=timeout, threads=threads,
-            do_osint=do_osint, cidr=cidr, do_tls=do_tls, do_headers=do_headers,
-            do_stack=do_stack, do_dns=do_dns, do_full=do_full, do_probe=do_probe,
-            do_takeover=do_takeover, min_cvss=min_cvss,
-        )
+        if cidr:
+            _run_cidr(target, ports, timeout, threads, do_osint, do_full, min_cvss)
+        else:
+            from types import SimpleNamespace
+            from src.engine import run_scan
+            # Build the same options object the CLI passes to the engine.
+            args = SimpleNamespace(
+                timeout=timeout, threads=threads, min_cvss=min_cvss,
+                full=do_full, tls=do_tls, headers=do_headers, stack=do_stack,
+                dns=do_dns, osint=do_osint, takeover=do_takeover, probe=do_probe,
+                ai=do_ai, ssh_user=ssh_user, ssh_key=ssh_key, ssh_pass=ssh_pass, ssh_port=ssh_port,
+                ai_key=ai_key, ai_provider=ai_provider, ai_model=ai_model, ai_base_url=ai_base_url,
+                org_id=org_id,
+                deep_probe=deep_probe,
+                no_diff=False, no_traceroute=False, out=".",
+            )
+            if deep_probe:
+                from src.deep import run_deep_scan
+                run_deep_scan(target, ports, args, emit=emit)
+            else:
+                run_scan(target, ports, args, emit=emit)
+    except Exception as e:
+        emit("error", message=str(e))
     finally:
-        # Always clear the callback so the thread can be safely reused.
         _tls.emit_callback = None
 
 
-def _run_streaming_scan_inner(target: str, ports: list, timeout: float,
-                              threads: int, do_osint: bool, cidr: bool,
-                              do_tls: bool = False, do_headers: bool = False,
-                              do_stack: bool = False, do_dns: bool = False,
-                              do_full: bool = False, do_probe: bool = False,
-                              do_takeover: bool = False,
-                              min_cvss: float = 4.0):
-    """Internal: actual scan logic. Always called after _tls is configured."""
-    emit("progress", {"percent": 5, "status": f"Resolving {target}..."})
+def _run_cidr(target, ports, timeout, threads, do_osint, do_full, min_cvss):
+    """Lightweight per-host streaming for CIDR sweeps (host + ports + vulns)."""
+    from src.engine import _vuln_to_dict
+    emit("progress", {"percent": 5, "status": f"CIDR scan {target}…"})
+    hosts = scan_cidr(target, ports=ports, max_workers=threads, timeout=timeout)
+    total_p = total_v = 0
+    for hr in hosts:
+        emit("host", asdict(hr))
+        for p in hr.ports:
+            total_p += 1
+            emit("port", {"target": hr.ip, **asdict(p)})
+        for vm in correlate(hr.ports, min_cvss=min_cvss, verbose=False):
+            total_v += 1
+            emit("vuln", {"target": hr.ip, **_vuln_to_dict(vm)})
 
-    if cidr:
-        hosts = scan_cidr(target, ports=ports, max_workers=threads, timeout=timeout)
-        total_p = 0
-        total_v = 0
-        for hr in hosts:
-            emit("host", asdict(hr))
-            for p in hr.ports:
-                total_p += 1
-                emit("port", {"target": hr.ip, **asdict(p)})
-            vuln_matches = correlate(hr.ports, min_cvss=min_cvss, verbose=False)
-            for vm in vuln_matches:
-                total_v += 1
-                emit("vuln", {"target": hr.ip, **_vuln_to_dict(vm)})
-        if do_osint or do_full:
-            emit("progress", {"percent": 92, "status": "Running passive OSINT on base target..."})
-            try:
-                osint = run_osint(target, ip=hosts[0].ip if hosts else None)
-                from dataclasses import asdict as _asdict
-                emit("osint", {
-                    "dns_records":  [_asdict(r) for r in osint.dns_records],
-                    "subdomains":   [_asdict(s) for s in osint.subdomains],
-                    "technologies": osint.technologies,
-                    "emails":       osint.emails,
-                    "asn_info":     _asdict(osint.asn_info) if osint.asn_info else None,
-                })
-            except Exception as e:
-                emit("log", {"text": f"OSINT: {e}", "level": "warn"})
-
-        emit("done", {
-            "hosts": len(hosts),
-            "ports": total_p,
-            "vulns": total_v,
-            "duration": getattr(hosts[-1], "scan_duration_s", 0) if hosts else 0
-        })
-        return
-
-    emit("progress", {"percent": 10, "status": "Scanning ports..."})
-    result = _scan_streaming(target, ports, threads, timeout)
-
-    emit("host", {
-        "target":         result.target,
-        "ip":             result.ip,
-        "hostname":       result.hostname,
-        "os_guess":       result.os_guess,
-        "timestamp":      result.timestamp,
-        "scan_duration_s":result.scan_duration_s,
-    })
-
-    # Ports already streamed live inside _scan_streaming
-    emit("progress", {"percent": 60, "status": f"Found {len(result.ports)} open ports, correlating CVEs..."})
-
-    # CVE correlation
-    vuln_matches = correlate(result.ports, min_cvss=min_cvss, verbose=False)
-    emit("progress", {"percent": 75, "status": f"Found {len(vuln_matches)} vulnerability findings..."})
-    for vm in vuln_matches:
-        emit("vuln", {"target": result.ip, **_vuln_to_dict(vm)})
-
-    from dataclasses import asdict as _asdict
-
-    # TLS Analysis
-    if do_tls or do_full:
-        emit("progress", {"percent": 78, "status": "Running TLS analysis..."})
-        try:
-            from src.tls_analyzer import analyze_tls_ports
-            tls_ports = [p.port for p in result.ports
-                         if p.tls or p.port in (443, 8443, 993, 995, 465)]
-            if not tls_ports:
-                tls_ports = [443]
-            tls_results = analyze_tls_ports(target, tls_ports)
-            if tls_results:
-                emit("tls", {"results": [_asdict(r) for r in tls_results]})
-        except Exception as e:
-            emit("log", {"text": f"TLS: {e}", "level": "warn"})
-
-    # HTTP Header Audit
-    if do_headers or do_full:
-        emit("progress", {"percent": 82, "status": "Auditing HTTP security headers..."})
-        try:
-            from src.header_audit import audit_headers
-            http_port = next(
-                (p.port for p in result.ports if p.service in ("http", "https", "http-alt", "https-alt")),
-                80
-            )
-            audit = audit_headers(target, http_port)
-            emit("headers", _asdict(audit))
-        except Exception as e:
-            emit("log", {"text": f"Headers: {e}", "level": "warn"})
-
-    # Technology Stack
-    if do_stack or do_headers or do_full:
-        emit("progress", {"percent": 85, "status": "Fingerprinting technology stack..."})
-        try:
-            from src.stack_fingerprint import fingerprint_stack
-            http_port = next(
-                (p.port for p in result.ports if p.service in ("http", "https", "http-alt", "https-alt")),
-                80
-            )
-            stack = fingerprint_stack(target, http_port)
-            emit("stack", _asdict(stack))
-        except Exception as e:
-            emit("log", {"text": f"Stack: {e}", "level": "warn"})
-
-    # DNS Security
-    if do_dns or do_full:
-        emit("progress", {"percent": 88, "status": "Checking DNS/email security..."})
-        try:
-            from src.dns_security import check_dns_security
-            dns_result = check_dns_security(target)
-            emit("dns", _asdict(dns_result))
-        except Exception as e:
-            emit("log", {"text": f"DNS: {e}", "level": "warn"})
-
-    # Passive OSINT
     if do_osint or do_full:
-        emit("progress", {"percent": 92, "status": "Running passive OSINT..."})
+        from src.osint import run_osint
+        emit("progress", {"percent": 92, "status": "Passive OSINT on base target…"})
         try:
-            osint = run_osint(target, ip=result.ip)
+            o = run_osint(target, ip=hosts[0].ip if hosts else None)
             emit("osint", {
-                "dns_records":  [_asdict(r) for r in osint.dns_records],
-                "subdomains":   [_asdict(s) for s in osint.subdomains],
-                "technologies": osint.technologies,
-                "emails":       osint.emails,
-                "asn_info":     _asdict(osint.asn_info) if osint.asn_info else None,
+                "dns_records": [asdict(r) for r in o.dns_records],
+                "subdomains": [asdict(s) for s in o.subdomains],
+                "technologies": o.technologies, "emails": o.emails,
+                "asn_info": asdict(o.asn_info) if o.asn_info else None,
             })
         except Exception as e:
             emit("log", {"text": f"OSINT: {e}", "level": "warn"})
 
-    # Subdomain Takeover Detection
-    if do_takeover or do_full:
-        emit("progress", {"percent": 93, "status": "Checking subdomains for takeover..."})
-        try:
-            from src.takeover import discover_and_check
-            takeover_result = discover_and_check(target)
-            emit("takeover", _asdict(takeover_result))
-        except Exception as e:
-            emit("log", {"text": f"Takeover: {e}", "level": "warn"})
-
-    # Active Service & Vulnerability Probing
-    if (do_probe or do_full) and result.ports:
-        emit("progress", {"percent": 94, "status": "Running active service and vulnerability probes..."})
-        try:
-            from src.service_prober import probe_services
-            svc_result = probe_services(target, result.ports, timeout=timeout)
-            emit("service_probes", _asdict(svc_result))
-        except Exception as e:
-            emit("log", {"text": f"ServiceProbe: {e}", "level": "warn"})
-        try:
-            from src.vuln_prober import probe_web_vulnerabilities
-            vuln_p = probe_web_vulnerabilities(target, result.ports, timeout=timeout)
-            emit("vuln_probes", _asdict(vuln_p))
-        except Exception as e:
-            emit("log", {"text": f"VulnProbe: {e}", "level": "warn"})
-
-    emit("progress", {"percent": 100, "status": "Scan complete."})
-    emit("done", {
-        "ports":    len(result.ports),
-        "vulns":    len(vuln_matches),
-        "duration": result.scan_duration_s,
-    })
-
-
-def _scan_streaming(target, ports, threads, timeout):
-    """Run scan but emit ports in real time as they are discovered."""
-    import concurrent.futures
-    from src.scanner import probe_port, resolve_target, guess_os_from_ttl, HostResult
-
-    start = time.time()
-    ip, hostname = resolve_target(target)
-
-    result = HostResult(
-        target=target,
-        ip=ip,
-        hostname=hostname,
-        timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    )
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
-        futures = {
-            executor.submit(probe_port, ip, port, timeout): port
-            for port in ports
-        }
-        completed = 0
-        total = len(futures)
-        for future in concurrent.futures.as_completed(futures):
-            completed += 1
-            port_result = future.result()
-            if port_result.state == "open":
-                result.ports.append(port_result)
-                emit("port", {"target": ip, **asdict(port_result)})
-
-            if completed % max(1, total // 20) == 0:
-                pct = 10 + int((completed / total) * 48)
-                emit("progress", {
-                    "percent": pct,
-                    "status":  f"Scanned {completed}/{total} ports... ({len(result.ports)} open)",
-                })
-
-    result.ports.sort(key=lambda p: p.port)
-    result.scan_duration_s = round(time.time() - start, 2)
-    result.os_guess = guess_os_from_ttl(getattr(result, 'ttl', None))
-    return result
-
-
-def _vuln_to_dict(vm) -> dict:
-    """Convert a VulnMatch to a JSON-serialisable dict for the frontend."""
-    return {
-        "port":       vm.port,
-        "service":    vm.service,
-        "product":    vm.product,
-        "version":    vm.version,
-        "risk_score": vm.risk_score,
-        "notes":      vm.notes,
-        "source":     getattr(vm, "source", "nvd"),
-        "cves": [
-            {
-                "id":               c.id,
-                "description":      c.description,
-                "cvss_score":       c.cvss_score,
-                "severity":         c.severity,
-                "vector":           getattr(c, "vector", ""),
-                "published":        getattr(c, "published", ""),
-                "exploit_available":c.exploit_available,
-                "kev":              getattr(c, "kev", False),
-                "cwe":              getattr(c, "cwe", ""),
-                "version_range":    getattr(c, "version_range", ""),
-                "remediation":      getattr(c, "remediation", ""),
-                "references":       getattr(c, "references", []),
-            }
-            for c in vm.cves
-        ],
-    }
+    emit("done", {"hosts": len(hosts), "ports": total_p, "vulns": total_v,
+                  "duration": getattr(hosts[-1], "scan_duration_s", 0) if hosts else 0})

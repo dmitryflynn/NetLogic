@@ -37,11 +37,44 @@ _DIST_DIR   = Path(_PROJECT_ROOT) / "dashboard" / "dist"
 _INDEX_HTML = _DIST_DIR / "index.html"
 
 # ── Deferred imports (after path bootstrap) ───────────────────────────────────
-from api.routes import auth, health, jobs, agents, license as license_route, vdb  # noqa: E402
+from api.routes import auth, health, jobs, agents, license as license_route, vdb, settings as settings_route  # noqa: E402
 from api.middleware.audit import AuditMiddleware  # noqa: E402
 
 
 # ── Security-headers middleware ────────────────────────────────────────────────
+
+# ── Request size limiting middleware ────────────────────────────────────────────
+
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    """Limit request body size to prevent DoS attacks."""
+
+    CONTENT_LENGTH_LIMIT = 10 * 1024 * 1024  # 10MB
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > self.CONTENT_LENGTH_LIMIT:
+                    from fastapi.responses import JSONResponse
+                    return JSONResponse(
+                        {"detail": "Request body too large (max 10MB)"},
+                        status_code=413,
+                    )
+            except ValueError:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    {"detail": "Invalid Content-Length header."},
+                    status_code=400,
+                )
+        elif request.method in ("POST", "PUT", "PATCH"):
+            body = await request.body()
+            if len(body) > self.CONTENT_LENGTH_LIMIT:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    {"detail": "Request body too large (max 10MB)"},
+                    status_code=413,
+                )
+        return await call_next(request)
 
 # ── License gate middleware ───────────────────────────────────────────────────
 
@@ -80,15 +113,45 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("X-XSS-Protection", "1; mode=block")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        # HSTS: force HTTPS for a year incl. subdomains. Safe to send unconditionally
+        # — browsers ignore it over plain HTTP (dev/localhost) and only honor it on a
+        # secure connection, so it protects production (TLS, often proxy-terminated)
+        # without affecting local HTTP use.
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
         response.headers.setdefault(
             "Permissions-Policy",
             "geolocation=(), microphone=(), camera=()",
         )
-        # CSP: API-only responses don't need script/style allowances.
-        # The React SPA sets its own CSP via <meta> in index.html.
+
+        # Enhanced CSP for HTML responses vs API responses
         if not response.headers.get("Content-Security-Policy"):
             ct = response.headers.get("content-type", "")
-            if "text/html" not in ct:
+            if "text/html" in ct:
+                # CSP for the dashboard. Must allow Clerk (clerk-js loads from the
+                # Frontend API at *.clerk.accounts.dev / *.clerk.com, talks to it via
+                # connect-src, serves avatars from img.clerk.com, uses a blob worker,
+                # and runs Cloudflare Turnstile in a frame for bot detection). The
+                # browser enforces the INTERSECTION of this header and index.html's
+                # <meta> CSP, so the two MUST stay in sync.
+                response.headers["Content-Security-Policy"] = (
+                    "default-src 'self'; "
+                    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' "
+                    "https://*.clerk.accounts.dev https://*.clerk.com https://challenges.cloudflare.com; "
+                    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                    "img-src 'self' data: https:; "
+                    "font-src 'self' data: https://fonts.gstatic.com; "
+                    "connect-src 'self' ws://localhost:* wss://localhost:* "
+                    "https://*.clerk.accounts.dev https://*.clerk.com https://clerk-telemetry.com; "
+                    "worker-src 'self' blob:; "
+                    "frame-src 'self' https://*.clerk.accounts.dev https://challenges.cloudflare.com; "
+                    "frame-ancestors 'none'; "
+                    "base-uri 'self'; "
+                    "form-action 'self';"
+                )
+            else:
+                # Strict CSP for API responses
                 response.headers["Content-Security-Policy"] = "default-src 'none'"
         return response
 
@@ -98,6 +161,48 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup / shutdown hooks."""
+    # ── Production secret hardening ───────────────────────────────────────────
+    # Refuse to boot with a missing/weak admin key or JWT secret when running in
+    # production. Gated on NETLOGIC_ENV so dev/test/CI are unaffected. The
+    # validators raise RuntimeError (never sys.exit), so a misconfigured prod
+    # deploy fails fast with a clear error instead of silently serving with a
+    # forgeable/default credential.
+    import logging  # noqa: PLC0415
+    _startup_log = logging.getLogger("netlogic.api")
+    if os.environ.get("NETLOGIC_ENV", "").lower() in ("production", "prod"):
+        from api.auth.api_keys import require_strong_admin_key  # noqa: PLC0415
+        from api.auth.jwt_handler import require_strong_jwt_secret  # noqa: PLC0415
+        require_strong_admin_key()
+        require_strong_jwt_secret()
+        # Multi-tenant prod must have the at-rest encryption key for per-org API
+        # keys — fail fast rather than 503 on the first key save.
+        from api import db as _db  # noqa: PLC0415
+        if _db.is_enabled():
+            from api.crypto import require_secrets_key  # noqa: PLC0415
+            require_secrets_key()
+        _startup_log.info("Production secret validation passed.")
+
+    # Apply Postgres migrations when a database is configured (no-op otherwise).
+    from api import db  # noqa: PLC0415
+    if db.is_enabled():
+        try:
+            applied = db.apply_migrations()
+            if applied:
+                _startup_log.info("Applied DB migrations: %s", ", ".join(applied))
+            else:
+                _startup_log.info("Database connected; schema up to date.")
+        except Exception:
+            _startup_log.exception("DB migration failed at startup.")
+            raise
+        # Warm the job cache from Postgres now that scan_jobs exists. (The
+        # job_manager singleton is built at import time, before migrations — so
+        # its Postgres cache-load is deferred to here.)
+        try:
+            from api.jobs.manager import job_manager  # noqa: PLC0415
+            job_manager.warm_cache()
+        except Exception:
+            _startup_log.exception("Job cache warm failed at startup.")
+
     # Pre-warm the storage directory so the first request is fast.
     from api.storage.json_store import JsonScanStore, SCANS_DIR  # noqa: PLC0415
     JsonScanStore(SCANS_DIR)
@@ -156,26 +261,60 @@ def create_app() -> FastAPI:
     # ── Audit / correlation IDs ───────────────────────────────────────────────
     app.add_middleware(AuditMiddleware)
 
+    # ── Request size limiting ─────────────────────────────────────────────────
+    app.add_middleware(RequestSizeLimitMiddleware)
+
     # ── License gate (outermost — runs before auth) ───────────────────────────
     app.add_middleware(LicenseMiddleware)
 
     # ── Security headers ──────────────────────────────────────────────────────
     app.add_middleware(SecurityHeadersMiddleware)
 
-    # ── CORS ──────────────────────────────────────────────────────────────────
-    raw_origins = os.environ.get("NETLOGIC_CORS_ORIGINS", "*")
-    allowed_origins = (
-        ["*"] if raw_origins.strip() == "*"
-        else [o.strip() for o in raw_origins.split(",") if o.strip()]
-    )
+    # ── Origin check (CSRF defense-in-depth) ───────────────────────────────────
+    # Reject state-changing requests whose Origin header does not match the
+    # configured CORS origins. This is defense-in-depth: the real protection
+    # is Bearer token auth, but a valid Origin check prevents CSRF even against
+    # endpoints that lack Authorization checks (e.g. future public endpoints).
 
+    class OriginCheckMiddleware(BaseHTTPMiddleware):
+        """Block POST/PUT/DELETE without a matching Origin header."""
+
+        async def dispatch(self, request: Request, call_next) -> Response:
+            if request.method in ("POST", "PUT", "DELETE"):
+                origin = request.headers.get("origin", "")
+                # Same-origin requests have no Origin header (browser omits it)
+                # or the origin matches the configured allowed list.
+                if origin and allowed_origins and origin not in allowed_origins:
+                    from fastapi.responses import JSONResponse
+                    return JSONResponse(
+                        {"detail": "Origin not allowed."}, status_code=403,
+                    )
+            return await call_next(request)
+
+    app.add_middleware(OriginCheckMiddleware)
+
+    # ── CORS ──────────────────────────────────────────────────────────────────
+    # SECURITY: Default to empty list (CORS disabled) instead of wildcard
+    # Wildcard CORS enables CSRF attacks and data exposure
+    raw_origins = os.environ.get("NETLOGIC_CORS_ORIGINS", "")
+
+    # Log warning if CORS not properly configured in production
+    if not raw_origins.strip():
+        import logging
+        logging.warning("NETLOGIC_CORS_ORIGINS not set - CORS disabled for security")
+        allowed_origins = []
+    else:
+        allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+
+    # Only allow credentials with specific origins (never with wildcard)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
-        allow_credentials=raw_origins.strip() != "*",
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_credentials=len(allowed_origins) > 0,
+        allow_methods=["GET", "POST", "PUT", "DELETE"],  # Restrict methods
+        allow_headers=["Authorization", "Content-Type"],  # Restrict headers
         expose_headers=["Content-Type", "Cache-Control"],
+        max_age=600,  # Cache preflight requests for 10 minutes
     )
 
     # ── API routers ───────────────────────────────────────────────────────────
@@ -187,6 +326,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs.router,          prefix="/v1")
     app.include_router(agents.router,        prefix="/v1")
     app.include_router(vdb.router,           prefix="/v1")
+    app.include_router(settings_route.router, prefix="/v1")
 
     # ── React dashboard static files ──────────────────────────────────────────
     # Serve the compiled Vite assets only when the dashboard has been built.
@@ -197,9 +337,17 @@ def create_app() -> FastAPI:
 
         # SPA catch-all — everything that isn't an API route returns index.html
         # so that React Router handles client-side navigation.
+        #
+        # index.html MUST NOT be cached: it names the current hashed JS/CSS bundle,
+        # so a cached copy pins the client to a stale build (the bug where the
+        # desktop kept loading an old bundle and 401'd on every request). The
+        # hashed /assets are content-addressed and remain freely cacheable.
         @app.get("/{full_path:path}", include_in_schema=False)
         async def serve_spa(full_path: str) -> FileResponse:
-            return FileResponse(str(_INDEX_HTML))
+            return FileResponse(
+                str(_INDEX_HTML),
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
 
     else:
         # Dashboard not built — fall back to API info at root.

@@ -21,7 +21,6 @@ import ssl
 import urllib.request
 import urllib.error
 import re
-import json
 import concurrent.futures
 from dataclasses import dataclass, field
 from typing import Optional
@@ -81,7 +80,6 @@ PROVIDER_FINGERPRINTS = {
     "Amazon CloudFront": {
         "cname": r"cloudfront\.net",
         "fingerprints": [
-            "Bad request",
             "ERROR: The request could not be satisfied",
         ],
         "status": [403],
@@ -90,7 +88,6 @@ PROVIDER_FINGERPRINTS = {
         "cname": r"netlify\.app|netlify\.com",
         "fingerprints": [
             "Not Found - Request ID",
-            "netlify",
         ],
         "status": [404],
     },
@@ -136,16 +133,14 @@ PROVIDER_FINGERPRINTS = {
     "Tumblr": {
         "cname": r"tumblr\.com",
         "fingerprints": [
-            "There's nothing here",
             "Whatever you were looking for doesn't currently exist",
         ],
-        "status": [404, 200],
+        "status": [404],
     },
     "WordPress.com": {
         "cname": r"wordpress\.com",
         "fingerprints": [
             "Do you want to register",
-            "doesn't exist",
         ],
         "status": [404],
     },
@@ -167,7 +162,7 @@ PROVIDER_FINGERPRINTS = {
     "Cargo": {
         "cname": r"cargocollective\.com",
         "fingerprints": [
-            "404 Not Found",
+            "If you're moving your domain away from Cargo",
         ],
         "status": [404],
     },
@@ -276,6 +271,27 @@ def resolve_cname_chain(hostname: str, max_depth: int = 8) -> list[str]:
     return chain
 
 
+def detect_wildcard_cname(target: str) -> Optional[str]:
+    """
+    Detect wildcard DNS by resolving a random, certainly-nonexistent label
+    under the target. If it returns a CNAME, the zone has a wildcard record
+    and ANY enumerated subdomain will appear to CNAME to the same place —
+    which would otherwise create phantom "vulnerable" findings.
+
+    Returns the wildcard CNAME target (lowercased) if a wildcard exists,
+    else None. Fail-soft: any error → None (assume no wildcard).
+    """
+    import uuid
+    probe = f"netlogic-wildcard-{uuid.uuid4().hex[:16]}.{target}"
+    try:
+        chain = resolve_cname_chain(probe)
+    except Exception:
+        return None
+    if chain:
+        return chain[-1].lower()
+    return None
+
+
 def check_nxdomain(hostname: str) -> bool:
     """Returns True if the hostname fails to resolve (NXDOMAIN or equivalent)."""
     try:
@@ -297,7 +313,7 @@ def fetch_body(url: str, timeout: float = 6.0) -> tuple[str, int]:
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "NetLogic/1.0"})
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-            body = resp.read(8192).decode("utf-8", errors="replace")
+            body = resp.read(65536).decode("utf-8", errors="replace")
             return body, resp.status
     except urllib.error.HTTPError as e:
         try:
@@ -310,30 +326,66 @@ def fetch_body(url: str, timeout: float = 6.0) -> tuple[str, int]:
 
 
 def match_fingerprints(body: str, status: int, provider: str) -> bool:
-    """Return True if body/status matches known takeover fingerprints for provider."""
+    """
+    Return True ONLY if the response carries a provider-specific
+    "unclaimed/not-found" fingerprint in the body AND (when the provider
+    declares expected statuses) the HTTP status matches one of them.
+
+    Fail-closed: a takeover is never asserted on status alone, on an empty
+    body (network failure / no response), or when the provider has no
+    documented fingerprint strings. This is the primary false-positive guard.
+    """
     info = PROVIDER_FINGERPRINTS.get(provider, {})
     fp_list = info.get("fingerprints", [])
     exp_status = info.get("status", [])
 
-    status_match = status in exp_status if exp_status else True
-    body_match = any(fp.lower() in body.lower() for fp in fp_list) if fp_list else False
+    # No body to inspect (network failure, empty response) or no documented
+    # fingerprint → cannot confirm an unclaimed resource.
+    if not body or not fp_list:
+        return False
 
-    return status_match and body_match
+    body_lower = body.lower()
+    body_match = any(fp.lower() in body_lower for fp in fp_list)
+    if not body_match:
+        return False
+
+    # If the provider declares expected statuses, require one of them.
+    # (A claimed, normally-serving resource returns 200 and won't match.)
+    if exp_status and status not in exp_status:
+        return False
+
+    return True
 
 
 # ─── Per-Subdomain Analysis ──────────────────────────────────────────────────────
 
-def analyze_subdomain(subdomain: str) -> Optional[TakeoverFinding]:
+def analyze_subdomain(subdomain: str,
+                      wildcard_cname: Optional[str] = None) -> Optional[TakeoverFinding]:
     """
     Check a single subdomain for takeover vulnerability.
     Returns TakeoverFinding if vulnerable/potential, None if safe.
+
+    wildcard_cname: if the zone has a wildcard DNS record, this is the CNAME
+    a random nonexistent label resolves to. A subdomain whose chain ends at
+    the same target is indistinguishable from the wildcard default and is
+    NOT a real, independently-provisioned record — we skip it to avoid
+    flagging phantom subdomains.
     """
     # Resolve CNAME chain
-    cname_chain = resolve_cname_chain(subdomain)
+    try:
+        cname_chain = resolve_cname_chain(subdomain)
+    except Exception:
+        return None
     if not cname_chain:
         return None
 
     final_cname = cname_chain[-1]
+
+    # Wildcard suppression: this subdomain resolves to the same place a
+    # guaranteed-nonexistent label does, so its existence is an artifact of
+    # the wildcard, not a dedicated dangling record. Not actionable.
+    if wildcard_cname and final_cname.lower() == wildcard_cname:
+        return None
 
     # Check if the final CNAME is NXDOMAIN (dead record)
     nxdomain = check_nxdomain(final_cname)
@@ -386,8 +438,25 @@ def analyze_subdomain(subdomain: str) -> Optional[TakeoverFinding]:
                 vulnerable=False,
             )
 
-    # NXDOMAIN with no provider match — dangling DNS
+    # NXDOMAIN with no provider match — try HTTP before claiming dangling DNS
     if nxdomain:
+        body, status = "", 0
+        for scheme in ("https", "http"):
+            body, status = fetch_body(f"{scheme}://{subdomain}/")
+            if body or status:
+                break
+        # If the subdomain serves content despite NXDOMAIN CNAME, it may be catch-all
+        if body:
+            for provider, info in PROVIDER_FINGERPRINTS.items():
+                if match_fingerprints(body, status, provider):
+                    return TakeoverFinding(
+                        subdomain=subdomain, cname_chain=cname_chain,
+                        provider=provider, confidence="HIGH",
+                        detail=f"CNAME → {final_cname} (NXDOMAIN) but body matches {provider} "
+                               f"unclaimed-resource fingerprint.",
+                        fingerprint_matched=f"HTTP {status} with takeover fingerprint",
+                        status_code=status, vulnerable=True,
+                    )
         return TakeoverFinding(
             subdomain=subdomain,
             cname_chain=cname_chain,
@@ -411,20 +480,41 @@ def check_subdomain_takeovers(target: str, subdomains: list[str],
     """
     result = TakeoverResult(target=target, subdomains_checked=len(subdomains))
 
+    # Detect a zone-level wildcard once so per-subdomain checks can suppress
+    # phantom findings (every enumerated name would otherwise look identical).
+    try:
+        wildcard_cname = detect_wildcard_cname(target)
+    except Exception:
+        wildcard_cname = None
+
+    # Hard ceiling on total wall-clock so a slow/hung resolver or HTTP target
+    # can never hang the scan. Per-subdomain network calls are also bounded.
+    overall_deadline = max(60.0, 2.0 * len(subdomains))
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as exe:
-        futures = {exe.submit(analyze_subdomain, sub): sub for sub in subdomains}
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                finding = future.result()
-            except Exception:
-                result.safe += 1
-                continue
-            if finding is None:
-                result.safe += 1
-            elif finding.vulnerable:
-                result.vulnerable.append(finding)
-            else:
-                result.potential.append(finding)
+        futures = {exe.submit(analyze_subdomain, sub, wildcard_cname): sub
+                   for sub in subdomains}
+        try:
+            completed = concurrent.futures.as_completed(futures, timeout=overall_deadline)
+            for future in completed:
+                try:
+                    finding = future.result()
+                except Exception:
+                    result.safe += 1
+                    continue
+                if finding is None:
+                    result.safe += 1
+                elif finding.vulnerable:
+                    result.vulnerable.append(finding)
+                else:
+                    result.potential.append(finding)
+        except concurrent.futures.TimeoutError:
+            # Deadline hit: treat any unfinished subdomain as safe/unknown
+            # (never a false positive) and stop waiting.
+            for future in futures:
+                if not future.done():
+                    future.cancel()
+                    result.safe += 1
 
     return result
 

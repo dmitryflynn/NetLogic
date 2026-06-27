@@ -42,6 +42,7 @@ class SPFResult:
     mechanism_count: int = 0
     all_mechanism: str = ""    # +all / -all / ~all / ?all
     includes: list[str] = field(default_factory=list)
+    lookup_failed: bool = False   # True if DNS lookup errored (NOT 'absent')
     findings: list[AuditFinding] = field(default_factory=list)
 
 @dataclass
@@ -49,6 +50,7 @@ class DKIMResult:
     checked_selectors: list[str] = field(default_factory=list)
     found_selectors: list[str] = field(default_factory=list)
     records: dict = field(default_factory=dict)
+    lookup_failed: bool = False   # True if probing errored out
     findings: list[AuditFinding] = field(default_factory=list)
 
 @dataclass
@@ -60,6 +62,7 @@ class DMARCResult:
     pct: int = 100
     rua: list[str] = field(default_factory=list)
     ruf: list[str] = field(default_factory=list)
+    lookup_failed: bool = False   # True if DNS lookup errored (NOT 'absent')
     findings: list[AuditFinding] = field(default_factory=list)
 
 @dataclass
@@ -74,12 +77,14 @@ class DNSSecResult:
     enabled: bool = False
     ds_records: list[str] = field(default_factory=list)
     dnskey_found: bool = False
+    lookup_failed: bool = False   # True if DNS lookup errored (NOT 'absent')
     issues: list[str] = field(default_factory=list)
 
 @dataclass
 class CAAResult:
     present: bool = False
     records: list[str] = field(default_factory=list)
+    lookup_failed: bool = False   # True if DNS lookup errored (NOT 'absent')
     issues: list[str] = field(default_factory=list)
 
 @dataclass
@@ -101,8 +106,28 @@ class DNSSecurityResult:
 
 # ─── DNS-over-HTTPS Query ────────────────────────────────────────────────────
 
+class DNSLookupError(Exception):
+    """Raised when a DNS lookup could not be completed (network/transport/server
+    failure). This is DISTINCT from an authoritative empty answer (NXDOMAIN /
+    NOERROR with no records). Callers MUST NOT treat this as 'record absent' —
+    doing so produces false 'missing/misconfigured' findings."""
+
+
+# DoH/DNS response status codes (RCODE) that represent an authoritative answer
+# we can trust. 0 = NOERROR (record present or authoritatively absent),
+# 3 = NXDOMAIN (name authoritatively does not exist). Anything else
+# (SERVFAIL=2, REFUSED=5, etc.) is a lookup failure, not a negative answer.
+_AUTHORITATIVE_RCODES = (0, 3)
+
+
 def _doh(name: str, rtype: str) -> list[dict]:
-    """Query Cloudflare DoH. Returns list of answer dicts."""
+    """Query Cloudflare DoH. Returns the list of answer dicts on an
+    authoritative response (possibly empty for NXDOMAIN / no-records).
+
+    Raises DNSLookupError if the lookup itself failed (timeout, transport
+    error, malformed body, or a non-authoritative DNS status such as SERVFAIL)
+    so callers can avoid emitting false 'record missing' findings.
+    """
     url = f"https://cloudflare-dns.com/dns-query?name={urllib.parse.quote(name)}&type={rtype}"
     try:
         req = urllib.request.Request(url, headers={
@@ -111,22 +136,48 @@ def _doh(name: str, rtype: str) -> list[dict]:
         })
         with urllib.request.urlopen(req, timeout=6) as resp:
             data = json.loads(resp.read())
-        return data.get("Answer", [])
-    except Exception:
-        return []
+    except Exception as exc:
+        raise DNSLookupError(f"{rtype} lookup for {name} failed: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise DNSLookupError(f"{rtype} lookup for {name} returned malformed body")
+
+    status = data.get("Status", 0)
+    if status not in _AUTHORITATIVE_RCODES:
+        # SERVFAIL / REFUSED / etc. — transient or server-side failure, NOT a
+        # trustworthy 'no record' answer.
+        raise DNSLookupError(
+            f"{rtype} lookup for {name} returned non-authoritative status {status}"
+        )
+
+    answers = data.get("Answer", [])
+    return answers if isinstance(answers, list) else []
+
 
 def _txt_records(name: str) -> list[str]:
+    """Return TXT record strings for ``name``. Propagates DNSLookupError."""
     answers = _doh(name, "TXT")
     results = []
     for a in answers:
-        val = a.get("data", "").strip('"')
-        # DoH may split long TXT records with spaces and quotes
-        val = re.sub(r'"\s+"', "", val)
+        val = (a.get("data") or "")
+        # A TXT record longer than 255 bytes is published as multiple
+        # quoted character-strings; DoH returns them space-separated and each
+        # individually quoted, e.g. '"v=spf1 ..." "... -all"'. They MUST be
+        # concatenated with no separator before parsing.
+        # 1. join adjacent quoted chunks: '" "' (any inter-chunk whitespace) -> ''
+        val = re.sub(r'"\s*"', "", val)
+        # 2. strip the surrounding quotes of the (now single) string.
+        val = val.strip().strip('"')
         results.append(val)
     return results
 
 def _mx_records(domain: str) -> list[tuple[int, str]]:
-    answers = _doh(domain, "MX")
+    # MX absence is not asserted as a finding, so a lookup failure can degrade
+    # to 'no MX' without producing a false positive.
+    try:
+        answers = _doh(domain, "MX")
+    except DNSLookupError:
+        return []
     results = []
     for a in answers:
         data = a.get("data", "")
@@ -139,7 +190,12 @@ def _mx_records(domain: str) -> list[tuple[int, str]]:
     return sorted(results)
 
 def _ns_records(domain: str) -> list[str]:
-    answers = _doh(domain, "NS")
+    # NS list only drives the (opt-in, evidence-required) zone-transfer probe;
+    # an empty list on failure simply skips it — no false finding.
+    try:
+        answers = _doh(domain, "NS")
+    except DNSLookupError:
+        return []
     return [a.get("data", "").rstrip(".") for a in answers]
 
 
@@ -147,8 +203,15 @@ def _ns_records(domain: str) -> list[str]:
 
 def check_spf(domain: str) -> SPFResult:
     result = SPFResult()
-    txts = _txt_records(domain)
-    spf_records = [t for t in txts if t.startswith("v=spf1")]
+    try:
+        txts = _txt_records(domain)
+    except DNSLookupError:
+        # Resolver failure — we cannot assert the record is absent. Mark the
+        # lookup as failed and emit NO finding (avoids false 'Missing SPF').
+        result.lookup_failed = True
+        return result
+    # SPF prefix is case-insensitive per RFC 7208 §4.5; match accordingly.
+    spf_records = [t for t in txts if t[:6].lower() == "v=spf1"]
 
     if not spf_records:
         result.findings.append(AuditFinding(
@@ -177,8 +240,13 @@ def check_spf(domain: str) -> SPFResult:
     mechanisms = [p for p in parts if not p.startswith("v=")]
     result.mechanism_count = len(mechanisms)
 
-    # Check 'all' mechanism
-    all_mech = next((p for p in parts if p.endswith("all")), None)
+    # Check 'all' mechanism. The 'all' mechanism is a standalone token of the
+    # form [qualifier]all where qualifier is one of + - ~ ? (default '+').
+    # We must NOT match mechanism arguments that merely end in 'all' such as
+    # 'include:sendall.example.com'. The last matching token is the operative
+    # one. Case-insensitive per RFC.
+    all_tokens = [p for p in parts if re.fullmatch(r"[+\-~?]?all", p, re.IGNORECASE)]
+    all_mech = all_tokens[-1].lower() if all_tokens else None
     result.all_mechanism = all_mech or ""
 
     if not all_mech:
@@ -231,8 +299,10 @@ def check_spf(domain: str) -> SPFResult:
             category="SPF"
         ))
 
-    # ptr mechanism deprecated
-    if "ptr" in result.record:
+    # ptr mechanism deprecated. Match it as a real mechanism token
+    # ('ptr' or 'ptr:domain', optionally qualified) — NOT as a substring of
+    # an include hostname like 'include:ptrmail.com'.
+    if any(re.fullmatch(r"[+\-~?]?ptr(:\S+)?", p, re.IGNORECASE) for p in parts):
         result.findings.append(AuditFinding(
             title="Deprecated SPF PTR Mechanism",
             description="The 'ptr' mechanism is deprecated and inefficient. Many mail servers ignore it.",
@@ -259,17 +329,25 @@ def check_dkim(domain: str) -> DKIMResult:
 
     def probe_selector(sel):
         dkim_domain = f"{sel}._domainkey.{domain}"
-        answers = _doh(dkim_domain, "TXT")
+        try:
+            answers = _doh(dkim_domain, "TXT")
+        except DNSLookupError:
+            # Signal failure distinctly from 'no such selector'.
+            return None, None, True
         for a in answers:
-            val = a.get("data", "")
-            if "v=DKIM1" in val or "p=" in val:
-                return sel, val
-        return None, None
+            # Join multi-chunk TXT (same rule as _txt_records) before matching.
+            val = re.sub(r'"\s*"', "", (a.get("data") or "")).strip().strip('"')
+            if "v=DKIM1" in val or val.startswith("k=") or "p=" in val:
+                return sel, val, False
+        return None, None, False
 
+    any_failure = False
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as exe:
         futures = [exe.submit(probe_selector, sel) for sel in COMMON_DKIM_SELECTORS]
         for f in concurrent.futures.as_completed(futures):
-            sel, record = f.result()
+            sel, record, failed = f.result()
+            if failed:
+                any_failure = True
             if sel:
                 result.found_selectors.append(sel)
                 result.records[sel] = record
@@ -279,7 +357,7 @@ def check_dkim(domain: str) -> DKIMResult:
                 if p_match:
                     key_b64 = p_match.group(1)
                     key_len = len(key_b64) * 6 // 8 * 8  # rough bit estimate
-                    if key_len < 1024:
+                    if key_len < 1280:  # adjusted for ~240 bits DER SPKI overhead; catches RSA < 1024b
                         result.findings.append(AuditFinding(
                             title="Weak DKIM Key Length",
                             description=f"Selector '{sel}': RSA key appears short (<1024 bits) — vulnerable to factoring",
@@ -288,8 +366,10 @@ def check_dkim(domain: str) -> DKIMResult:
                             category="DKIM",
                         ))
 
-                # Empty p= means key revoked
-                if "p=" in (record or "") and re.search(r"p=\s*;|p=\"\"", record or ""):
+                # Empty p= means key revoked. After TXT chunk-joining the
+                # surrounding quotes are gone, so match an empty p= value that
+                # is either end-of-string or followed by a ';' tag separator.
+                if re.search(r"p=\s*(;|$)", record or ""):
                     result.findings.append(AuditFinding(
                         title="Revoked DKIM Key",
                         description=f"Selector '{sel}': public key is empty (revoked)",
@@ -297,6 +377,13 @@ def check_dkim(domain: str) -> DKIMResult:
                         severity="HIGH",
                         category="DKIM",
                     ))
+
+    if any_failure and not result.found_selectors:
+        # Every probe that returned nothing may have been a resolver failure
+        # rather than an authoritative 'no such selector'. Do NOT claim DKIM is
+        # absent — that would be a false finding.
+        result.lookup_failed = True
+        return result
 
     if not result.found_selectors:
         result.findings.append(AuditFinding(
@@ -312,18 +399,34 @@ def check_dkim(domain: str) -> DKIMResult:
 
 # ─── DMARC Analysis ──────────────────────────────────────────────────────────
 
+def _is_dmarc(t: str) -> bool:
+    # 'v=DMARC1' is case-insensitive; whitespace after 'v=' is permitted.
+    return re.match(r"\s*v\s*=\s*DMARC1\b", t, re.IGNORECASE) is not None
+
+
 def check_dmarc(domain: str) -> DMARCResult:
     result = DMARCResult()
-    txts = _txt_records(f"_dmarc.{domain}")
-    dmarc_records = [t for t in txts if t.startswith("v=DMARC1")]
+    try:
+        txts = _txt_records(f"_dmarc.{domain}")
+    except DNSLookupError:
+        result.lookup_failed = True
+        return result
+    dmarc_records = [t for t in txts if _is_dmarc(t)]
 
     if not dmarc_records:
         # Check organizational domain
         parts = domain.split(".")
         if len(parts) > 2:
             org = ".".join(parts[-2:])
-            txts2 = _txt_records(f"_dmarc.{org}")
-            dmarc_records = [t for t in txts2 if t.startswith("v=DMARC1")]
+            try:
+                txts2 = _txt_records(f"_dmarc.{org}")
+            except DNSLookupError:
+                # The apex record was authoritatively absent, but the org
+                # fallback could not be confirmed. Treat as inconclusive
+                # rather than asserting 'Missing DMARC'.
+                result.lookup_failed = True
+                return result
+            dmarc_records = [t for t in txts2 if _is_dmarc(t)]
 
     if not dmarc_records:
         result.findings.append(AuditFinding(
@@ -338,11 +441,12 @@ def check_dmarc(domain: str) -> DMARCResult:
     result.present = True
     result.record = dmarc_records[0]
 
-    # Parse tags
-    tags = dict(re.findall(r"(\w+)=([^;]+)", result.record))
+    # Parse tags. Tag names are case-insensitive; normalise keys to lowercase.
+    tags = {k.lower(): v.strip() for k, v in re.findall(r"(\w+)=([^;]*)", result.record)}
 
-    result.policy = tags.get("p", "none").strip()
-    result.subdomain_policy = tags.get("sp", result.policy).strip()
+    # Policy values are case-insensitive keywords.
+    result.policy = tags.get("p", "none").strip().lower()
+    result.subdomain_policy = tags.get("sp", result.policy).strip().lower()
     try:
         result.pct = int(tags.get("pct", "100").strip())
     except ValueError:
@@ -505,19 +609,33 @@ def check_zone_transfer(domain: str) -> tuple[bool, list[str]]:
 def check_dnssec(domain: str) -> DNSSecResult:
     result = DNSSecResult()
 
+    ds = dnskey = None
+    ds_failed = dnskey_failed = False
+
     # Check for DS records (indicates DNSSEC delegation)
-    ds = _doh(domain, "DS")
+    try:
+        ds = _doh(domain, "DS")
+    except DNSLookupError:
+        ds_failed = True
     if ds:
         result.enabled = True
         result.ds_records = [a.get("data", "") for a in ds]
 
     # Check for DNSKEY
-    dnskey = _doh(domain, "DNSKEY")
+    try:
+        dnskey = _doh(domain, "DNSKEY")
+    except DNSLookupError:
+        dnskey_failed = True
     if dnskey:
         result.dnskey_found = True
         result.enabled = True
 
     if not result.enabled:
+        if ds_failed and dnskey_failed:
+            # Both lookups failed — cannot conclude DNSSEC is off. Suppress the
+            # 'not enabled' finding to avoid a false negative.
+            result.lookup_failed = True
+            return result
         result.issues.append(
             "DNSSEC not enabled — DNS responses can be forged (DNS cache poisoning, BGP hijacking)"
         )
@@ -529,7 +647,11 @@ def check_dnssec(domain: str) -> DNSSecResult:
 
 def check_caa(domain: str) -> CAAResult:
     result = CAAResult()
-    answers = _doh(domain, "CAA")
+    try:
+        answers = _doh(domain, "CAA")
+    except DNSLookupError:
+        result.lookup_failed = True
+        return result
 
     if not answers:
         result.issues.append(
@@ -554,8 +676,13 @@ def check_caa(domain: str) -> CAAResult:
 def check_wildcard_dns(domain: str) -> bool:
     """Check if *.domain resolves (wildcard DNS — major subdomain takeover risk)."""
     test_host = f"this-should-not-exist-{hash(domain) % 99999}.{domain}"
-    # Use DoH for consistency — avoids local resolver caching and VPN/split-horizon issues
-    answers = _doh(test_host, "A")
+    # Use DoH for consistency — avoids local resolver caching and VPN/split-horizon issues.
+    # A resolver failure must NOT crash the scan or be reported as a wildcard;
+    # degrade to 'no wildcard' (the absence of evidence, not a false positive).
+    try:
+        answers = _doh(test_host, "A")
+    except DNSLookupError:
+        return False
     return bool(answers)
 
 
@@ -568,8 +695,14 @@ def calculate_spoofability(spf: SPFResult, dkim: DKIMResult, dmarc: DMARCResult)
     """
     score = 0
 
+    # A lookup failure means we could not determine the posture — we must NOT
+    # treat "couldn't check" as "missing/insecure", which would inflate the
+    # score into a false 'spoofable' finding. Only score what we could resolve.
+
     # SPF
-    if not spf.present:
+    if spf.lookup_failed:
+        pass
+    elif not spf.present:
         score += 4
     elif spf.all_mechanism in ("+all", "?all", ""):
         score += 3
@@ -577,7 +710,9 @@ def calculate_spoofability(spf: SPFResult, dkim: DKIMResult, dmarc: DMARCResult)
         score += 1
 
     # DMARC
-    if not dmarc.present:
+    if dmarc.lookup_failed:
+        pass
+    elif not dmarc.present:
         score += 4
     elif dmarc.policy == "none":
         score += 3
@@ -585,7 +720,7 @@ def calculate_spoofability(spf: SPFResult, dkim: DKIMResult, dmarc: DMARCResult)
         score += 1
 
     # DKIM
-    if not dkim.found_selectors:
+    if not dkim.lookup_failed and not dkim.found_selectors:
         score += 2
 
     spoofable = score >= 5
@@ -628,8 +763,14 @@ def check_dns_security(domain: str) -> DNSSecurityResult:
         result.spf, result.dkim, result.dmarc
     )
 
-    # Build findings list
-    if not result.spf.present:
+    # Build findings list.
+    # IMPORTANT: a lookup_failed sub-result means we could NOT determine the
+    # posture — never re-derive a 'missing/insecure' finding from .present /
+    # .found_selectors / .enabled in that case, or we resurrect the exact false
+    # positives the sub-checks deliberately suppressed.
+    if result.spf.lookup_failed:
+        pass
+    elif not result.spf.present:
         result.findings.append(_finding(
             "HIGH", "Missing SPF Record",
             "No SPF record found. Anyone can send emails appearing to come from this domain.",
@@ -642,14 +783,16 @@ def check_dns_security(domain: str) -> DNSSecurityResult:
                 finding.remediation,
             ))
 
-    if not result.dkim.found_selectors:
+    if not result.dkim.lookup_failed and not result.dkim.found_selectors:
         result.findings.append(_finding(
             "MEDIUM", "No DKIM Selectors Found",
             "DKIM signing not detected. Emails cannot be cryptographically verified.",
             "Configure DKIM signing with your mail provider and publish the public key in DNS."
         ))
 
-    if not result.dmarc.present:
+    if result.dmarc.lookup_failed:
+        pass
+    elif not result.dmarc.present:
         result.findings.append(_finding(
             "HIGH", "Missing DMARC Record",
             "No DMARC policy. SPF/DKIM failures are not enforced — spoofed emails may be delivered.",
@@ -678,14 +821,14 @@ def check_dns_security(domain: str) -> DNSSecurityResult:
             "Remove wildcard DNS unless intentionally required."
         ))
 
-    if not result.dnssec.enabled:
+    if not result.dnssec.lookup_failed and not result.dnssec.enabled:
         result.findings.append(_finding(
             "LOW", "DNSSEC Not Enabled",
             "DNS responses can be forged without DNSSEC. Enables DNS cache poisoning attacks.",
             "Enable DNSSEC at your domain registrar and DNS provider."
         ))
 
-    if not result.caa.present:
+    if not result.caa.lookup_failed and not result.caa.present:
         result.findings.append(_finding(
             "LOW", "No CAA Records",
             "Any trusted CA can issue certificates for this domain.",

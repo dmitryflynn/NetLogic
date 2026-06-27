@@ -27,7 +27,12 @@ def _vuln(claim, **kw):
 def _fake_complete(mapping):
     """Return a complete() that emits a JSON array from {id: (verdict, severity)}."""
     def complete(system, user):
-        items = json.loads(user.split("```json", 1)[1].rsplit("```", 1)[0])
+        obs_marker = "OBSERVATIONS:\n```json"
+        if obs_marker in user:
+            items_json = user.split(obs_marker, 1)[1].rsplit("```", 1)[0]
+        else:
+            items_json = user.split("```json", 1)[1].rsplit("```", 1)[0]
+        items = json.loads(items_json)
         out = []
         for it in items:
             verdict, severity = mapping.get(it["id"], ("uncertain", "low"))
@@ -101,16 +106,18 @@ def test_parse_tolerates_prose_and_fences():
     text = ("Sure! Here is my analysis:\n```json\n"
             '[{"id":0,"verdict":"real","severity":"high","confidence":0.8,'
             '"reason":"r","benign_ruled_out":[]}]\n```\nDone.')
-    parsed = parse_ai_response(text, gray)
+    parsed, new_findings = parse_ai_response(text, gray)
     assert parsed[0].verdict == "real"
+    assert new_findings == []
 
 
 def test_parse_ignores_out_of_range_and_bad_verdicts():
     gray = [_vuln("a", cvss=8.0)]
     text = '[{"id":5,"verdict":"real"},{"id":0,"verdict":"nonsense"}]'
-    parsed = parse_ai_response(text, gray)
+    parsed, new_findings = parse_ai_response(text, gray)
     assert 5 not in parsed                  # out of range dropped
     assert parsed[0].verdict == "uncertain" # unknown verdict normalized
+    assert new_findings == []
 
 
 # ── Fail-soft ───────────────────────────────────────────────────────────────────
@@ -119,8 +126,9 @@ def test_ai_exception_is_failsoft_to_potential():
     def boom(system, user):
         raise RuntimeError("provider 504")
     gray = [_vuln("a", cvss=9.0)]
-    run_adjudication(gray, complete=boom)
-    assert gray[0].decision == "potential"  # never crashes, never dropped
+    out, new_verdicts = run_adjudication(gray, complete=boom)
+    assert out[0].decision == "potential"  # never crashes, never dropped
+    assert new_verdicts == []
 
 
 def test_no_gray_band_is_noop():
@@ -128,8 +136,9 @@ def test_no_gray_band_is_noop():
     [v] = adjudicate([Signal(source="nvd", kind="vuln", claim="CVE-x", host="h", port=1,
                              cvss=9.8, kev=True)])
     assert v.decision == "confirmed"
-    out = run_adjudication([v], complete=lambda s, u: (_ for _ in ()).throw(AssertionError("called")))
+    out, new_vs = run_adjudication([v], complete=lambda s, u: (_ for _ in ()).throw(AssertionError("called")))
     assert out[0].decision == "confirmed"   # complete() never invoked
+    assert new_vs == []
 
 
 # ── End to end ──────────────────────────────────────────────────────────────────
@@ -148,6 +157,7 @@ def test_end_to_end_sensor_gate_ai():
 
     gray = gray_band(verdicts)
     ids = {v.claim: i for i, v in enumerate(gray)}
-    run_adjudication(verdicts, complete=_fake_complete({ids["CVE-A"]: ("real", "high")}))
+    out, new_vs = run_adjudication(verdicts, complete=_fake_complete({ids["CVE-A"]: ("real", "high")}))
     assert by["CVE-A"].decision == "confirmed"
     assert by["CVE-B"].decision == "confirmed"   # untouched, still pinned
+    assert new_vs == []                          # no new findings from fake complete

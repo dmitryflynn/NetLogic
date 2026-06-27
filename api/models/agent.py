@@ -42,6 +42,10 @@ class AgentRegistration(BaseModel):
         max_length=_MAX_VERSION_LEN,
         description="Agent software version string.",
     )
+    concurrency: int = Field(
+        1, ge=1, le=64,
+        description="Maximum simultaneous scans this agent will run (capacity hint for the dispatcher).",
+    )
     tags: dict[str, str] = Field(
         default_factory=dict,
         description=(

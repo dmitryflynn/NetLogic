@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "name": "irrelevant evidence → no inference, hypothesis remains active (no false resolution)",
+  "kind": "infer",
+  "build": {
+    "objective": "identify_framework:ex.com:80",
+    "candidates": {"wordpress": 0.5, "spring_boot": 0.5},
+    "observations": ["a perfectly ordinary landing page with nothing identifying"]
+  },
+  "expect": {
+    "decisions_contain": [],
+    "hypothesis_status": "active"
+  }
+}

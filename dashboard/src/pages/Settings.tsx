@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import type { UseMutationResult } from '@tanstack/react-query'
 import {
   useAiSettings, useSaveAiSettings, useTestAiSettings,
-  useFusionSettings, useSaveFusionSettings, useTestFusionSettings,
   type AiSettings, type AiSettingsUpdate,
 } from '../api/scan'
 
@@ -10,7 +9,7 @@ type SaveMut = UseMutationResult<AiSettings, Error, AiSettingsUpdate>
 type TestMut = UseMutationResult<{ ok: boolean; error?: string; provider?: string; model?: string }, Error, void>
 
 function ProviderForm({
-  title, description, data, isLoading, save, test, isFusion = false,
+  title, description, data, isLoading, save, test,
 }: {
   title: string
   description: React.ReactNode
@@ -18,7 +17,6 @@ function ProviderForm({
   isLoading: boolean
   save: SaveMut
   test: TestMut
-  isFusion?: boolean
 }) {
   const [provider, setProvider] = useState('openrouter')
   const [apiKey,   setApiKey]   = useState('')
@@ -37,8 +35,6 @@ function ProviderForm({
   const preset = data?.presets?.[provider]
   const isCustom = provider === 'custom'
   const isOllama = provider === 'ollama'
-  const inheriting = isFusion && data?.inherits_ai
-
   function submit(e: React.FormEvent) {
     e.preventDefault()
     setSaved(false)
@@ -77,12 +73,9 @@ function ProviderForm({
       <div className="text-[11px] text-text-dim">
         Status:{' '}
         {data?.key_set ? (
-          <span className="text-low">
-            Configured · key {data.key_hint}
-            {inheriting && <span className="text-text-dim"> (inherited from AI Analysis)</span>}
-          </span>
+          <span className="text-low">Configured · key {data.key_hint}</span>
         ) : (
-          <span className="text-medium">No API key set — {isFusion ? 'gray-band findings stay "potential"' : 'AI analysis will be skipped'}</span>
+          <span className="text-medium">No API key set — AI analysis will be skipped</span>
         )}
       </div>
 
@@ -178,34 +171,16 @@ function AiSection() {
   )
 }
 
-function FusionSection() {
-  const q = useFusionSettings()
-  const save = useSaveFusionSettings()
-  const test = useTestFusionSettings()
-  return (
-    <ProviderForm
-      title="Fusion Adjudication"
-      description="Model that judges the ambiguous “gray band” of findings (real vs. false positive). May use a different/cheaper model than the report. Leave blank to reuse the AI Analysis config."
-      data={q.data}
-      isLoading={q.isLoading}
-      save={save}
-      test={test}
-      isFusion
-    />
-  )
-}
-
 export default function Settings() {
   return (
     <div className="max-w-2xl mx-auto px-6 py-6 space-y-6">
       <div>
         <h2 className="font-display font-bold text-lg text-text-bright tracking-wide">Settings</h2>
         <p className="text-text-dim text-[12px] mt-1">
-          Configure the AI providers. Keys are stored on the server and never displayed again.
+          Configure the AI provider. The key is stored on the server and never displayed again.
         </p>
       </div>
       <AiSection />
-      <FusionSection />
     </div>
   )
 }

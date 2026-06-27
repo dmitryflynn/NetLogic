@@ -1,0 +1,6 @@
+{
+  "name": "wordpress",
+  "confirm": ["wp-content", "wp-json", "x-powered-by: wordpress", "/wp-login.php", "generator\": \"wordpress"],
+  "refute": ["server: microsoft-iis", "x-aspnet-version"],
+  "contradiction": []
+}

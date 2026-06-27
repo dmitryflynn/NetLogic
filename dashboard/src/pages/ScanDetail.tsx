@@ -1,9 +1,11 @@
+import { useMemo, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useJob, useCancelJob, useStreamScan, type PortEvent, type VulnEvent } from '../api/scan'
+import { useJob, useCancelJob, useStreamScan, extractSections, exploreBeyond, downloadExport, type PortEvent, type VulnEvent } from '../api/scan'
 import StatusBadge from '../components/StatusBadge'
 import PortTable from '../components/PortTable'
 import VulnCard from '../components/VulnCard'
 import ScanFeed from '../components/ScanFeed'
+import ScanSections from '../components/ScanSections'
 
 function fmtDate(ts: number | null) {
   return ts ? new Date(ts * 1000).toLocaleString() : '—'
@@ -12,26 +14,26 @@ function fmtDate(ts: number | null) {
 export default function ScanDetail() {
   const { id } = useParams<{ id: string }>()
   const nav    = useNavigate()
-  const { data: job, isLoading } = useJob(id!)
+
+  if (!id) {
+    return <p className="text-critical p-8 text-center">Invalid scan ID.</p>
+  }
+
+  const { data: job, isLoading } = useJob(id)
   const cancel = useCancelJob()
 
   // SSE stream — only active while job is running/queued
   const live = (job?.status === 'running' || job?.status === 'queued')
-  const { events, ports, vulns, progress, streaming } = useStreamScan(live ? id! : null)
+  const { events, ports, progress, streaming } = useStreamScan(live ? id : null)
 
-  // For completed jobs, pull ports/vulns from stored events.
-  // The scan engine emits vulns as {port, service, cves:[{id, cvss_score,...}]};
-  // normalise to the flat VulnEvent shape the UI expects.
-  const storedPorts = (job?.events ?? [])
-    .filter((e) => e.type === 'port')
-    .map((e) => e.data as PortEvent)
+  const activeEvents = live ? events : (job?.events ?? [])
 
-  const storedVulns: VulnEvent[] = (job?.events ?? [])
-    .filter((e) => e.type === 'vuln')
-    .flatMap((e) => {
+  // The scan engine emits vulns nested as {port, service, cves:[{id, cvss_score,...}]};
+  // flatten to the VulnEvent shape the UI expects. Used for both live and stored.
+  const displayVulns = useMemo(() =>
+    activeEvents.filter((e) => e.type === 'vuln').flatMap((e) => {
       const d = e.data as Record<string, unknown> | undefined
       if (!d) return []
-      // Nested engine format: {port, service, cves:[...]}
       if (Array.isArray(d.cves) && d.cves.length > 0) {
         return (d.cves as Record<string, unknown>[]).map((c) => ({
           cve_id:      c.id as string,
@@ -42,15 +44,48 @@ export default function ScanDetail() {
           service:     (d.service ?? '') as string,
           exploitable: (c.exploit_available ?? false) as boolean,
           exploit_ref: (Array.isArray(c.references) ? c.references[0] : undefined) as string | undefined,
+          kev:         (c.kev ?? false) as boolean,
+          epss:        (c.epss ?? 0) as number,
         } satisfies VulnEvent))
       }
-      // Already-flat format
       return [d as unknown as VulnEvent]
-    })
+    }),
+    [activeEvents],
+  )
 
-  const displayPorts = live ? ports  : storedPorts
-  const displayVulns = live ? vulns  : storedVulns
+  const displayPorts = useMemo(() => {
+    if (live) return ports
+    return activeEvents.filter((e) => e.type === 'port').map((e) => e.data as PortEvent)
+  }, [live, ports, activeEvents])
+
   const displayPct   = live ? (progress?.percent ?? job?.progress ?? 0) : (job?.progress ?? 0)
+  // Deep-scan sections (topology, exploitability, web fp, AI, TLS, changes).
+  const sections     = useMemo(() => extractSections(activeEvents), [activeEvents])
+
+  // Total non-CVE findings count from AI + fusion
+  const findingsTotal = useMemo(() => {
+    const beyondCves = (sections.ai?.beyond_cves as string[] | undefined)?.length ?? 0
+    const fusedConfirmed = sections.fusion?.summary?.confirmed ?? 0
+    const fusedPotential = sections.fusion?.summary?.potential ?? 0
+    return beyondCves + fusedConfirmed + fusedPotential
+  }, [sections])
+
+  // Inline explore for Beyond CVEs
+  const [exploring, setExploring] = useState<string | null>(null)
+  const [exploreMd, setExploreMd] = useState<Record<string, string>>({})
+  async function onExplore(finding: string) {
+    if (!id) return
+    if (exploreMd[finding]) return  // already loaded
+    setExploring(finding)
+    try {
+      const res = await exploreBeyond(id, finding)
+      setExploreMd((prev) => ({ ...prev, [finding]: res.markdown || res.error || 'No elaboration returned.' }))
+    } catch {
+      setExploreMd((prev) => ({ ...prev, [finding]: '_Failed to retrieve elaboration._' }))
+    } finally {
+      setExploring(null)
+    }
+  }
 
   if (isLoading) {
     return <p className="text-text-dim p-8 text-center">Loading…</p>
@@ -72,6 +107,31 @@ export default function ScanDetail() {
           <span className="text-accent text-[11px] animate-pulse">● Live</span>
         )}
         <div className="ml-auto flex gap-2">
+          {job.status !== 'queued' && (
+            <>
+              <button
+                onClick={() => downloadExport(job.job_id, 'json', `${job.target}-${job.job_id.slice(0, 8)}.json`)}
+                className="btn text-[11px]"
+                title="Download JSON export"
+              >
+                JSON
+              </button>
+              <button
+                onClick={() => downloadExport(job.job_id, 'md', `${job.target}-${job.job_id.slice(0, 8)}.md`)}
+                className="btn text-[11px]"
+                title="Download Markdown report"
+              >
+                Report
+              </button>
+              <button
+                onClick={() => downloadExport(job.job_id, 'raw', `${job.target}-${job.job_id.slice(0, 8)}_raw.json`)}
+                className="btn text-[11px]"
+                title="Download raw event data"
+              >
+                Export RAW
+              </button>
+            </>
+          )}
           {(job.status === 'running' || job.status === 'queued') && (
             <button
               onClick={() => cancel.mutate(job.job_id)}
@@ -120,21 +180,30 @@ export default function ScanDetail() {
             </section>
           )}
 
-          {/* Vulnerabilities */}
-          {displayVulns.length > 0 && (
+          {/* Vulnerabilities — raw correlator output. Only shown during live
+              streaming (fusion hasn't run yet) or when fusion has no data.
+              Once fusion adjudication is available it becomes the authoritative
+              view — the raw list is redundant and may contain false positives
+              the gate already filtered out. */}
+          {(!sections.fusion || live) && displayVulns.length > 0 && (
             <section>
               <p className="section-title mb-3">
                 Vulnerabilities ({displayVulns.length})
               </p>
               <div className="space-y-2">
                 {displayVulns
-                  .sort((a, b) => (b.cvss ?? 0) - (a.cvss ?? 0))
-                  .map((v, i) => (
-                    <VulnCard key={`${v.cve_id}-${i}`} vuln={v} />
+                  .sort((a, b) => (Number(b.kev) - Number(a.kev))
+                                  || ((b.epss ?? 0) - (a.epss ?? 0))
+                                  || ((b.cvss ?? 0) - (a.cvss ?? 0)))
+                  .map((v) => (
+                    <VulnCard key={`${v.cve_id}-${v.port}`} vuln={v} />
                   ))}
               </div>
             </section>
           )}
+
+          {/* Deep-scan sections: AI, exploitability, authenticated, web fp, topology, TLS, changes */}
+          <ScanSections s={sections} onExplore={onExplore} exploreMd={exploreMd} exploring={exploring} />
 
           {/* Live feed while scanning */}
           {live && events.length > 0 && (
@@ -188,6 +257,7 @@ export default function ScanDetail() {
               <p className="section-title mb-2">Results</p>
               <dl className="space-y-1.5 text-[11px]">
                 <Row k="Ports" v={<span className="text-low">{displayPorts.length}</span>} />
+                {findingsTotal > 0 && <Row k="Findings" v={<span className="text-high">{findingsTotal}</span>} />}
                 <Row k="Vulns" v={<span className="text-critical">{displayVulns.length}</span>} />
               </dl>
             </div>

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "name": "evidence matching two frameworks → contradiction, hypothesis stays active",
+  "kind": "infer",
+  "build": {
+    "objective": "identify_framework:ex.com:80",
+    "candidates": {"wordpress": 0.5, "spring_boot": 0.5},
+    "observations": ["wp-content present and x-application-context header and /actuator endpoint"]
+  },
+  "expect": {
+    "decisions_contain": ["contradiction"],
+    "contradictions_min": 1,
+    "hypothesis_status": "active"
+  }
+}

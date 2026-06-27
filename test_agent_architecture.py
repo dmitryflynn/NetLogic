@@ -29,12 +29,13 @@ class TestAgentRegistry(unittest.TestCase):
     def setUp(self):
         self.registry = AgentRegistry(persist_path=None)
 
-    def _register(self, hostname="agent-01"):
+    def _register(self, hostname="agent-01", concurrency=1):
         return self.registry.register(
             hostname=hostname,
             capabilities=["scan", "tls"],
             version="2.0.0",
             tags={"env": "test"},
+            concurrency=concurrency,
         )
 
     # ── Registration ──────────────────────────────────────────────────────────
@@ -113,8 +114,9 @@ class TestAgentRegistry(unittest.TestCase):
     def test_agent_is_busy_when_has_job(self):
         agent_id, _ = self._register()
         self.registry.heartbeat(agent_id)
+        # A concurrency-1 agent running one job is at capacity → busy.
+        self.registry.mark_active(agent_id, "some-job-id")
         agent = self.registry.get(agent_id)
-        agent.current_job_id = "some-job-id"
         self.assertEqual(agent.status, "busy")
 
     def test_agent_goes_offline_after_timeout(self):
@@ -134,7 +136,7 @@ class TestAgentRegistry(unittest.TestCase):
         self.assertIn("job-123", agent.pending_tasks)
 
     def test_get_pending_tasks_drains_queue(self):
-        agent_id, _ = self._register()
+        agent_id, _ = self._register(concurrency=2)
         self.registry.assign_task(agent_id, "job-1")
         self.registry.assign_task(agent_id, "job-2")
         tasks = self.registry.get_pending_tasks(agent_id)
@@ -160,8 +162,7 @@ class TestAgentRegistry(unittest.TestCase):
     def test_find_idle_agent_skips_busy(self):
         agent_id, _ = self._register()
         self.registry.heartbeat(agent_id)
-        agent = self.registry.get(agent_id)
-        agent.current_job_id = "busy-job"
+        self.registry.mark_active(agent_id, "busy-job")  # at capacity → busy
         self.assertIsNone(self.registry.find_idle_agent())
 
 
@@ -206,7 +207,7 @@ class TestSubmitScanDispatch(unittest.IsolatedAsyncioTestCase):
             await submit_scan(job)
 
         self.assertEqual(job.status, "failed")
-        self.assertIn("not available", job.error)
+        self.assertIn("offline or not registered", job.error)
 
     async def test_online_agent_queues_job(self):
         """Dispatching to an online agent enqueues the job_id on the agent."""
@@ -231,6 +232,130 @@ class TestSubmitScanDispatch(unittest.IsolatedAsyncioTestCase):
         self.assertIn("test-job-2", agent.pending_tasks)
         # Job stays queued (agent hasn't picked it up yet)
         self.assertEqual(job.status, "queued")
+
+
+# ─── Intelligent dispatch: capability / selector / capacity routing ───────────
+
+class TestIntelligentDispatch(unittest.TestCase):
+
+    def _reg(self, registry, host, caps, tags, concurrency=1, online=True):
+        aid, _ = registry.register(hostname=host, capabilities=caps, version="1.0",
+                                   tags=tags, concurrency=concurrency)
+        if online:
+            registry.heartbeat(aid)
+        return aid
+
+    def test_capability_routing(self):
+        from api.agents.registry import AgentRegistry
+        from api.jobs.executor import _assign_to_any
+        from api.jobs.manager import ScanJob
+        reg = AgentRegistry(persist_path=None)
+        self._reg(reg, "weak", ["scan"], {})
+        strong = self._reg(reg, "strong", ["scan", "tls"], {})
+        job = ScanJob(job_id="j1", config=ScanRequest(
+            target="example.com", required_capabilities=["tls"]))
+        with patch("api.jobs.executor.agent_registry", reg):
+            self.assertTrue(_assign_to_any(job))
+        self.assertEqual(job.assigned_agent_id, strong)
+
+    def test_selector_routing_by_tag(self):
+        from api.agents.registry import AgentRegistry
+        from api.jobs.executor import _assign_to_any
+        from api.jobs.manager import ScanJob
+        reg = AgentRegistry(persist_path=None)
+        self._reg(reg, "east", ["scan"], {"region": "us-east"})
+        west = self._reg(reg, "west", ["scan"], {"region": "us-west"})
+        job = ScanJob(job_id="j2", config=ScanRequest(
+            target="example.com", agent_selector={"region": "us-west"}))
+        with patch("api.jobs.executor.agent_registry", reg):
+            self.assertTrue(_assign_to_any(job))
+        self.assertEqual(job.assigned_agent_id, west)
+
+    def test_no_matching_agent_stays_queued_with_reason(self):
+        from api.agents.registry import AgentRegistry
+        from api.jobs.executor import _assign_to_any
+        from api.jobs.manager import ScanJob
+        reg = AgentRegistry(persist_path=None)
+        self._reg(reg, "east", ["scan"], {"region": "us-east"})
+        job = ScanJob(job_id="j3", config=ScanRequest(
+            target="example.com", agent_selector={"region": "eu-west"}))
+        with patch("api.jobs.executor.agent_registry", reg):
+            self.assertFalse(_assign_to_any(job))
+        self.assertEqual(job.status, "queued")
+        self.assertTrue(any(e.get("type") == "info" and "Waiting for an available agent" in e.get("message", "")
+                            for e in job.events))
+
+    def test_least_loaded_balancing(self):
+        from api.agents.registry import AgentRegistry
+        from api.jobs.executor import _assign_to_any
+        from api.jobs.manager import ScanJob
+        reg = AgentRegistry(persist_path=None)
+        busy = self._reg(reg, "busy", ["scan"], {}, concurrency=2)
+        idle = self._reg(reg, "idle", ["scan"], {}, concurrency=2)
+        reg.mark_active(busy, "existing")  # busy now has load 1
+        job = ScanJob(job_id="j4", config=ScanRequest(target="example.com"))
+        with patch("api.jobs.executor.agent_registry", reg):
+            self.assertTrue(_assign_to_any(job))
+        self.assertEqual(job.assigned_agent_id, idle)
+
+    def test_respects_concurrency_then_queues(self):
+        from api.agents.registry import AgentRegistry
+        from api.jobs.executor import _assign_to_any
+        from api.jobs.manager import ScanJob
+        reg = AgentRegistry(persist_path=None)
+        aid = self._reg(reg, "solo", ["scan"], {}, concurrency=2)
+        jobs = [ScanJob(job_id=f"c{i}", config=ScanRequest(target="example.com"))
+                for i in range(3)]
+        with patch("api.jobs.executor.agent_registry", reg):
+            r0 = _assign_to_any(jobs[0])
+            r1 = _assign_to_any(jobs[1])
+            r2 = _assign_to_any(jobs[2])
+        self.assertTrue(r0 and r1)          # filled to concurrency=2
+        self.assertFalse(r2)                # over capacity → stays queued
+        self.assertEqual(reg.get(aid).load, 2)
+
+
+# ─── Resilience: reclaiming jobs from dead agents ─────────────────────────────
+
+class TestReclaimStaleJobs(unittest.TestCase):
+
+    def _setup(self, attempts):
+        from api.agents.registry import AgentRegistry, HEARTBEAT_TIMEOUT
+        from api.jobs.manager import JobManager, ScanJob
+        reg = AgentRegistry(persist_path=None)
+        aid, _ = reg.register(hostname="dead", capabilities=["scan"], version="1.0", tags={})
+        reg.heartbeat(aid)
+        jm = JobManager()
+        jm._jobs.clear()
+        job = ScanJob(job_id="rj", config=ScanRequest(target="example.com"), org_id="")
+        job.assigned_agent_id = aid
+        job.status = "running"
+        job.dispatch_attempts = attempts
+        reg.mark_active(aid, "rj")
+        jm._jobs["rj"] = job
+        # Take the agent offline (heartbeat older than the timeout).
+        reg.get(aid).last_heartbeat = time.time() - HEARTBEAT_TIMEOUT - 1
+        return reg, jm, job
+
+    def test_reclaim_requeues_when_under_cap(self):
+        from api.jobs import executor
+        reg, jm, job = self._setup(attempts=1)
+        with patch.object(executor, "agent_registry", reg), \
+             patch.object(executor, "job_manager", jm):
+            n = executor.reclaim_stale_jobs()
+        self.assertEqual(n, 1)
+        self.assertEqual(job.status, "queued")
+        self.assertIsNone(job.assigned_agent_id)
+
+    def test_reclaim_fails_after_max_attempts(self):
+        from api.jobs import executor
+        reg, jm, job = self._setup(attempts=executor.MAX_DISPATCH_ATTEMPTS)
+        with patch.object(executor, "agent_registry", reg), \
+             patch.object(executor, "job_manager", jm):
+            n = executor.reclaim_stale_jobs()
+        self.assertEqual(n, 1)
+        self.assertEqual(job.status, "failed")
+        self.assertIn("No healthy agent", job.error)
 
 
 if __name__ == "__main__":

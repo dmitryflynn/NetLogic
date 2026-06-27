@@ -128,7 +128,9 @@ class AgentState:
             "agent_id": self.agent_id,
             "token": self.token,
         }
-        self.path.write_text(json.dumps(payload, indent=2))
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2))
+        os.replace(tmp, self.path)
         # Restrict to owner-only read/write — prevents other local users reading the token.
         try:
             os.chmod(self.path, 0o600)
@@ -198,6 +200,16 @@ class ScanWorker:
             do_full      = bool(cfg.get("do_full", False)),
             cidr         = bool(cfg.get("cidr", False)),
             min_cvss     = float(cfg.get("min_cvss", 4.0)),
+            do_ai        = bool(cfg.get("do_ai", False)),
+            ssh_user     = str(cfg.get("ssh_user", "") or ""),
+            ssh_key      = str(cfg.get("ssh_key", "") or ""),
+            ssh_pass     = str(cfg.get("ssh_pass", "") or ""),
+            ssh_port     = int(cfg.get("ssh_port", 22) or 22),
+            ai_key       = str(cfg.get("ai_key", "") or ""),
+            ai_provider  = str(cfg.get("ai_provider", "") or ""),
+            ai_model     = str(cfg.get("ai_model", "") or ""),
+            ai_base_url  = str(cfg.get("ai_base_url", "") or ""),
+            deep_probe   = bool(cfg.get("deep_probe", False)),
             emit_callback= self._emit,
         )
 
@@ -206,11 +218,15 @@ class ScanWorker:
         if self.stop_event.is_set():
             raise InterruptedError("Agent stopping.")
 
+        # Attach BOTH data and message when present — progress events carry a
+        # {percent,…} data payload *and* a human message, and the controller reads
+        # progress from event["data"]["percent"]. An either/or here drops the
+        # percent and freezes the dashboard progress bar for remote-agent scans.
         event: dict = {"type": event_type}
+        if data is not None:
+            event["data"] = data
         if message is not None:
             event["message"] = message
-        else:
-            event["data"] = data
 
         with self._lock:
             self._pending.append(event)
@@ -285,7 +301,9 @@ class NetLogicAgent:
         """Exchange API key for JWT, register agent, persist credentials."""
         log.info("Obtaining JWT from %s …", self.controller)
         resp = _http("POST", f"{self.controller}/v1/auth/token", body={"api_key": api_key})
-        jwt  = resp["token"]
+        if "token" not in resp:
+            raise RuntimeError(f"Auth token endpoint returned unexpected response: {json.dumps(resp)[:200]}")
+        jwt = resp["token"]
 
         log.info("Registering as '%s' …", self.hostname)
         resp = _http(
@@ -296,8 +314,13 @@ class NetLogicAgent:
                 "capabilities": CAPABILITIES,
                 "version":      AGENT_VERSION,
                 "tags":         self.tags,
+                "concurrency":  self.concurrency,
             },
         )
+        if "agent_id" not in resp or "token" not in resp:
+            raise RuntimeError(
+                f"Agent register endpoint returned unexpected response: {json.dumps(resp)[:200]}"
+            )
         self.state.agent_id = resp["agent_id"]
         self.state.token    = resp["token"]
         self.state.save()

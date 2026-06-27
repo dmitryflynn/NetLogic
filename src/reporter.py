@@ -7,7 +7,6 @@ import json
 import html
 import time
 from dataclasses import asdict
-from typing import Optional
 
 
 # ─── ANSI Terminal Colors ────────────────────────────────────────────────────────
@@ -102,11 +101,20 @@ def print_terminal_report(host_result, vuln_matches, osint_result=None):
                 for note in vm.notes:
                     print(f"  {C.YELLOW}⚠  {note}{C.RESET}")
 
-            for cve in sorted(vm.cves, key=lambda c: c.cvss_score, reverse=True):
+            for cve in sorted(vm.cves, key=lambda c: (getattr(c, 'kev', False),
+                                                       getattr(c, 'epss', 0.0),
+                                                       c.cvss_score), reverse=True):
                 sev = cve.severity.upper()
                 color = SEV_COLOR.get(sev, C.DIM)
                 badge = SEV_BADGE.get(sev, sev)
-                print(f"\n    {color}{C.BOLD}{badge}{C.RESET}  {C.BOLD}{cve.id}{C.RESET}  CVSS {cve.cvss_score}")
+                # EPSS: probability of exploitation. Highlight high values — they
+                # matter more than a high CVSS with near-zero exploitation odds.
+                epss = getattr(cve, 'epss', 0.0) or 0.0
+                if epss >= 0.5:    epss_str = f"  {C.RED}EPSS {epss*100:.0f}%{C.RESET}"
+                elif epss >= 0.1:  epss_str = f"  {C.ORANGE}EPSS {epss*100:.0f}%{C.RESET}"
+                elif epss > 0:     epss_str = f"  {C.DIM}EPSS {epss*100:.1f}%{C.RESET}"
+                else:              epss_str = ""
+                print(f"\n    {color}{C.BOLD}{badge}{C.RESET}  {C.BOLD}{cve.id}{C.RESET}  CVSS {cve.cvss_score}{epss_str}")
                 print(f"    {C.DIM}{cve.description[:100]}{'…' if len(cve.description) > 100 else ''}{C.RESET}")
                 has_msf = getattr(cve, 'has_metasploit', False)
                 has_pub = getattr(cve, 'has_public_exploit', False)
@@ -201,6 +209,198 @@ def print_vuln_probe_results(probe_result, no_color: bool = False):
             print(f"  {Cy}Remediation: {f.remediation[:110]}{'…' if len(f.remediation)>110 else ''}{R}")
 
 
+def print_topology(topo, no_color: bool = False):
+    """Print network topology context."""
+    if not topo:
+        return
+    R = C.RESET if not no_color else ""
+    Cy = C.CYAN if not no_color else ""
+    D = C.DIM if not no_color else ""
+    print(f"\n{'─'*70}")
+    print(f"  NETWORK TOPOLOGY")
+    print(f"{'─'*70}")
+    if getattr(topo, "ptr", None):
+        print(f"  Reverse DNS : {Cy}{topo.ptr}{R}")
+    if getattr(topo, "asn", None):
+        print(f"  ASN         : {topo.asn}  {D}({topo.asn_org or ''} · {topo.country or ''}){R}")
+    if getattr(topo, "ipv6", None):
+        print(f"  IPv6        : {Cy}{', '.join(topo.ipv6[:3])}{R}")
+    if getattr(topo, "hop_count", None):
+        print(f"  Hops        : {topo.hop_count}  {D}{' → '.join(topo.traceroute_hops[:8])}{R}")
+    for n in getattr(topo, "notes", [])[:3]:
+        print(f"  {D}• {n}{R}")
+
+
+def print_auth_result(auth, no_color: bool = False):
+    """Print authenticated (credentialed) scan results — installed package ground truth."""
+    if not auth:
+        return
+    R = C.RESET if not no_color else ""
+    Bo = C.BOLD if not no_color else ""
+    Cy = C.CYAN if not no_color else ""
+    G = C.GREEN if not no_color else ""
+    Y = C.YELLOW if not no_color else ""
+    print(f"\n{'─'*70}")
+    print(f"  AUTHENTICATED SCAN  {G if auth.success else Y}{'(connected)' if auth.success else '(failed)'}{R}")
+    print(f"{'─'*70}")
+    if not auth.success:
+        print(f"  {Y}{auth.error}{R}")
+        return
+    print(f"  OS          : {auth.os_name or '?'}   Kernel: {auth.kernel or '?'}")
+    print(f"  Packages    : {len(auth.packages)} installed")
+    if auth.product_versions:
+        print(f"  {Bo}Installed versions (GROUND TRUTH){R}:")
+        for prod, info in sorted(auth.product_versions.items()):
+            bp = f"  {G}[backported — likely patched]{R}" if info.get("backported") else ""
+            print(f"    {Cy}{prod:<12}{R} {info['upstream']:<12} {info['full']}{bp}")
+
+
+def print_scan_diff(diff, no_color: bool = False):
+    """Print what changed since the previous scan."""
+    if not diff or not getattr(diff, "has_changes", False):
+        return
+    R = C.RESET if not no_color else ""
+    Bo = C.BOLD if not no_color else ""
+    G = C.GREEN if not no_color else ""
+    Rd = C.RED if not no_color else ""
+    Y = C.YELLOW if not no_color else ""
+    D = C.DIM if not no_color else ""
+    print(f"\n{'─'*70}")
+    print(f"  CHANGES SINCE LAST SCAN  {D}(vs {diff.previous_time or 'previous report'}){R}")
+    print(f"{'─'*70}")
+    for p in diff.ports_added:
+        print(f"  {G}+ port {p} now open{R}")
+    for p in diff.ports_removed:
+        print(f"  {D}- port {p} closed{R}")
+    for ch in diff.version_changes:
+        print(f"  {Y}~ port {ch['port']}: {ch['old']} → {ch['new']}{R}")
+    for c in diff.cves_added:
+        print(f"  {Rd}{Bo}+ NEW CVE {c['cve']} on port {c['port']}{R}")
+    for c in diff.cves_removed[:10]:
+        print(f"  {G}- resolved {c['cve']} on port {c['port']}{R}")
+
+
+def print_web_fingerprint(fp, no_color: bool = False):
+    """Print web application fingerprint (favicon hash, versions, exposed files, JS leaks)."""
+    if not fp:
+        return
+    R  = C.RESET  if not no_color else ""
+    Bo = C.BOLD   if not no_color else ""
+    D  = C.DIM    if not no_color else ""
+    Cy = C.CYAN   if not no_color else ""
+    Y  = C.YELLOW if not no_color else ""
+    Rd = C.RED    if not no_color else ""
+    print(f"\n{'─'*70}")
+    print(f"  WEB APPLICATION FINGERPRINT")
+    print(f"{'─'*70}")
+    if getattr(fp, "title", None):
+        print(f"  Title       : {fp.title[:80]}")
+    if getattr(fp, "generator", None):
+        print(f"  Generator   : {Cy}{fp.generator}{R}")
+    if getattr(fp, "favicon_mmh3", None) is not None:
+        print(f"  Favicon hash: {fp.favicon_mmh3}  {D}(Shodan http.favicon.hash){R}")
+    if getattr(fp, "version_markers", None):
+        print(f"  Versions    : {Cy}{', '.join(fp.version_markers[:6])}{R}")
+    if getattr(fp, "exposed_files", None):
+        print(f"  {Y}Exposed     : {', '.join(fp.exposed_files)}{R}")
+    if getattr(fp, "js_endpoints", None):
+        print(f"  JS endpoints: {D}{', '.join(fp.js_endpoints[:8])}{R}")
+    if getattr(fp, "js_secrets", None):
+        print(f"  {Rd}{Bo}JS secrets  : {', '.join(fp.js_secrets[:5])}{R}")
+    for n in getattr(fp, "notes", [])[:4]:
+        print(f"  {Y}⚠ {n}{R}")
+
+
+def print_service_enum(enum_result, no_color: bool = False):
+    """Print protocol-level exploitability attributes (SMBv1, RDP NLA, SSH crypto, …)."""
+    if not enum_result or not getattr(enum_result, "attributes", None):
+        return
+    R  = C.RESET  if not no_color else ""
+    Bo = C.BOLD   if not no_color else ""
+    D  = C.DIM    if not no_color else ""
+    Cy = C.CYAN   if not no_color else ""
+    print(f"\n{'─'*70}")
+    print(f"  SERVICE EXPLOITABILITY ATTRIBUTES  ({len(enum_result.attributes)} detected)")
+    print(f"{'─'*70}")
+    for a in sorted(enum_result.attributes,
+                    key=lambda x: {"CRITICAL":0,"HIGH":1,"MEDIUM":2,"LOW":3,"INFO":4}.get(x.severity, 5)):
+        sev = a.severity.upper()
+        color = SEV_COLOR.get(sev, C.DIM) if not no_color else ""
+        print(f"\n  {color}{Bo}{sev:<8}{R}  port {a.port}/{a.service}  {Bo}{a.attribute}={a.value}{R}")
+        print(f"  {D}{a.detail[:140]}{'…' if len(a.detail)>140 else ''}{R}")
+        if a.exploit_precondition_for:
+            print(f"  {Cy}→ precondition for: {', '.join(a.exploit_precondition_for[:4])}{R}")
+
+
+def print_detected_vulnerabilities(fusion: dict, no_color: bool = False):
+    """Render the unified Detected Vulnerabilities panel from fusion output."""
+    if not fusion:
+        return
+    vulns = fusion.get("detected_vulnerabilities")
+    if not vulns:
+        return
+    R  = C.RESET  if not no_color else ""
+    Bo = C.BOLD   if not no_color else ""
+    Cy = C.CYAN   if not no_color else ""
+    D  = C.DIM    if not no_color else ""
+    Rd = C.RED    if not no_color else ""
+    Or = C.ORANGE if not no_color else ""
+    G  = C.GREEN  if not no_color else ""
+
+    print(f"\n{Bo}{Cy}{'═'*70}{R}")
+    print(f"{Bo}{Cy}  DETECTED VULNERABILITIES  "
+          f"({fusion['summary']['confirmed']} confirmed, "
+          f"{fusion['summary']['potential']} potential, "
+          f"{fusion['summary']['ai_discovered']} ai-discovered, "
+          f"{fusion['summary']['discarded']} discarded){R}")
+    print(f"{Bo}{Cy}{'═'*70}{R}\n")
+
+    impact_color = {"critical": Rd, "high": Or, "medium": C.YELLOW, "low": G}
+    for v in vulns:
+        c = impact_color.get(v["impact"], D)
+        decision_badge = f"{G}[CONFIRMED]{R}" if v["decision"] == "confirmed" else f"{C.YELLOW}[POTENTIAL]{R}"
+        print(f"  {c}{Bo}{v['impact'].upper():<10}{R}  {v['subject']:<48}  {decision_badge}")
+        port_str = f"port {v['port']}" if v.get("port") else ""
+        ai_str = f"AI: {v['ai']['verdict']} ({v['ai']['reason'][:60]})" if v.get("ai") else "gate: deterministic"
+        print(f"  {D}  {port_str:<20}  {ai_str}{R}")
+        print()
+
+
+def print_ai_analysis(analysis, no_color: bool = False):
+    """Render the LLM analyst's Markdown report to the terminal."""
+    if not analysis:
+        return
+    R  = C.RESET  if not no_color else ""
+    Bo = C.BOLD   if not no_color else ""
+    Cy = C.CYAN   if not no_color else ""
+    D  = C.DIM    if not no_color else ""
+    Y  = C.YELLOW if not no_color else ""
+
+    print(f"\n{Bo}{Cy}{'═'*70}{R}")
+    print(f"{Bo}{Cy}  AI ANALYSIS{R}")
+    if getattr(analysis, "model", ""):
+        print(f"{D}  {analysis.provider} · {analysis.model}"
+              f"{f' · {analysis.tokens} tokens' if getattr(analysis,'tokens',None) else ''}{R}")
+    print(f"{Bo}{Cy}{'═'*70}{R}\n")
+
+    if getattr(analysis, "error", None):
+        print(f"  {Y}⚠ AI analysis unavailable: {analysis.error}{R}\n")
+        return
+
+    # Light Markdown styling for the terminal: bold headers, dim code fences.
+    for line in (analysis.markdown or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            print(f"  {Bo}{Cy}{stripped.lstrip('# ').strip()}{R}")
+        elif stripped.startswith(("- ", "* ")):
+            print(f"    {stripped}")
+        elif stripped.startswith("```"):
+            print(f"  {D}{stripped}{R}")
+        else:
+            print(f"  {line}")
+    print()
+
+
 def _risk_color(score: float) -> str:
     if score >= 9.0:
         return f"{C.BOLD}{C.RED}{score:.1f}/10{C.RESET}"
@@ -216,6 +416,8 @@ def _confidence_badge(conf: str) -> str:
         return f"{C.GREEN}[✓ version confirmed]{C.RESET}"
     if conf == "MEDIUM":
         return f"{C.YELLOW}[~ product detected, version unknown]{C.RESET}"
+    if conf == "POTENTIAL":
+        return f"{C.ORANGE}[⚠ POTENTIAL — patch level not verifiable from banner]{C.RESET}"
     return f"{C.DIM}[? port-based guess]{C.RESET}"
 
 
@@ -252,6 +454,8 @@ def generate_json_report(host_result, vuln_matches, osint_result=None) -> dict:
                     "vector":           c.vector,
                     "published":        c.published,
                     "exploit_available": c.exploit_available,
+                    "epss":             getattr(c, 'epss', 0.0),
+                    "epss_percentile":  getattr(c, 'epss_percentile', 0.0),
                     "references":       c.references,
                     "has_metasploit":   getattr(c, 'has_metasploit', False),
                     "has_public_exploit": getattr(c, 'has_public_exploit', False),
@@ -276,7 +480,7 @@ def generate_json_report(host_result, vuln_matches, osint_result=None) -> dict:
 
 
 def save_json_report(report: dict, path: str):
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, default=str)
     print(f"[+] JSON report saved → {path}")
 
@@ -406,6 +610,6 @@ def generate_html_report(host_result, vuln_matches, osint_result=None) -> str:
 
 
 def save_html_report(html_content: str, path: str):
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(html_content)
     print(f"[+] HTML report saved → {path}")

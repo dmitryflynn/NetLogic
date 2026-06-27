@@ -50,11 +50,24 @@ class Signal:
     epss: float = 0.0               # P(exploited in 30d), 0..1
     cvss: float = 0.0               # base score, 0..10
     exploit_available: bool = False # public exploit / Metasploit module exists
+    version_matched: bool = False   # detected by version/banner content, not active probe —
+                                    # prevents auto-pinning by EPSS/exploit alone; the
+                                    # finding must remain candidate for patch-level verification.
+    probe_confirmed: bool = False   # actively verified via an exploit/evidence probe (not
+                                    # just a version/banner match) — pins findings through
+                                    # the gate as ground truth regardless of sensor source.
 
     # ── Exposure / reachability — first-class edge data for the attack graph ──────
     # {"reachability": "public"|"private"|"cloud"|"unknown", "waf": <name|None>,
     #  "vantage": <agent_id|None>}
     exposure: Optional[dict] = None
+
+    # ── Raw observation data — the actual bytes the sensor saw (sent to the AI) ────
+    # Structured snapshot of what the sensor observed that triggered this signal.
+    # Content varies by sensor (HTTP response for nuclei, banner for nvd, probe
+    # interaction for probe sensors). Body text is capped at 500 chars. Sensor names
+    # and severity labels are NEVER included.
+    observed_data: Optional[dict] = None
 
     # ── Audit only — NEVER sent to the AI ─────────────────────────────────────────
     raw_metadata: dict = field(default_factory=dict)
@@ -68,23 +81,41 @@ class Signal:
 
     @property
     def is_probe_confirmed(self) -> bool:
-        """A high-reliability probe directly elicited the evidence (ground truth-ish)."""
-        return self.source == "probe" and self.reliability == "high"
+        """A high-reliability probe directly elicited the evidence (ground truth-ish).
+
+        Returns True if either:
+        1. A ``probe`` sensor with high reliability (legacy path), or
+        2. The ``probe_confirmed`` field is explicitly set (verifier path).
+        """
+        return (self.source == "probe" and self.reliability == "high") or self.probe_confirmed
 
     def ai_view(self) -> dict:
         """Reduced, label-stripped view for an LLM.
 
-        Removes the sensor NAME and every self-declared severity/score so the model
-        evaluates the observed evidence and exposure, not scary software names or a
-        tool's pre-baked verdict. The subject (claim) is kept but must be treated by
-        the prompt as an UNVERIFIED label.
+        Removes the sensor NAME, every self-declared severity/score, and audit-only
+        `raw_metadata` so the model evaluates the observed evidence and exposure, not
+        scary software names or a tool's pre-baked verdict. The subject (claim) is kept
+        but must be treated by the prompt as an UNVERIFIED label.
+
+        `observed_data` IS included (it carries the raw bytes/headers the sensor saw)
+        but body text values inside it are truncated to prevent token explosion.
         """
+        data = self.observed_data
+        if data is not None:
+            # Deep-copy and cap body content; we never mutate the original.
+            data = {k: v for k, v in data.items()}
+            for key in ("body", "body_snippet", "response_body"):
+                if isinstance(data.get(key), str) and len(data[key]) > 500:
+                    data[key] = data[key][:500] + "…[truncated]"
+            if isinstance(data.get("headers"), dict):
+                data["headers"] = dict(data["headers"])
         return {
             "kind": self.kind,
             "subject": self.claim,
             "port": self.port,
             "service": self.service or None,
             "evidence": self.evidence or None,
+            "observed_data": data,
             "exposure": self.exposure or {"reachability": "unknown"},
         }
 

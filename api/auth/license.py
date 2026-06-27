@@ -15,7 +15,11 @@ import time
 from pathlib import Path
 from typing import Optional
 
-_SECRETS_FILE = Path.home() / ".netlogic" / "secrets.json"
+# Honor NETLOGIC_DATA_DIR (same convention as src/epss.py and the VDB cache) so
+# state stays isolated under test/CI and relocatable in production. Unset in a
+# normal install → defaults to ~/.netlogic, so production behavior is unchanged.
+_DATA_DIR = Path(os.environ.get("NETLOGIC_DATA_DIR") or (Path.home() / ".netlogic"))
+_SECRETS_FILE = _DATA_DIR / "secrets.json"
 _KEY_FIELD = "NETLOGIC_LICENSE_KEY"
 
 
@@ -28,18 +32,30 @@ def _load_key() -> str:
 
 
 def _save_key(key: str) -> None:
+    import os as _os, tempfile as _tempfile  # noqa: PLC0415
+    _SECRETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data: dict = {}
+    if _SECRETS_FILE.exists():
+        try:
+            data = json.loads(_SECRETS_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    data[_KEY_FIELD] = key
+    # Atomic tmp+replace so a crash mid-write never corrupts the real file.
+    fd, tmp = _tempfile.mkstemp(dir=str(_SECRETS_FILE.parent))
     try:
-        data: dict = {}
-        if _SECRETS_FILE.exists():
-            try:
-                data = json.loads(_SECRETS_FILE.read_text())
-            except Exception:
-                pass
-        data[_KEY_FIELD] = key
-        _SECRETS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _SECRETS_FILE.write_text(json.dumps(data, indent=2))
+        with _os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=2))
+            fh.flush()
+            _os.fsync(fh.fileno())
+        _os.replace(tmp, str(_SECRETS_FILE))
     except Exception:
-        pass
+        # Clean up the temp file on failure; propagate the error to the caller.
+        try:
+            _os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def validate_license_key(key: str) -> Optional[dict]:
@@ -89,17 +105,20 @@ class LicenseManager:
                 self._plan = result.get("plan")
                 self._licensed_at = time.time()
 
-    def activate(self, key: str) -> bool:
-        """Validate and persist a license key. Returns True on success."""
+    def activate(self, key: str) -> tuple[bool, str]:
+        """Validate and persist a license key. Returns (ok, msg)."""
         result = validate_license_key(key)
         if result:
             self._key = key.strip()
             self._valid = True
             self._plan = result.get("plan")
             self._licensed_at = time.time()
-            _save_key(self._key)
-            return True
-        return False
+            try:
+                _save_key(self._key)
+            except OSError:
+                return True, "License activated (in-memory only; disk write failed)."
+            return True, "License activated."
+        return False, "Invalid license key."
 
     @property
     def is_licensed(self) -> bool:

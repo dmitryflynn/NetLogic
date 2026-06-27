@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAgents, useDeleteAgent, useRegisterAgent, useSetAgentActive } from '../api/scan'
-import type { Agent } from '../api/scan'
+import type { Agent, RegisterAgentResponse } from '../api/scan'
 
 function fmtDate(ts: number | null) {
   if (!ts) return 'Never'
@@ -42,7 +42,8 @@ function RegisterModal({ onClose }: { onClose: () => void }) {
   const [hostname, setHostname] = useState('')
   const [caps, setCaps]         = useState('scan')
   const [version, setVersion]   = useState('1.0.0')
-  const [agentId, setAgentId]   = useState<string | null>(null)
+  const [concurrency, setConcurrency] = useState('1')
+  const [regResult, setRegResult] = useState<RegisterAgentResponse | null>(null)
   const reg = useRegisterAgent()
 
   function submit(e: React.FormEvent) {
@@ -53,19 +54,24 @@ function RegisterModal({ onClose }: { onClose: () => void }) {
         capabilities: caps.split(',').map((s) => s.trim()).filter(Boolean),
         version:      version.trim() || '1.0.0',
         tags:         {},
+        concurrency:  Math.max(1, parseInt(concurrency, 10) || 1),
       },
-      { onSuccess: (data) => setAgentId(data.agent_id) },
+      { onSuccess: (data) => setRegResult(data) },
     )
   }
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div className="panel w-full max-w-md p-6 space-y-4 rounded-xl" onClick={(e) => e.stopPropagation()}>
-        {agentId ? (
+        {regResult ? (
           <>
             <h3 className="text-text-bright font-bold text-base">Agent Registered</h3>
             <p className="text-[12px] text-text-dim">
-              Agent is ready. You can view its token anytime from the agent card.
+              Copy this token and configure your agent with it. You won't see it again.
+            </p>
+            <TokenRow label="" value={regResult.token} />
+            <p className="text-[11px] text-text-dim">
+              Agent ID: <code className="text-accent">{regResult.agent_id}</code>
             </p>
             <button className="btn btn-primary w-full" onClick={onClose}>Done</button>
           </>
@@ -91,14 +97,27 @@ function RegisterModal({ onClose }: { onClose: () => void }) {
                   onChange={(e) => setCaps(e.target.value)}
                 />
               </div>
-              <div>
-                <label className="text-[11px] text-text-dim uppercase tracking-wide block mb-1">Version</label>
-                <input
-                  className="input w-full"
-                  placeholder="1.0.0"
-                  value={version}
-                  onChange={(e) => setVersion(e.target.value)}
-                />
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="text-[11px] text-text-dim uppercase tracking-wide block mb-1">Version</label>
+                  <input
+                    className="input w-full"
+                    placeholder="1.0.0"
+                    value={version}
+                    onChange={(e) => setVersion(e.target.value)}
+                  />
+                </div>
+                <div className="w-28">
+                  <label className="text-[11px] text-text-dim uppercase tracking-wide block mb-1">Concurrency</label>
+                  <input
+                    className="input w-full"
+                    type="number"
+                    min={1}
+                    max={64}
+                    value={concurrency}
+                    onChange={(e) => setConcurrency(e.target.value)}
+                  />
+                </div>
               </div>
               {reg.error && (
                 <p className="text-[12px] text-critical">{reg.error.message}</p>
@@ -179,8 +198,10 @@ export default function Agents() {
                     >
                       {a.status}
                     </span>
-                    {a.current_job_id && (
-                      <span className="text-[10px] text-accent">scanning…</span>
+                    {a.active_jobs > 0 && (
+                      <span className="text-[10px] text-accent">
+                        scanning {a.active_jobs}{a.concurrency > 1 ? `/${a.concurrency}` : ''}…
+                      </span>
                     )}
                   </div>
                   <p className="text-text-dim text-[11px]">
@@ -188,20 +209,28 @@ export default function Agents() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => toggle.mutate({ id: a.agent_id, active: a.disabled })}
-                    className={`btn text-[11px] ${a.disabled ? 'btn-primary' : ''}`}
-                    disabled={toggle.isPending}
-                  >
-                    {a.disabled ? 'Activate' : 'Deactivate'}
-                  </button>
-                  <button
-                    onClick={() => del.mutate(a.agent_id)}
-                    className="btn btn-danger text-[11px]"
-                    disabled={del.isPending}
-                  >
-                    Deregister
-                  </button>
+                  {a.token ? (
+                    <>
+                      <button
+                        onClick={() => toggle.mutate({ id: a.agent_id, active: a.disabled })}
+                        className={`btn text-[11px] ${a.disabled ? 'btn-primary' : ''}`}
+                        disabled={toggle.isPending}
+                      >
+                        {a.disabled ? 'Activate' : 'Deactivate'}
+                      </button>
+                      <button
+                        onClick={() => del.mutate(a.agent_id)}
+                        className="btn btn-danger text-[11px]"
+                        disabled={del.isPending}
+                      >
+                        Deregister
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-[10px] text-text-dim border border-border rounded px-1.5 py-0.5">
+                      Shared · read-only
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -217,9 +246,9 @@ export default function Agents() {
                   <p className="text-text">{a.capabilities.join(', ') || '—'}</p>
                 </div>
                 <div>
-                  <p className="text-text-dim mb-0.5">Current job</p>
-                  <p className="text-accent font-mono">
-                    {a.current_job_id ? a.current_job_id.slice(0, 8) + '…' : '—'}
+                  <p className="text-text-dim mb-0.5">Capacity</p>
+                  <p className={a.active_jobs >= a.concurrency && a.concurrency > 0 ? 'text-accent' : 'text-text'}>
+                    {a.active_jobs} / {a.concurrency} running
                   </p>
                 </div>
               </div>

@@ -14,7 +14,6 @@ Checks for:
 
 import ssl
 import socket
-import struct
 import datetime
 import hashlib
 import re
@@ -83,27 +82,72 @@ _PROTO_MAP = {
 }
 
 
-def _try_connect(host: str, port: int, min_ver, max_ver, timeout=5.0) -> Optional[ssl.SSLSocket]:
-    """Attempt TLS handshake with specific version constraints."""
+# Maps the human protocol name used in probes to the string ssl.SSLSocket.version()
+# reports after a successful handshake. Used to confirm the server actually
+# negotiated the version we pinned, rather than silently falling back.
+_NEGOTIATED_VERSION = {
+    "TLSv1.0": "TLSv1",
+    "TLSv1.1": "TLSv1.1",
+    "TLSv1.2": "TLSv1.2",
+    "TLSv1.3": "TLSv1.3",
+}
+
+
+def _try_connect(host: str, port: int, min_ver, max_ver, timeout=5.0,
+                 expected_version: Optional[str] = None) -> Optional[str]:
+    """Attempt a TLS handshake pinned to a specific version range.
+
+    Returns the negotiated version string (from ``SSLSocket.version()``) on a
+    successful handshake, or ``None`` on any failure.  The socket is always
+    closed before returning — callers only need the negotiated version, and
+    leaking a live socket per probe risks file-descriptor exhaustion.
+
+    If pinning ``minimum_version``/``maximum_version`` raises (some OpenSSL
+    builds refuse to lower the floor below their compiled-in minimum), we
+    return ``None`` instead of proceeding with the wrong constraints — that
+    would otherwise let a TLS 1.2/1.3 handshake be mis-reported as proof that
+    a deprecated protocol is supported.
+    """
+    tls = None
     try:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        if min_ver:
-            try: ctx.minimum_version = min_ver
-            except Exception: pass
-        if max_ver:
-            try: ctx.maximum_version = max_ver
-            except Exception: pass
+        try:
+            if min_ver is not None:
+                ctx.minimum_version = min_ver
+            if max_ver is not None:
+                ctx.maximum_version = max_ver
+        except (ValueError, ssl.SSLError, OSError):
+            # Could not pin the requested range — refuse to guess.
+            return None
         raw = socket.create_connection((host, port), timeout=timeout)
+        raw.settimeout(timeout)
         tls = ctx.wrap_socket(raw, server_hostname=host)
-        return tls
+        negotiated = tls.version()
+        # Guard against silent fallback: only count the protocol as supported
+        # when the server actually negotiated the version we pinned.
+        if expected_version is not None and negotiated != expected_version:
+            return None
+        return negotiated
     except Exception:
         return None
+    finally:
+        if tls is not None:
+            try:
+                tls.close()
+            except Exception:
+                pass
 
 
 def probe_protocols(host: str, port: int) -> tuple[list[str], list[str]]:
-    """Return (supported, deprecated_supported) protocol lists."""
+    """Return (supported, deprecated_supported) protocol lists.
+
+    ``deprecated`` contains only protocols whose support was *confirmed* by a
+    successful, version-verified handshake — never an untestable placeholder.
+    This keeps downstream counts (DROWN heuristic, grading) free of false
+    positives.
+    """
     supported = []
     deprecated = []
 
@@ -116,12 +160,13 @@ def probe_protocols(host: str, port: int) -> tuple[list[str], list[str]]:
 
     for name, min_v, max_v in probes:
         if min_v is None:
-            deprecated.append(f"{name} (could not test: missing constants in ssl module)")
+            # No way to negotiate this version on this build — skip silently
+            # rather than reporting it as a supported deprecated protocol.
             continue
-        sock = _try_connect(host, port, min_v, max_v)
-        if sock:
+        negotiated = _try_connect(host, port, min_v, max_v,
+                                  expected_version=_NEGOTIATED_VERSION.get(name))
+        if negotiated:
             supported.append(name)
-            sock.close()
             if name in ("TLSv1.1", "TLSv1.0"):
                 deprecated.append(name)
 
@@ -130,12 +175,16 @@ def probe_protocols(host: str, port: int) -> tuple[list[str], list[str]]:
 
 # ─── Cipher Analysis ─────────────────────────────────────────────────────────────
 
+# Order matters only for readability; every pattern is tested independently.
+# 3DES is matched first and the single-DES pattern is written to explicitly
+# exclude every 3DES spelling (DES3, 3DES, DES-CBC3) so a 3DES suite is not
+# also mis-flagged as broken single-DES.
 WEAK_CIPHER_PATTERNS = [
     (r"RC4",        "RC4 stream cipher — broken, trivially decryptable",          "HIGH",   7.4),
-    (r"DES(?!3)",   "DES — 56-bit key, broken since 1999",                        "HIGH",   7.4),
-    (r"3DES|DES3",  "3DES/SWEET32 — 64-bit block, birthday attack",               "MEDIUM", 5.9),
+    (r"3DES|DES3|DES-CBC3", "3DES/SWEET32 — 64-bit block, birthday attack",       "MEDIUM", 5.9),
+    (r"DES(?!3|-CBC3)", "DES — 56-bit key, broken since 1999",                    "HIGH",   7.4),
     (r"NULL",       "NULL cipher — no encryption at all",                          "CRITICAL",9.1),
-    (r"EXPORT",     "EXPORT-grade cipher — intentionally weakened for US export",  "CRITICAL",9.8),
+    (r"EXPORT|EXP-|EXP1024", "EXPORT-grade cipher — intentionally weakened for US export", "CRITICAL",9.8),
     (r"ANON|ADH|AECDH","Anonymous DH — no server authentication, trivial MITM",   "CRITICAL",9.8),
     (r"MD5",        "MD5 in cipher suite — collision-vulnerable MAC",              "MEDIUM", 5.3),
     (r"SHA(?!2|384|256|512)", "SHA-1 MAC — deprecated, collision attacks known",  "LOW",    3.7),
@@ -153,6 +202,44 @@ def analyze_cipher(cipher_name: str) -> list[tuple]:
 
 
 # ─── Certificate Parser ──────────────────────────────────────────────────────────
+
+def _parse_cert_time(value: str) -> Optional[datetime.datetime]:
+    """Parse an OpenSSL ``notBefore``/``notAfter`` string into an aware UTC datetime.
+
+    These fields are always expressed in GMT/UTC (e.g. ``"Jan 15 12:00:00 2027 GMT"``).
+    ``strptime`` parses the ``%Z`` token but discards the zone, yielding a *naive*
+    datetime; we attach UTC explicitly so all downstream comparisons are
+    timezone-aware and correct regardless of the host's local timezone.
+    """
+    if not value:
+        return None
+    try:
+        naive = datetime.datetime.strptime(value, "%b %d %H:%M:%S %Y %Z")
+    except (ValueError, TypeError):
+        return None
+    return naive.replace(tzinfo=datetime.timezone.utc)
+
+
+def compute_expiry(not_after_str: str,
+                   now: Optional[datetime.datetime] = None
+                   ) -> tuple[Optional[int], bool]:
+    """Return ``(days_until_expiry, is_expired)`` for a ``notAfter`` string.
+
+    ``days_until_expiry`` is positive for a valid cert, negative once expired,
+    and ``None`` when the date cannot be parsed.  ``now`` defaults to the
+    current UTC time; an aware UTC datetime may be injected for testing.
+    A naive ``now`` is treated as UTC.
+    """
+    exp = _parse_cert_time(not_after_str)
+    if exp is None:
+        return None, False
+    if now is None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=datetime.timezone.utc)
+    days_left = (exp - now).days
+    return days_left, days_left < 0
+
 
 def parse_cert(raw: dict, der: Optional[bytes], chain_valid: bool, host: str) -> CertInfo:
     """Parse a TLS certificate from the structured dict returned by getpeercert().
@@ -188,24 +275,20 @@ def parse_cert(raw: dict, der: Optional[bytes], chain_valid: bool, host: str) ->
         if typ == "DNS":
             sans.append(val)
 
-    # Expiry
+    # Expiry — parsed timezone-aware (notAfter/notBefore are GMT) so the
+    # comparison is correct regardless of the scanning host's local timezone.
     not_after_str = raw.get("notAfter", "")
     not_before_str = raw.get("notBefore", "")
-    days_left = None
-    is_expired = False
-    try:
-        exp = datetime.datetime.strptime(not_after_str, "%b %d %H:%M:%S %Y %Z")
-        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
-        days_left = (exp - now).days
-        is_expired = days_left < 0
-    except Exception:
-        pass
+    days_left, is_expired = compute_expiry(not_after_str)
 
     # Self-signed / untrusted:
     # • If chain_valid=False — the system CA store rejected it; flag as untrusted.
-    # • If we have parsed fields and CN matches issuer CN — explicitly self-signed.
+    # • If we have parsed fields and the full subject matches the full issuer —
+    #   explicitly self-signed (CN alone is too coarse and can collide).
     # Guard against the None==None false positive when raw was empty (CERT_NONE).
     if not chain_valid and der:
+        is_self = True
+    elif subject and issuer and subject == issuer:
         is_self = True
     elif cn is not None and iss_cn is not None and cn == iss_cn:
         is_self = True
@@ -293,10 +376,15 @@ def check_drown(deprecated: list[str]) -> Optional[TLSFinding]:
 
 def calculate_grade(findings: list[TLSFinding], deprecated: list[str],
                     cert: Optional[CertInfo]) -> str:
+    # An expired certificate is an automatic F regardless of other signals —
+    # check this before the clean-slate shortcut so it is never shadowed when
+    # the caller passes an empty findings list.
+    if cert and cert.is_expired:
+        return "F"
     if not findings and not deprecated:
         return "A"
     severities = [f.severity for f in findings]
-    if "CRITICAL" in severities or (cert and cert.is_expired):
+    if "CRITICAL" in severities:
         return "F"
     if "HIGH" in severities or len(deprecated) >= 2:
         return "D"

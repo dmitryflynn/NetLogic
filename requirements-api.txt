@@ -10,7 +10,8 @@ pydantic==2.13.0
 
 # Auth: verify IdP-issued (Clerk) OIDC tokens — RS256 signature + JWKS.
 # Pulls in `cryptography` for RSA. Used only by api/auth/oidc.py.
-PyJWT[crypto]==2.12.1
+# >=2.13.0: 2.12.1 had 8 known CVEs (PYSEC-2026-175…179) in the JWT verifier.
+PyJWT[crypto]==2.13.0
 
 # Postgres (system of record for users/orgs/api_keys/audit). Only needed when
 # NETLOGIC_DATABASE_URL is set; the app runs fully in-memory without these.
