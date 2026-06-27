@@ -6,6 +6,7 @@ from __future__ import annotations
 from src.reasoning.budget import BudgetManager
 from src.reasoning.builder import build_reasoning_state, refresh_beliefs, safe_build_reasoning_state
 from src.reasoning.candidate import Candidate, RankedCandidate
+from src.reasoning.capability_registry import Capability, CapabilityRegistry, open_question_tags
 from src.reasoning.compiler import Compiler
 from src.reasoning.confidence import Belief, ConfidenceEngine, apply_decay
 from src.reasoning.decision_policy import (
@@ -69,6 +70,8 @@ __all__ = [
     "BudgetManager",
     "BudgetPolicy",
     "Candidate",
+    "Capability",
+    "CapabilityRegistry",
     "Compiler",
     "Condition",
     "ConditionOp",

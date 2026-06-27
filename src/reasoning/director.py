@@ -64,6 +64,7 @@ class ReconDirector:
             )
             from src.reasoning.probe_executor import ProbeExecutor
             from src.reasoning.playbooks import PlaybookRegistry  # noqa: PLC0415
+            from src.reasoning.capability_registry import CapabilityRegistry  # noqa: PLC0415
             self._phase3_registry: PrimitiveRegistry = default_registry()
             self._phase3_compiler = Compiler()
             self._phase3_planner = ExecutionPlanner(self._phase3_registry)
@@ -75,9 +76,14 @@ class ReconDirector:
                       validate_dedup, validate_depth):
                 self._phase3_kernel.add_validator(v)
             self._phase3_reflect = Reflect()
-            # Phase 5: Playbook Registry (load playbooks from directory)
+            # Phase 5: Playbook Registry (load playbooks from directory) + Capability Registry.
+            # The capability registry is empty by default (capabilities are registered by callers);
+            # an empty registry simply emits no capability candidates.
             self._playbook_registry = PlaybookRegistry()
             self._playbook_registry.load_from_dir()
+            self._capability_registry = CapabilityRegistry()
+            # How many ranked playbook/capability candidates to actually instantiate per cycle.
+            self._max_selected_candidates = 3
             self._phase3_initialized = True
         except Exception as exc:
             log.warning("Phase 3 initialization failed (%s) — running Phase 2 only", exc)
@@ -159,6 +165,43 @@ class ReconDirector:
                 log.warning("reasoning persistence skipped", exc_info=True)
         return state
 
+    def _select_candidate_intents(self, state: ReasoningState, ctx: StepContext) -> list:
+        """Build the Candidate pool (playbooks + capabilities), rank it with the active
+        DecisionPolicy, and instantiate ONLY the top selections (Phase 5 revised §4/§5).
+
+        Lazy boundary: `to_candidates` performs cheap matching; `instantiate()` builds Intents
+        for selected candidates alone. Returns the flattened Intent list (possibly empty).
+        """
+        try:
+            pool = []
+            pool.extend(self._playbook_registry.to_candidates(state))
+            pool.extend(self._capability_registry.to_candidates(state, self._playbook_registry))
+            if not pool:
+                return []
+
+            policy = getattr(self.scheduler, "policy", None)
+            if policy is not None:
+                satisfied = {o.name.split(":", 1)[0]
+                             for o in state.investigation.objectives.all() if o.satisfied}
+                ranked = policy.rank_candidates(pool, satisfied=satisfied)
+                selected = [r.candidate for r in ranked[:self._max_selected_candidates]]
+            else:
+                selected = pool[:self._max_selected_candidates]
+
+            out = []
+            for cand in selected:
+                try:
+                    cand_intents = cand.instantiate()   # only here is a graph's worth of work done
+                    out.extend(cand_intents)
+                    ctx.emit("reasoning", {"event": "candidate_selected",
+                                           "source": cand.source, "kind": cand.kind})
+                except Exception as e:  # noqa: BLE001
+                    log.warning("candidate instantiation failed (%s): %s", cand.kind, e)
+            return out
+        except Exception as exc:  # noqa: BLE001
+            log.warning("candidate selection failed (%s) — baseline intents only", exc)
+            return []
+
     def _run_phase3_cycle(self, state: ReasoningState, ctx: StepContext) -> None:
         try:
             from src.reasoning import Intent
@@ -167,20 +210,14 @@ class ReconDirector:
 
             from src.reasoning import generators  # noqa: PLC0415
             from src.reasoning.memory import MemoryStore  # noqa: PLC0415
-            from src.reasoning.playbooks import PlaybookInstantiator  # noqa: PLC0415
             generators.populate(state)                       # deterministic objectives + hypotheses
             intents: list[Intent] = generators.generate_intents(state)
 
-            # Phase 5: Playbooks — reusable investigation strategies
-            applicable_playbooks = self._playbook_registry.find_applicable(state)
-            instantiator = PlaybookInstantiator()
-            for playbook in applicable_playbooks:
-                try:
-                    playbook_intents = instantiator.instantiate(playbook, state, ctx.target)
-                    intents.extend(playbook_intents)
-                    ctx.emit("reasoning", {"event": "playbook_instantiated", "playbook": playbook.name})
-                except Exception as e:  # noqa: BLE001
-                    log.warning("Failed to instantiate playbook %s: %s", playbook.name, e)
+            # Phase 5 (revised): Playbooks/Capabilities as lazy Candidates. Matching is cheap;
+            # only the policy-SELECTED candidates are instantiated — no InvestigationGraph is
+            # built for an action the scheduler won't pursue. Generator intents remain the
+            # always-on baseline; selected candidates are additive.
+            intents.extend(self._select_candidate_intents(state, ctx))
 
             # Optional AI augmentation — additive only; absent a completer, nothing changes.
             if self.ai_completer is not None:

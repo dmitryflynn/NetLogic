@@ -57,10 +57,12 @@ class Playbook:
 
         # Count unresolved objectives
         unresolved_count = 0
-        if state.investigation.objectives:
-            for obj_id, obj in state.investigation.objectives.items():
-                if hasattr(obj, 'satisfied') and not obj.satisfied:
+        try:
+            for obj in state.investigation.objectives.all():
+                if not obj.satisfied:
                     unresolved_count += 1
+        except Exception:  # noqa: BLE001
+            pass
 
         trigger_data = {
             "technologies": tech_names,
@@ -220,6 +222,28 @@ class PlaybookRegistry:
     def find_applicable(self, state: ReasoningState) -> list[Playbook]:
         """Find all Playbooks that match the current state."""
         return [pb for pb in self.playbooks.values() if pb.matches(state)]
+
+    def to_candidates(self, state: ReasoningState, instantiator=None) -> list:
+        """Emit Candidate(source='playbook') for each matching playbook (Phase 5 revised §4).
+
+        Matching is cheap; instantiation is deferred. The candidate's factory builds the
+        playbook's Intents only if DecisionPolicy selects it — no InvestigationGraph is
+        constructed during matching/ranking.
+        """
+        from src.reasoning.candidate import Candidate  # noqa: PLC0415
+        inst = instantiator or PlaybookInstantiator()
+        target_ref = state.scope[0] if state.scope else state.target
+        candidates = []
+        for pb in self.find_applicable(state):
+            gain = float(pb.metadata.get("expected_information_gain", 1.0))
+            candidates.append(Candidate.deferred(
+                source="playbook",
+                kind=pb.name,
+                gain=gain,
+                rationale=f"playbook={pb.id}",
+                factory=lambda p=pb: inst.instantiate(p, state, target_ref),
+            ))
+        return candidates
 
     def load_from_dir(self, playbooks_dir: str | Path = "src/reasoning/playbooks") -> None:
         """Load playbooks from a directory."""
