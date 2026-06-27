@@ -65,27 +65,41 @@ class DecisionPolicy(ABC):
         pass
 
     def rank_candidates(self, candidates: list, *, exclude_unmet_prereqs: bool = True,
-                        satisfied: Optional[set] = None) -> list:
+                        satisfied: Optional[set] = None, hints: Optional[list] = None) -> list:
         """Rank a heterogeneous `Candidate` pool. Source-agnostic.
 
         Returns a list of RankedCandidate, highest priority first. Candidates whose
         prerequisites are not in `satisfied` are dropped when `exclude_unmet_prereqs` is set.
+
+        `hints` are PriorityHints from LearnedPatterns (history). They ONLY adjust ordering —
+        an additive boost on top of the policy score. History never touches confidence,
+        hypotheses, or evidence: it owns priority, nothing else.
         """
         from src.reasoning.candidate import RankedCandidate  # noqa: PLC0415
         satisfied = satisfied or set()
+        hints = hints or []
         ranked = []
         for c in candidates:
             if exclude_unmet_prereqs and c.prerequisites:
                 if not set(c.prerequisites) <= satisfied:
                     continue
             score = self._score_candidate(c)
+            boost = self._hint_boost(c, hints)
             ranked.append(RankedCandidate(
-                candidate=c, priority=round(score, 4),
+                candidate=c, priority=round(score + boost, 4),
                 rationale=f"policy={self.__class__.__name__} source={c.source} "
-                          f"gain={c.expected_information_gain:.2f} cost={c.cost_factor():.1f}"))
+                          f"gain={c.expected_information_gain:.2f} cost={c.cost_factor():.1f}"
+                          + (f" hint=+{boost:.2f}" if boost else "")))
         # Stable tie-break: by source then kind, so equal scores order deterministically.
         ranked.sort(key=lambda r: (-r.priority, r.candidate.source, r.candidate.kind))
         return ranked
+
+    @staticmethod
+    def _hint_boost(candidate, hints) -> float:
+        """Sum the boosts of hints whose tag matches this candidate (case-insensitive substring
+        over kind + rationale). Pure ordering signal — no state is read or written."""
+        hay = f"{candidate.kind} {candidate.rationale}".lower()
+        return sum(h.boost for h in hints if h.tag and h.tag.lower() in hay)
 
     @abstractmethod
     def explain(self) -> str:

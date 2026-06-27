@@ -32,6 +32,14 @@ from src.reasoning.investigation_graph import (
     EvidenceRequest,
     InvestigationGraph,
 )
+from src.reasoning.learned_patterns import (
+    CandidatePattern,
+    LearnedPattern,
+    PatternExtractor,
+    PatternRecall,
+    PatternValidator,
+    PriorityHint,
+)
 from src.reasoning.memory import MemoryStore, ProbeRecord
 from src.reasoning.objective import Objective, ObjectiveDAG
 from src.reasoning.observation import Observation
@@ -99,8 +107,13 @@ __all__ = [
     "IntentConstraints",
     "InvestigationGraph",
     "InvestigationState",
+    "LearnedPattern",
     "LearnedPatterns",
     "MemoryStore",
+    "PatternExtractor",
+    "PatternRecall",
+    "PatternValidator",
+    "PriorityHint",
     "Objective",
     "ObjectiveDAG",
     "Observation",
