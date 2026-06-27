@@ -26,6 +26,33 @@ class Hypothesis:
     evidence_refs: list[str] = field(default_factory=list)
     evidence_requests: list[str] = field(default_factory=list)
 
+    def normalized_posterior(self) -> dict[str, float]:
+        """Likelihoods normalized to a proper distribution (sums to 1).
+
+        A hypothesis with multiple `likelihoods` keys IS the competing-candidate set (e.g.
+        {"wordpress": .5, "spring_boot": .5}), so the grouping a separate `Question` object would
+        provide already lives here — see test_posterior_stopping.py for the design decision.
+        """
+        total = sum(v for v in self.likelihoods.values() if v > 0)
+        if total <= 0:
+            return {}
+        return {k: v / total for k, v in self.likelihoods.items() if v > 0}
+
+    def leading_posterior(self) -> float:
+        """The joint posterior mass of the leading candidate (0..1). 0 if no candidates."""
+        post = self.normalized_posterior()
+        return max(post.values()) if post else 0.0
+
+    def posterior_resolved(self, threshold: float = 0.95) -> bool:
+        """True when the competing set has concentrated past `threshold` on one candidate.
+
+        This is the joint-posterior stopping rule over a competing hypothesis — something an
+        Objective's boolean `satisfied` cannot express, and the only capability a `Question`
+        object would have added. Implemented here because the competing set already lives on the
+        Hypothesis, so no new layer is warranted.
+        """
+        return len(self.likelihoods) >= 2 and self.leading_posterior() >= threshold
+
     def to_dict(self) -> dict:
         return {"id": self.id, "label": self.label, "parent_id": self.parent_id,
                 "belief_ref": self.belief_ref, "likelihoods": dict(self.likelihoods),
