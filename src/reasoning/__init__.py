@@ -5,9 +5,17 @@ from __future__ import annotations
 
 from src.reasoning.budget import BudgetManager
 from src.reasoning.builder import build_reasoning_state, refresh_beliefs, safe_build_reasoning_state
+from src.reasoning.candidate import Candidate, RankedCandidate
 from src.reasoning.compiler import Compiler
 from src.reasoning.confidence import Belief, ConfidenceEngine, apply_decay
-from src.reasoning.decision_policy import DecisionPolicy, DefaultDecisionPolicy, RankedAction
+from src.reasoning.decision_policy import (
+    BudgetPolicy,
+    DecisionPolicy,
+    DefaultDecisionPolicy,
+    FastPolicy,
+    GreedyPolicy,
+    RankedAction,
+)
 from src.reasoning.director import ReconDirector
 from src.reasoning.evidence_graph import EntityNode, EvidenceGraph, node_id
 from src.reasoning.execution_kernel import ExecutionKernel
@@ -28,6 +36,13 @@ from src.reasoning.objective import Objective, ObjectiveDAG
 from src.reasoning.observation import Observation
 from src.reasoning.playbooks import Playbook, PlaybookInstantiator, PlaybookLoader, PlaybookRegistry
 from src.reasoning.primitive_registry import Primitive, PrimitiveRegistry, default_registry
+from src.reasoning.provenance import (
+    InferenceHypothesisEdge,
+    ObservationInferenceEdge,
+    ProvenanceBuilder,
+    ProvenanceGraph,
+    ProvenanceTracer,
+)
 from src.reasoning.probe_plan import (
     Condition,
     ConditionOp,
@@ -52,6 +67,8 @@ from src.reasoning.trace import ExecutionResult, TraceMetadata, TraceStep
 __all__ = [
     "Belief",
     "BudgetManager",
+    "BudgetPolicy",
+    "Candidate",
     "Compiler",
     "Condition",
     "ConditionOp",
@@ -59,6 +76,8 @@ __all__ = [
     "DecisionPolicy",
     "DefaultDecisionPolicy",
     "Dependency",
+    "FastPolicy",
+    "GreedyPolicy",
     "DependencyType",
     "EndpointInfo",
     "EndpointResolver",
@@ -88,14 +107,20 @@ __all__ = [
     "PlaybookRegistry",
     "PlannerFeedback",
     "PlanWalker",
+    "InferenceHypothesisEdge",
+    "ObservationInferenceEdge",
     "Primitive",
     "PrimitiveRegistry",
     "ProbeCost",
+    "ProvenanceBuilder",
+    "ProvenanceGraph",
+    "ProvenanceTracer",
     "ProbePlan",
     "ProbePlanGraph",
     "ProbeRecord",
     "ProbeSpec",
     "RankedAction",
+    "RankedCandidate",
     "ReasoningState",
     "ReconDirector",
     "Reflect",

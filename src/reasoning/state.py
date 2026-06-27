@@ -103,6 +103,7 @@ class ExecutionState:
     failed_probes: list[dict] = field(default_factory=list)
     execution_history: list[dict] = field(default_factory=list)
     explanations: list[dict] = field(default_factory=list)       # design §10.2
+    provenance: dict = field(default_factory=dict)               # Phase 5 §1: Obs→Inference→Hypothesis
 
 
 @dataclass
