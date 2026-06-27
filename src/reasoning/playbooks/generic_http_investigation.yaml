@@ -1,0 +1,43 @@
+id: generic_http_investigation
+name: Generic HTTP Security Assessment
+schema_version: "1.0"
+
+trigger_rule:
+  op: and
+  conditions:
+    - op: gt
+      field: open_ports
+      value: 0
+    - op: gt
+      field: unresolved_objectives
+      value: 0
+
+intent_template:
+  goal: "Identify technologies and misconfigurations via HTTP headers and content"
+  desired_evidence:
+    - server_header
+    - http_headers
+    - http_body
+    - cookie_set
+    - favicon_hash
+    - tls_version
+  protocol_hints:
+    - "http"
+    - "https"
+  read_only: true
+  max_cost: "low"
+  max_depth: 4
+
+stopping_condition:
+  confidence_goal: 0.75
+  max_probes: 10
+
+metadata:
+  description: "Generic HTTP-based reconnaissance"
+  cost_tier: "low"
+  risk_profile: "read_only"
+  compiler_version: "1.0"
+  planner_version: "1.0"
+  rule_pack_versions:
+    - "generic:1.0"
+  suitable_for: "any environment with HTTP services"

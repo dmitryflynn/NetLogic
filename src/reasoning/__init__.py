@@ -7,6 +7,7 @@ from src.reasoning.budget import BudgetManager
 from src.reasoning.builder import build_reasoning_state, refresh_beliefs, safe_build_reasoning_state
 from src.reasoning.compiler import Compiler
 from src.reasoning.confidence import Belief, ConfidenceEngine, apply_decay
+from src.reasoning.decision_policy import DecisionPolicy, DefaultDecisionPolicy, RankedAction
 from src.reasoning.director import ReconDirector
 from src.reasoning.evidence_graph import EntityNode, EvidenceGraph, node_id
 from src.reasoning.execution_kernel import ExecutionKernel
@@ -25,6 +26,7 @@ from src.reasoning.investigation_graph import (
 from src.reasoning.memory import MemoryStore, ProbeRecord
 from src.reasoning.objective import Objective, ObjectiveDAG
 from src.reasoning.observation import Observation
+from src.reasoning.playbooks import Playbook, PlaybookInstantiator, PlaybookLoader, PlaybookRegistry
 from src.reasoning.primitive_registry import Primitive, PrimitiveRegistry, default_registry
 from src.reasoning.probe_plan import (
     Condition,
@@ -54,6 +56,8 @@ __all__ = [
     "Condition",
     "ConditionOp",
     "ConfidenceEngine",
+    "DecisionPolicy",
+    "DefaultDecisionPolicy",
     "Dependency",
     "DependencyType",
     "EndpointInfo",
@@ -78,6 +82,10 @@ __all__ = [
     "Objective",
     "ObjectiveDAG",
     "Observation",
+    "Playbook",
+    "PlaybookInstantiator",
+    "PlaybookLoader",
+    "PlaybookRegistry",
     "PlannerFeedback",
     "PlanWalker",
     "Primitive",
@@ -87,6 +95,7 @@ __all__ = [
     "ProbePlanGraph",
     "ProbeRecord",
     "ProbeSpec",
+    "RankedAction",
     "ReasoningState",
     "ReconDirector",
     "Reflect",
