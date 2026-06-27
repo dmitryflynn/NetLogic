@@ -14,10 +14,14 @@ from src.reasoning import (BudgetManager, ReasoningState, ReconDirector, Schedul
 from src.reasoning.trace import ExecutionResult
 
 # Volatile = time/counter fields + random UUIDs (compare STRUCTURE, not unstable IDs).
+# Provenance edges (Phase 5) reference hypotheses by their random UUID and derive an inference_id
+# from it; both are unstable reference ids — the structural shape (rules matched, decisions,
+# obs attribution) is what the guard compares.
 _VOLATILE = {"started_at", "created_at", "timestamp", "resolved_at", "elapsed_s",
              "depth", "probes_run", "tokens_used",
              "id", "request_id", "spec_id", "parent_id", "children", "derived_from",
-             "evidence_requests", "probe_key"}
+             "evidence_requests", "probe_key",
+             "hypothesis_id", "inference_id"}
 
 
 def _stub_executor(spec):
