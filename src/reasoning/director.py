@@ -63,6 +63,7 @@ class ReconDirector:
                 validate_read_only, validate_scope,
             )
             from src.reasoning.probe_executor import ProbeExecutor
+            from src.reasoning.playbooks import PlaybookRegistry  # noqa: PLC0415
             self._phase3_registry: PrimitiveRegistry = default_registry()
             self._phase3_compiler = Compiler()
             self._phase3_planner = ExecutionPlanner(self._phase3_registry)
@@ -74,6 +75,9 @@ class ReconDirector:
                       validate_dedup, validate_depth):
                 self._phase3_kernel.add_validator(v)
             self._phase3_reflect = Reflect()
+            # Phase 5: Playbook Registry (load playbooks from directory)
+            self._playbook_registry = PlaybookRegistry()
+            self._playbook_registry.load_from_dir()
             self._phase3_initialized = True
         except Exception as exc:
             log.warning("Phase 3 initialization failed (%s) — running Phase 2 only", exc)
@@ -163,8 +167,21 @@ class ReconDirector:
 
             from src.reasoning import generators  # noqa: PLC0415
             from src.reasoning.memory import MemoryStore  # noqa: PLC0415
+            from src.reasoning.playbooks import PlaybookInstantiator  # noqa: PLC0415
             generators.populate(state)                       # deterministic objectives + hypotheses
             intents: list[Intent] = generators.generate_intents(state)
+
+            # Phase 5: Playbooks — reusable investigation strategies
+            applicable_playbooks = self._playbook_registry.find_applicable(state)
+            instantiator = PlaybookInstantiator()
+            for playbook in applicable_playbooks:
+                try:
+                    playbook_intents = instantiator.instantiate(playbook, state, ctx.target)
+                    intents.extend(playbook_intents)
+                    ctx.emit("reasoning", {"event": "playbook_instantiated", "playbook": playbook.name})
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Failed to instantiate playbook %s: %s", playbook.name, e)
+
             # Optional AI augmentation — additive only; absent a completer, nothing changes.
             if self.ai_completer is not None:
                 try:

@@ -1,0 +1,45 @@
+id: wordpress_investigation
+name: WordPress Security Assessment
+schema_version: "1.0"
+
+trigger_rule:
+  op: and
+  conditions:
+    - op: contains
+      field: technologies
+      value: "wordpress"
+    - op: gt
+      field: unresolved_objectives
+      value: 0
+
+intent_template:
+  goal: "Verify WordPress version, plugins, and configuration"
+  desired_evidence:
+    - http_headers
+    - http_body
+    - server_header
+    - cookie_set
+    - tls_version
+  protocol_hints:
+    - "https"
+    - "http"
+  read_only: true
+  max_cost: "medium"
+  max_depth: 5
+
+stopping_condition:
+  confidence_goal: 0.90
+  max_probes: 20
+
+metadata:
+  description: "Focused WordPress security assessment"
+  cost_tier: "medium"
+  risk_profile: "read_only"
+  compiler_version: "1.0"
+  planner_version: "1.0"
+  rule_pack_versions:
+    - "wordpress:1.0"
+  suitable_for: "environments with any WordPress installation"
+  requires_capabilities:
+    - "HTTP Access"
+    - "TLS Analysis"
