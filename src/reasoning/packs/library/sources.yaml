@@ -1,0 +1,32 @@
+# KnowledgeSource registry (Phase 6.5) — provenance + calibration for imported fingerprints.
+# A pack's effective confidence = fingerprint_confidence × source.confidence, so imported rules
+# are NOT trusted equally. NetLogic imports DATA from these sources, never their engines.
+sources:
+  manual:
+    confidence: 0.95
+    false_positive_rate: 0.01
+    coverage: high
+  wappalyzer:
+    confidence: 0.85
+    false_positive_rate: 0.05
+    coverage: high
+  whatweb:
+    confidence: 0.80
+    false_positive_rate: 0.07
+    coverage: high
+  fingerprinthub:
+    confidence: 0.82
+    false_positive_rate: 0.06
+    coverage: high
+  retirejs:
+    confidence: 0.88
+    false_positive_rate: 0.03
+    coverage: medium
+  nuclei:
+    confidence: 0.80
+    false_positive_rate: 0.05
+    coverage: medium
+  vulnclaw:
+    confidence: 0.70          # investigation-sequence inspiration; lower trust until benchmarked
+    false_positive_rate: 0.10
+    coverage: medium

@@ -1,0 +1,5 @@
+{
+  "detect": ["wordpress"],
+  "min_markers": 2,
+  "must_not_detect": ["spring_boot"]
+}

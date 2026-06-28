@@ -1,0 +1,9 @@
+{
+  "headers": {
+    "X-Application-Context": "application:8080",
+    "Content-Type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"Whitelabel Error Page\",\"path\":\"/actuator/health\"}",
+  "favicon_hash": ""
+}

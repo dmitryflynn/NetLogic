@@ -1,0 +1,5 @@
+{
+  "detect": ["nginx"],
+  "min_markers": 1,
+  "must_not_detect": ["wordpress", "spring_boot"]
+}
