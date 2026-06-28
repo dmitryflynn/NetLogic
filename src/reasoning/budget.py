@@ -29,6 +29,10 @@ class BudgetManager:
     tokens_used: int = 0
     probes_run: int = 0
     depth: int = 0
+    # Phase 6c: optional scan-wide parent. A per-host budget also debits the global aggregate, so
+    # no host may exceed the global ceiling. Resource-only (tokens/probes/wall-clock); recursion
+    # `depth` stays a per-host concept and is NOT propagated to the global parent.
+    parent: Optional["BudgetManager"] = None
 
     @classmethod
     def for_tier(cls, tier: str = "hosted", **overrides) -> "BudgetManager":
@@ -42,19 +46,41 @@ class BudgetManager:
 
     def can_afford(self, cost: Optional[dict] = None) -> bool:
         cost = cost or {}
-        return (
+        ok = (
             self.elapsed_s() < self.max_wall_clock_s
             and self.tokens_used + int(cost.get("tokens", 0)) <= self.max_tokens
             and self.probes_run + int(cost.get("probes", 1)) <= self.max_probes
             and self.depth < self.max_recursion
         )
+        if ok and self.parent is not None:
+            ok = self.parent._can_afford_resources(cost)
+        return ok
+
+    def _can_afford_resources(self, cost: Optional[dict] = None) -> bool:
+        """Resource-only affordability (no recursion-depth gate) — used for the global aggregate."""
+        cost = cost or {}
+        return (
+            self.elapsed_s() < self.max_wall_clock_s
+            and self.tokens_used + int(cost.get("tokens", 0)) <= self.max_tokens
+            and self.probes_run + int(cost.get("probes", 1)) <= self.max_probes
+        )
 
     def exhausted(self) -> bool:
-        return (
+        mine = (
             self.elapsed_s() >= self.max_wall_clock_s
             or self.tokens_used >= self.max_tokens
             or self.probes_run >= self.max_probes
             or self.depth >= self.max_recursion
+        )
+        if mine:
+            return True
+        return self.parent is not None and self.parent._resources_exhausted()
+
+    def _resources_exhausted(self) -> bool:
+        return (
+            self.elapsed_s() >= self.max_wall_clock_s
+            or self.tokens_used >= self.max_tokens
+            or self.probes_run >= self.max_probes
         )
 
     # ── Spend ─────────────────────────────────────────────────────────────────────
@@ -63,6 +89,14 @@ class BudgetManager:
         self.tokens_used += int(cost.get("tokens", 0))
         self.probes_run += int(cost.get("probes", 1))
         self.depth += 1
+        if self.parent is not None:
+            self.parent._spend_resources(cost)
+
+    def _spend_resources(self, cost: Optional[dict] = None) -> None:
+        """Debit only resources on the global aggregate (no depth increment)."""
+        cost = cost or {}
+        self.tokens_used += int(cost.get("tokens", 0))
+        self.probes_run += int(cost.get("probes", 1))
 
     def to_dict(self) -> dict:
         return {

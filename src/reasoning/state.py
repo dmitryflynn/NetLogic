@@ -133,6 +133,9 @@ class ReasoningState:
     # loop never engages → scan output is byte-identical. AI presence augments but does not
     # activate; activation is governed by this flag alone.
     reasoning_enabled: bool = False
+    # Phase 6c: opt-in multi-host world modeling. Default OFF → exactly one host, no cross-host
+    # expansion → output byte-identical to Phase 5. Mirrors the reasoning_enabled gate.
+    world_modeling_enabled: bool = False
     started_at: float = field(default_factory=time.time)
     world: WorldModel = field(default_factory=WorldModel)
     investigation: InvestigationState = field(default_factory=InvestigationState)
@@ -149,6 +152,7 @@ class ReasoningState:
             "target": self.target,
             "scope": list(self.scope),
             "reasoning_enabled": self.reasoning_enabled,
+            "world_modeling_enabled": self.world_modeling_enabled,
             "started_at": self.started_at,
             "world": self.world.to_dict(),
             "investigation": {
@@ -190,6 +194,7 @@ class ReasoningState:
             target=data.get("target", ""),
             scope=list(data.get("scope", []) or []),
             reasoning_enabled=bool(data.get("reasoning_enabled", False)),
+            world_modeling_enabled=bool(data.get("world_modeling_enabled", False)),
             started_at=float(data.get("started_at", time.time())),
             world=WorldModel.from_dict(data.get("world")),
             investigation=investigation,

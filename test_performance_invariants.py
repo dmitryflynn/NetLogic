@@ -104,3 +104,25 @@ def test_provenance_empty_when_no_inference():
         s.world.graph.observe(n, kind="http_headers", evidence=ev, source="phase3")
     graph = ProvenanceBuilder().build(s, [])
     assert len(graph.obs_inference) == 0 and len(graph.inference_hypothesis) == 0
+
+
+# ── Multi-host (Phase 6c): ranking host candidates spawns no reasoners ──
+
+def test_ranking_host_candidates_instantiates_no_reasoners():
+    """The lazy boundary holds for cross-host expansion: ranking N HostCandidates creates zero
+    HostReasoners — only selection (instantiate) does."""
+    from src.reasoning.cross_host import ScopeAuthorizer
+    from src.reasoning.multi_host import host_expansion_candidates
+    from src.reasoning.world_state import WorldState
+
+    s = ReasoningState(target="web.ex.com:80", scope=["ex.com"])
+    node = s.world.graph.upsert_node("service", "web.ex.com:80")
+    s.world.graph.observe(node, kind="dns_records", evidence="", source="scan",
+                          data={"mx": [f"h{i}.ex.com" for i in range(10)]})
+    ws = WorldState.single_host(s)
+
+    cands = host_expansion_candidates(ws, ["ex.com"], ScopeAuthorizer(),
+                                      lambda h: ReasoningState(target=h, scope=["ex.com"]))
+    assert len(cands) == 10
+    GreedyPolicy().rank_candidates(cands)
+    assert len(ws.hosts) == 1, "ranking host candidates must not spawn any reasoner"
