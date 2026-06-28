@@ -13,6 +13,13 @@ playbook candidates and never needs to know the difference.
 
 The candidate's factory is the lazy boundary: it instantiates the implementing Playbook's Intents
 only if the policy selects the capability.
+
+Why this earns its place over playbook metadata (the maintainer test): a capability can be
+implemented by *several* playbooks, and `_pick_playbook` chooses the one that is APPLICABLE to the
+current state. That "select the right implementation for this state" decision is something a lone
+playbook's metadata cannot express. See test_architecture_invariants.py::
+test_capability_selects_among_multiple_implementations — if that behavior ever disappears, this
+registry collapses back into playbook metadata and should be removed.
 """
 from __future__ import annotations
 
