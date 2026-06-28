@@ -84,6 +84,8 @@ class ReconDirector:
             self._capability_registry = CapabilityRegistry()
             # How many ranked playbook/capability candidates to actually instantiate per cycle.
             self._max_selected_candidates = 3
+            # Phase 6c: breadth cap on multi-host expansion per scan (bounds fan-out).
+            self._max_hosts = 8
             self._phase3_initialized = True
         except Exception as exc:
             log.warning("Phase 3 initialization failed (%s) — running Phase 2 only", exc)
@@ -94,6 +96,42 @@ class ReconDirector:
         if not self.strategy.should_activate(state, has_ai_key=self.has_ai_key, budget=self.budget):
             return state
 
+        # Primary host: the existing single-host pipeline, unchanged. When world modeling is OFF
+        # (default) this is the entire run → output byte-identical to Phase 5.
+        self._reason_one_host(state, ctx, self.budget)
+
+        # Phase 6c: live multi-host dispatch — only when explicitly enabled. The primary's own
+        # budget is the scan-wide ceiling; spawned hosts get child budgets parented to it.
+        if state.world_modeling_enabled and self._phase3_initialized:
+            try:
+                self._run_multi_host(state, ctx)
+            except Exception as exc:  # noqa: BLE001 — multi-host must never break a single-host scan
+                log.warning("multi-host dispatch failed (%s) — primary host result kept", exc)
+
+        # Integrity audit — catch state corruption immediately (fail-soft: log, never abort).
+        try:
+            from src.reasoning.reasoning_validator import ReasoningValidator  # noqa: PLC0415
+            issues = ReasoningValidator().audit(state)
+            if issues:
+                state.execution.execution_history.append({"audit": [i.to_dict() for i in issues]})
+                for i in issues:
+                    if i.severity in ("error", "fatal"):
+                        log.warning("reasoning audit %s [%s] %s", i.severity, i.code, i.message)
+        except Exception:  # noqa: BLE001
+            pass
+
+        state.execution.budget = self.budget.to_dict()
+        if self.persist:
+            try:
+                self.persist(state)
+            except Exception:
+                log.warning("reasoning persistence skipped", exc_info=True)
+        return state
+
+    def _reason_one_host(self, state: ReasoningState, ctx: StepContext, budget) -> None:
+        """One host's complete reasoning pass: Phase 2 sensor sweep + Phase 3 cycle, bounded by
+        `budget`. Extracted verbatim from the original single-host loop so the primary host (passed
+        `self.budget`) behaves identically; spawned hosts pass a child budget parented to the global."""
         memory = MemoryStore()
         seen: set[str] = set()
         no_gain = 0
@@ -108,20 +146,20 @@ class ReconDirector:
             scored = self.scheduler.select(self.registry, ctx, seen)
             best_priority = scored.priority if scored else None
             stop, reason = self.strategy.should_stop(
-                state, budget=self.budget, best_priority=best_priority, no_gain_streak=no_gain)
+                state, budget=budget, best_priority=best_priority, no_gain_streak=no_gain)
             if stop:
                 ctx.emit("reasoning", {"event": "stop", "reason": reason})
                 break
 
             step = scored.step
             spec = step.probe_spec(ctx.target)
-            if memory.seen(spec) or not self.budget.can_afford(step.cost):
+            if memory.seen(spec) or not budget.can_afford(step.cost):
                 seen.add(step.name)
                 continue
 
             before = self._contested_count(state)
             obs = self._run_step(step, ctx)
-            self.budget.spend(step.cost)
+            budget.spend(step.cost)
             memory.record(spec, success=bool(obs), result_summary=step.name)
             seen.add(step.name)
             self._fold(state, obs)
@@ -143,27 +181,74 @@ class ReconDirector:
                                     "priority": best_priority, "gained": gained})
 
         if self._phase3_initialized:
-            self._run_phase3_cycle(state, ctx)
+            self._run_phase3_cycle(state, ctx, budget=budget)
 
-        # Integrity audit — catch state corruption immediately (fail-soft: log, never abort).
-        try:
-            from src.reasoning.reasoning_validator import ReasoningValidator  # noqa: PLC0415
-            issues = ReasoningValidator().audit(state)
-            if issues:
-                state.execution.execution_history.append({"audit": [i.to_dict() for i in issues]})
-                for i in issues:
-                    if i.severity in ("error", "fatal"):
-                        log.warning("reasoning audit %s [%s] %s", i.severity, i.code, i.message)
-        except Exception:  # noqa: BLE001
-            pass
+    def _run_multi_host(self, state: ReasoningState, ctx: StepContext) -> None:
+        """Live multi-host dispatch (Phase 6c). Discovers in-scope neighbors from each reasoned
+        host's evidence, authorizes them (ScopeAuthorizer), and runs each as its own HostReasoner
+        with a child budget parented to the scan-wide ceiling. Loop-level, breadth-bounded, and
+        hard-gated by scope + global budget."""
+        from src.reasoning.budget import BudgetManager  # noqa: PLC0415
+        from src.reasoning.cross_host import (  # noqa: PLC0415
+            AuthDecision, ScopeAuthorizer, derive_cross_host_edges,
+        )
+        from src.reasoning.registry import StepContext as _StepContext  # noqa: PLC0415
+        from src.reasoning.world_state import WorldState  # noqa: PLC0415
 
-        state.execution.budget = self.budget.to_dict()
-        if self.persist:
+        ws = WorldState.single_host(state, global_budget=self.budget)
+        authorizer = ScopeAuthorizer()
+        scope = list(state.scope)
+        primary_host = state.target or ""
+        visited: set[str] = {primary_host}
+
+        def _enqueue_from(graph, queue: list[str]) -> None:
+            for edge in derive_cross_host_edges(graph):
+                ws.environment.cross_host_graph.add_edge(edge)   # record discovery (facts)
+                if edge.dest_host in visited or edge.dest_host in ws.hosts:
+                    continue
+                if authorizer.evaluate(edge, scope) is AuthDecision.AUTHORIZE:
+                    queue.append(edge.dest_host)
+
+        queue: list[str] = []
+        _enqueue_from(state.world.graph, queue)   # neighbors discovered by the primary
+
+        expanded: list[str] = []
+        while queue and len(expanded) < self._max_hosts and not self.budget.exhausted():
+            host = queue.pop(0)
+            if host in visited:
+                continue
+            visited.add(host)
+
+            # A spawned host is a complete reasoning context with its own child budget.
+            child_state = ReasoningState(
+                target=host, scope=list(scope),
+                reasoning_enabled=True, world_modeling_enabled=True)
+            child_budget = BudgetManager(
+                max_wall_clock_s=self.budget.max_wall_clock_s,
+                max_tokens=self.budget.max_tokens, max_probes=self.budget.max_probes,
+                max_recursion=self.budget.max_recursion, parent=self.budget)
+            ws.hosts.create(host, child_state)
+            host_ctx = _StepContext(target=host, state=child_state, art={}, emit=ctx.emit)
+            ctx.emit("reasoning", {"event": "host_expand", "host": host})
             try:
-                self.persist(state)
-            except Exception:
-                log.warning("reasoning persistence skipped", exc_info=True)
-        return state
+                self._reason_one_host(child_state, host_ctx, child_budget)
+            except Exception as exc:  # noqa: BLE001 — one host's failure must not abort the world
+                log.warning("host %s reasoning failed (%s)", host, exc)
+                continue
+            expanded.append(host)
+            _enqueue_from(child_state.world.graph, queue)   # neighbors discovered by this host
+
+        # Surface the world summary on the primary state for reporting (single source of record).
+        state.execution.execution_history.append({
+            "multi_host": {
+                "primary": primary_host,
+                "expanded_hosts": expanded,
+                "discovered_edges": [e.to_dict() for e in ws.environment.cross_host_graph.edges],
+                "rejected_or_deferred": authorizer.terminal_hosts(),
+            }
+        })
+        ctx.emit("reasoning", {"event": "multi_host_done",
+                                "hosts": len(ws.hosts), "expanded": len(expanded)})
 
     def _select_candidate_intents(self, state: ReasoningState, ctx: StepContext) -> list:
         """Build the Candidate pool (playbooks + capabilities), rank it with the active
@@ -202,7 +287,8 @@ class ReconDirector:
             log.warning("candidate selection failed (%s) — baseline intents only", exc)
             return []
 
-    def _run_phase3_cycle(self, state: ReasoningState, ctx: StepContext) -> None:
+    def _run_phase3_cycle(self, state: ReasoningState, ctx: StepContext, budget=None) -> None:
+        budget = budget if budget is not None else self.budget
         try:
             from src.reasoning import Intent
             from src.reasoning.investigation_graph import InvestigationGraph
@@ -259,8 +345,8 @@ class ReconDirector:
             results = self._phase3_kernel.run_graph(
                 plan_graph, metadata_fn=_metadata_fn,
                 context={"scope": list(state.scope), "read_only": True,
-                         "budget": self.budget, "memory": phase3_memory,
-                         "depth": 0, "max_depth": self.budget.max_recursion})
+                         "budget": budget, "memory": phase3_memory,
+                         "depth": 0, "max_depth": budget.max_recursion})
 
             # The kernel keys results by spec.id; Reflect looks them up by evidence_request_id.
             # Re-key so reflection actually matches its requests.

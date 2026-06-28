@@ -372,6 +372,8 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
     _ran_director = False
     if _rs is not None:
         _rs.reasoning_enabled = bool(_g(args, "reason", False))
+        # Multi-host world modeling (Phase 6c) is gated independently and implies --reason.
+        _rs.world_modeling_enabled = bool(_g(args, "multi_host", False)) and _rs.reasoning_enabled
     _ctx.state = _rs
     _ctx.completer = _ai_complete
     _ctx.extras["sensor_plan"] = _sensor_plan
