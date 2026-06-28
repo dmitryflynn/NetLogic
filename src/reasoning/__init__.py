@@ -8,6 +8,13 @@ from src.reasoning.builder import build_reasoning_state, refresh_beliefs, safe_b
 from src.reasoning.candidate import Candidate, RankedCandidate
 from src.reasoning.capability_registry import Capability, CapabilityRegistry, open_question_tags
 from src.reasoning.compiler import Compiler
+from src.reasoning.cross_host import CrossHostEdge, CrossHostGraph
+from src.reasoning.world_state import (
+    EnvironmentGraph,
+    HostManager,
+    HostReasoner,
+    WorldState,
+)
 from src.reasoning.confidence import Belief, ConfidenceEngine, apply_decay
 from src.reasoning.decision_policy import (
     BudgetPolicy,
@@ -84,11 +91,16 @@ __all__ = [
     "Condition",
     "ConditionOp",
     "ConfidenceEngine",
+    "CrossHostEdge",
+    "CrossHostGraph",
     "DecisionPolicy",
     "DefaultDecisionPolicy",
     "Dependency",
+    "EnvironmentGraph",
     "FastPolicy",
     "GreedyPolicy",
+    "HostManager",
+    "HostReasoner",
     "DependencyType",
     "EndpointInfo",
     "EndpointResolver",
@@ -149,6 +161,7 @@ __all__ = [
     "TraceMetadata",
     "TraceStep",
     "WorldModel",
+    "WorldState",
     "apply_decay",
     "build_reasoning_state",
     "default_registry",
