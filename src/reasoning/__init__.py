@@ -54,6 +54,12 @@ from src.reasoning.learned_patterns import (
     PriorityHint,
 )
 from src.reasoning.memory import MemoryStore, ProbeRecord
+from src.reasoning.multi_host import (
+    dispatch as dispatch_hosts,
+    expand_world,
+    host_expansion_candidates,
+    make_host_candidate,
+)
 from src.reasoning.objective import Objective, ObjectiveDAG
 from src.reasoning.observation import Observation
 from src.reasoning.playbooks import Playbook, PlaybookInstantiator, PlaybookLoader, PlaybookRegistry
@@ -174,6 +180,10 @@ __all__ = [
     "apply_decay",
     "build_reasoning_state",
     "default_registry",
+    "dispatch_hosts",
+    "expand_world",
+    "host_expansion_candidates",
+    "make_host_candidate",
     "node_id",
     "refresh_beliefs",
     "safe_build_reasoning_state",
