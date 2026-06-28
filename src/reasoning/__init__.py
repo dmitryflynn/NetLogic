@@ -8,7 +8,13 @@ from src.reasoning.builder import build_reasoning_state, refresh_beliefs, safe_b
 from src.reasoning.candidate import Candidate, RankedCandidate
 from src.reasoning.capability_registry import Capability, CapabilityRegistry, open_question_tags
 from src.reasoning.compiler import Compiler
-from src.reasoning.cross_host import CrossHostEdge, CrossHostGraph
+from src.reasoning.cross_host import (
+    AuthDecision,
+    CrossHostEdge,
+    CrossHostGraph,
+    ScopeAuthorizer,
+    derive_cross_host_edges,
+)
 from src.reasoning.world_state import (
     EnvironmentGraph,
     HostManager,
@@ -90,6 +96,7 @@ __all__ = [
     "Compiler",
     "Condition",
     "ConditionOp",
+    "AuthDecision",
     "ConfidenceEngine",
     "CrossHostEdge",
     "CrossHostGraph",
@@ -154,9 +161,11 @@ __all__ = [
     "Reflect",
     "Scheduler",
     "ScoredAction",
+    "ScopeAuthorizer",
     "SensorStep",
     "StepContext",
     "StopCondition",
+    "derive_cross_host_edges",
     "StrategyManager",
     "TraceMetadata",
     "TraceStep",
