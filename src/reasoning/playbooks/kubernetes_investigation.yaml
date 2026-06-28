@@ -1,0 +1,42 @@
+id: kubernetes_investigation
+name: Kubernetes Cluster Assessment
+schema_version: "1.0"
+
+trigger_rule:
+  op: or
+  conditions:
+    - op: contains
+      field: technologies
+      value: "kubernetes"
+    - op: contains
+      field: detected_frameworks
+      value: "kubernetes"
+
+intent_template:
+  goal: "Identify exposed Kubernetes API server, dashboard, and kubelet surface"
+  desired_evidence:
+    - http_headers
+    - http_body
+    - server_header
+    - tls_version
+    - open_port
+  protocol_hints:
+    - "https"
+  read_only: true
+  max_cost: "medium"
+  max_depth: 5
+
+stopping_condition:
+  confidence_goal: 0.90
+  max_probes: 18
+
+metadata:
+  description: "Kubernetes control-plane exposure assessment"
+  cost_tier: "medium"
+  risk_profile: "read_only"
+  expected_information_gain: 4.0
+  compiler_version: "1.0"
+  planner_version: "1.0"
+  rule_pack_versions:
+    - "kubernetes:1.0"
+  suitable_for: "clusters with an internet-reachable API server or dashboard"

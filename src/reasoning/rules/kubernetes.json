@@ -1,0 +1,6 @@
+{
+  "name": "kubernetes",
+  "confirm": ["kube-apiserver", "x-kubernetes-pf", "/api/v1/namespaces", "kubernetes-dashboard", "server: kubelet"],
+  "refute": ["server: microsoft-iis"],
+  "contradiction": []
+}
