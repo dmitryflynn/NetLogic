@@ -1,0 +1,34 @@
+# WooCommerce IS WordPress + commerce surface. Inheritance avoids re-declaring all of WordPress.
+id: woocommerce
+source: manual
+extends: wordpress
+aliases: [woo]
+
+fingerprints:
+  cookies:
+    - "woocommerce_items_in_cart"
+    - "woocommerce_cart_hash"
+  body:
+    - "woocommerce"
+    - "wc-ajax"
+
+rule:
+  confirm:
+    - "woocommerce"
+    - "wc-ajax"
+    - "/wp-json/wc/"
+
+capabilities:
+  - id: woocommerce_investigation
+    expected_information_gain: 3.5
+    preferred_order: [cookies, body, rest_api]
+    fallback: [admin_ajax]
+
+endpoints:
+  - "/wp-json/wc/v3"
+  - "/wp-admin/admin-ajax.php"
+
+confidence_priors:
+  cart_cookie: 0.7
+
+benchmark_fixtures: [woocommerce/basic]

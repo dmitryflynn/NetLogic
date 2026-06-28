@@ -1,0 +1,48 @@
+id: spring_boot
+source: manual
+aliases: [spring, springboot]
+
+fingerprints:
+  headers:
+    - "x-application-context"
+  body:
+    - "whitelabel error page"
+    - "/actuator"
+
+rule:
+  confirm:
+    - "x-application-context"
+    - "whitelabel error page"
+    - "/actuator/health"
+  refute:
+    - "x-powered-by: php"
+
+# Investigation SEQUENCE — the most valuable VulnClaw-style knowledge: order, not just signatures.
+capabilities:
+  - id: spring_boot_investigation
+    expected_information_gain: 4.0
+    preferred_order: [headers, cookies, favicon, body, actuator, swagger]
+    fallback: [robots, graphql]
+  - id: spring_actuator_exposure
+    expected_information_gain: 4.5
+    preferred_order: [actuator_health, actuator_env, actuator_mappings]
+    fallback: [actuator_beans]
+
+endpoints:
+  - "/actuator"
+  - "/actuator/health"
+  - "/actuator/env"
+  - "/v3/api-docs"
+  - "/swagger-ui.html"
+
+priority_hints: [headers, body, actuator, swagger]
+
+stopping_condition:
+  confidence_goal: 0.90
+  max_probes: 18
+
+explanation_templates:
+  detected: "Spring Boot detected via {evidence}"
+  actuator: "Exposed Spring Boot actuator endpoint: {endpoint}"
+
+benchmark_fixtures: [spring_boot/basic]

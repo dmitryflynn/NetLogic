@@ -1,0 +1,66 @@
+id: wordpress
+source: manual
+aliases: [wp, wordpress6]
+
+fingerprints:
+  headers:
+    - "x-powered-by: wordpress"
+    - "link: <https://wp.com/wp-json/>"
+  cookies:
+    - "wordpress_logged_in"
+    - "wp-settings-"
+  body:
+    - "wp-content"
+    - "wp-json"
+    - "/wp-includes/"
+    - 'name="generator" content="wordpress'
+  favicon: []
+
+rule:
+  confirm:
+    - "wp-content"
+    - "wp-json"
+    - "x-powered-by: wordpress"
+    - "/wp-login.php"
+  refute:
+    - "server: microsoft-iis"
+    - "x-aspnet-version"
+  contradiction: []
+
+capabilities:
+  - id: wordpress_investigation
+    expected_information_gain: 4.0
+    preferred_order: [headers, cookies, favicon, body, admin]
+    fallback: [robots, xmlrpc]
+  - id: wordpress_version_discovery
+    expected_information_gain: 3.0
+    preferred_order: [generator, readme, feed]
+    fallback: [body]
+
+endpoints:
+  - "/wp-login.php"
+  - "/xmlrpc.php"
+  - "/wp-json"
+  - "/readme.html"
+admin_paths:
+  - "/wp-admin"
+
+confidence_priors:
+  generator_tag: 0.6
+  cookie: 0.3
+  favicon: 0.4
+  admin_page: 0.8
+
+priority_hints: [headers, cookies, favicon, body, admin]
+
+stopping_condition:
+  confidence_goal: 0.90
+  max_probes: 20
+
+known_false_positives:
+  - "static html comment mentioning wordpress"
+
+explanation_templates:
+  detected: "WordPress detected via {evidence}"
+
+benchmark_fixtures: [wordpress/basic]

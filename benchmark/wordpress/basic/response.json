@@ -1,0 +1,10 @@
+{
+  "headers": {
+    "Server": "nginx",
+    "X-Powered-By": "WordPress",
+    "Link": "<https://example.com/wp-json/>; rel=\"https://api.w.org/\""
+  },
+  "cookies": ["wordpress_logged_in_abc123=1", "wp-settings-1=foo"],
+  "body": "<html><head><meta name=\"generator\" content=\"WordPress 6.4\"><link href=\"/wp-content/themes/x/style.css\"></head><body>wp-json</body></html>",
+  "favicon_hash": ""
+}

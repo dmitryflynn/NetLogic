@@ -1,0 +1,29 @@
+id: nginx
+source: wappalyzer
+aliases: [nginx-web]
+
+fingerprints:
+  headers:
+    - "server: nginx"
+  body: []
+
+rule:
+  confirm:
+    - "server: nginx"
+  refute:
+    - "server: apache"
+    - "server: microsoft-iis"
+
+capabilities:
+  - id: nginx_investigation
+    expected_information_gain: 2.0
+    preferred_order: [headers, error_page]
+    fallback: [body]
+
+priority_hints: [headers, body]
+
+stopping_condition:
+  confidence_goal: 0.80
+  max_probes: 8
+
+benchmark_fixtures: [nginx/basic]

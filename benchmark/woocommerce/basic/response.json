@@ -1,0 +1,9 @@
+{
+  "headers": {
+    "Server": "nginx",
+    "X-Powered-By": "WordPress"
+  },
+  "cookies": ["woocommerce_items_in_cart=1", "woocommerce_cart_hash=abc"],
+  "body": "<html><body class=\"woocommerce\">wp-content/plugins/woocommerce wc-ajax=get_refreshed_fragments</body></html>",
+  "favicon_hash": ""
+}

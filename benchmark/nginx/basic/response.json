@@ -1,0 +1,9 @@
+{
+  "headers": {
+    "Server": "nginx/1.25.3",
+    "Content-Type": "text/html"
+  },
+  "cookies": [],
+  "body": "<html><body><h1>Welcome</h1></body></html>",
+  "favicon_hash": ""
+}
