@@ -68,6 +68,10 @@ def parse_args():
     p.add_argument("--reason",    action="store_true",
                    help="Enable the adaptive reasoning loop (observe→reason→act). Deterministic "
                         "by default; uses AI to augment when an API key is configured.")
+    p.add_argument("--multi-host", action="store_true",
+                   help="Enable multi-host world modeling: discover in-scope neighbors from "
+                        "evidence and reason over each as its own host (requires --reason; "
+                        "every probe stays scope-gated). Off by default.")
     # ── AI analysis ──
     p.add_argument("--ai",        action="store_true",
                    help="Run AI-powered analysis of findings (needs an API key)")
