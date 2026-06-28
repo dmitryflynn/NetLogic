@@ -77,14 +77,26 @@ class Fingerprints:
 
 @dataclass(frozen=True)
 class PackCapability:
-    """A capability with an investigation *sequence* — the most valuable knowledge, not just signatures."""
+    """A capability the pack can exercise.
+
+    Knowledge vs. policy is deliberately split (the reviewer's point — packs describe *what exists*,
+    the Scheduler decides *what to do first*):
+      • `requires` / `produces` / `cost` are KNOWLEDGE — what the capability needs and yields. The
+        Scheduler/DecisionPolicy consumes these to compute ordering itself.
+      • `preferred_order` / `fallback` are ADVISORY hints (a human's investigation experience). They
+        feed Phase 5 PriorityHints to warm-start ranking — never a hard execution mandate.
+    """
     id: str
     expected_information_gain: float = 1.0
-    preferred_order: tuple[str, ...] = ()   # e.g. (headers, cookies, favicon, body, actuator)
+    requires: tuple[str, ...] = ()           # evidence types the capability needs (knowledge)
+    produces: tuple[str, ...] = ()           # what it resolves, e.g. ("framework", "version")
+    cost: str = "medium"                     # "low" | "medium" | "high"
+    preferred_order: tuple[str, ...] = ()    # ADVISORY hint only (→ PriorityHints), not a mandate
     fallback: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
         return {"id": self.id, "expected_information_gain": self.expected_information_gain,
+                "requires": list(self.requires), "produces": list(self.produces), "cost": self.cost,
                 "preferred_order": list(self.preferred_order), "fallback": list(self.fallback)}
 
 

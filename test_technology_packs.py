@@ -197,3 +197,93 @@ def test_runtime_use_does_not_reparse_yaml(monkeypatch, lib):
     lib.compose(["nginx", "wordpress"])
     run_fixture(lib, "wordpress/basic")
     assert calls["n"] == 0, "runtime pack use must not parse YAML — compiled once at startup"
+
+
+# ── Consolidation refinements (pre-import review) ──
+
+# 1. CompiledPack god-object tripwire
+def test_compiled_pack_field_set_is_locked():
+    """CompiledPack unifies a lot; lock its field set so it can't silently accrete unrelated
+    responsibilities (separate concerns if this fails, like Candidate/WorldState)."""
+    fields = {f.name for f in dc.fields(CompiledPack)}
+    assert fields == {
+        "id", "source", "aliases", "lineage", "fingerprints", "rule", "capabilities",
+        "endpoints", "admin_paths", "confidence_priors", "priority_hints", "stopping",
+        "known_false_positives", "explanation_templates", "benchmark_fixtures",
+    }, f"CompiledPack grew/shrank: {fields}"
+
+
+# 2. Normalization layer (the flagged pre-import essential)
+def test_canonicalize_unifies_header_formatting():
+    from src.reasoning.packs.normalize import canonicalize
+    assert canonicalize("Server:nginx") == "server: nginx"
+    assert canonicalize("Server:   NGINX") == "server: nginx"
+    assert canonicalize("  X-Powered-By :  PHP/8.2 ") == "x-powered-by: php/8.2"
+
+
+def test_strip_versions_collapses_variants():
+    from src.reasoning.packs.normalize import strip_versions
+    for raw in ["Server: nginx", "Server: nginx/1.24", "Server: nginx/1.25.3 (Ubuntu)",
+                "Server:nginx (Debian)"]:
+        assert strip_versions(raw) == "server: nginx", raw
+
+
+def test_normalization_lets_one_fingerprint_match_variants(lib):
+    """A single `server: nginx` fingerprint matches versioned/oddly-spaced headers — no variant
+    explosion needed in the pack."""
+    nginx = lib.get("nginx")
+    for server in ["nginx", "nginx/1.24", "nginx/1.25.3 (Ubuntu)"]:
+        res = evaluate_pack(nginx, {"headers": {"Server": server}, "cookies": [], "body": ""})
+        assert res.detected, f"normalization should let nginx match {server!r}"
+
+
+# 3. Calibration is an interchangeable policy
+def test_calibration_policy_is_swappable():
+    from src.reasoning.packs.calibration import (
+        FalsePositiveAwareCalibration, MultiplicativeCalibration,
+    )
+    from src.reasoning.packs.compiler import PackCompiler
+    src = "src/reasoning/packs/library"
+    lib_mult = PackCompiler().compile_dir(src)            # default multiplicative
+    lib_mult._calibration = MultiplicativeCalibration()
+    lib_fp = PackCompiler().compile_dir(src)
+    lib_fp._calibration = FalsePositiveAwareCalibration()
+
+    nginx_m = lib_mult.effective_confidence(lib_mult.get("nginx"), 1.0)   # 1 × 0.85
+    nginx_f = lib_fp.effective_confidence(lib_fp.get("nginx"), 1.0)       # 1 × 0.85 × (1 − 0.05)
+    assert nginx_m == 0.85
+    assert nginx_f < nginx_m            # fp-aware policy discounts further; formula not hard-coded
+
+
+# 4. Explicit composition conflict semantics
+def test_composition_drops_conflicting_refutes(lib):
+    """A co-present technology must not refute another in the stack: composing apache + nginx must
+    NOT keep apache's `refute: server: nginx` (both are present)."""
+    apache = lib.get("apache")
+    assert "server: nginx" in apache.rule.refute          # apache alone refutes nginx
+    stack = lib.compose(["apache", "nginx"], "ap_nginx")
+    assert "server: apache" in stack.rule.confirm
+    assert "server: nginx" in stack.rule.confirm
+    # the conflicting refutes are dropped (apache↔nginx co-present)
+    assert "server: nginx" not in stack.rule.refute
+    assert "server: apache" not in stack.rule.refute
+
+
+# 5. Capability knowledge (requires/produces/cost) vs advisory order (preferred_order)
+def test_capability_separates_requirements_from_advisory_order(lib):
+    apache = lib.get("apache")
+    cap = next(c for c in apache.capabilities if c.id == "apache_investigation")
+    # knowledge: what it needs / yields
+    assert cap.requires == ("server_header",)
+    assert cap.produces == ("webserver_identified",)
+    assert cap.cost == "low"
+    # advisory: a hint, kept separate
+    assert cap.preferred_order == ("headers", "error_page")
+
+
+def test_to_capabilities_uses_requires_not_order(lib):
+    reg = lib.to_capabilities()
+    cap = reg.capabilities["apache_investigation"]
+    # required_evidence_types comes from `requires` (knowledge), not preferred_order (policy)
+    assert cap.required_evidence_types == ("server_header",)
+    assert "webserver_identified" in cap.produces

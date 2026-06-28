@@ -50,9 +50,12 @@ def _lower_tuple(x) -> tuple:
 class PackLibrary:
     """The compiled catalog: id/alias lookup + adapters into the engine's existing systems."""
 
-    def __init__(self, packs: dict[str, CompiledPack], sources: dict[str, KnowledgeSource]) -> None:
+    def __init__(self, packs: dict[str, CompiledPack], sources: dict[str, KnowledgeSource],
+                 calibration=None) -> None:
+        from src.reasoning.packs.calibration import MultiplicativeCalibration  # noqa: PLC0415
         self._packs = packs
         self._sources = sources
+        self._calibration = calibration or MultiplicativeCalibration()
         self._by_alias: dict[str, str] = {}
         for pid, pack in packs.items():
             for name in pack.names():
@@ -77,8 +80,10 @@ class PackLibrary:
         return self._sources.get(pack.source, MANUAL_SOURCE)
 
     def effective_confidence(self, pack: CompiledPack, base_confidence: float = 1.0) -> float:
-        """fingerprint confidence × source reliability — so imported rules aren't trusted equally."""
-        return round(max(0.0, min(1.0, base_confidence)) * self.source_of(pack).confidence, 4)
+        """Calibrate a fingerprint's confidence by source reliability via the swappable
+        CalibrationPolicy — so imported rules aren't trusted equally and the formula isn't
+        hard-coded into callers."""
+        return self._calibration.calibrate(base_confidence, self.source_of(pack))
 
     # ── adapters into existing engine systems (additive; nothing is rewired by force) ──
     def to_inference_rules(self) -> dict[str, Rule]:
@@ -91,10 +96,12 @@ class PackLibrary:
         reg = CapabilityRegistry()
         for p in self._packs.values():
             for cap in p.capabilities:
+                # `requires` (knowledge) drives the capability's evidence needs — NOT preferred_order
+                # (which is an advisory scheduling hint and flows through priority_hints()).
                 reg.register(Capability(
                     id=cap.id, name=cap.id.replace("_", " ").title(),
-                    produces=("identify_framework",),
-                    required_evidence_types=tuple(cap.preferred_order),
+                    produces=tuple(cap.produces) or ("identify_framework",),
+                    required_evidence_types=tuple(cap.requires),
                     expected_information_gain=cap.expected_information_gain,
                     implemented_by_playbooks=()))
         return reg
@@ -113,12 +120,19 @@ class PackLibrary:
     # ── composition ──
     def compose(self, ids: list[str], composed_id: str | None = None) -> CompiledPack:
         """Merge independent packs (e.g. apache + php + wordpress + cloudflare) into one detection
-        view — additive, no inheritance. Avoids the exponential stack explosion."""
+        view for a co-present stack. Explicit semantics:
+          • fingerprints + confirm markers + endpoints: UNION (deduped, order-preserving).
+          • refute markers: a member may NOT refute a technology that is also in the stack, so any
+            refute that matches another member's confirm marker is DROPPED (resolves the
+            "nginx refutes apache" vs "apache present" conflict).
+          • confidence_priors / explanation_templates: later member wins on key clash (left→right).
+        """
         members = [self.get(i) for i in ids]
         missing = [i for i, m in zip(ids, members) if m is None]
         if missing:
             raise KeyError(f"compose: unknown pack(s) {missing}")
-        return _merge_packs(members, result_id=composed_id or "+".join(ids), source="composed")
+        return _merge_packs(members, result_id=composed_id or "+".join(ids), source="composed",
+                            resolve_refute_conflicts=True)
 
 
 class PackCompiler:
@@ -202,6 +216,9 @@ class PackCompiler:
         caps = list(base.capabilities) + [
             PackCapability(id=c["id"],
                            expected_information_gain=float(c.get("expected_information_gain", 1.0)),
+                           requires=_tuple(c.get("requires")),
+                           produces=_tuple(c.get("produces")),
+                           cost=c.get("cost", "medium"),
                            preferred_order=_tuple(c.get("preferred_order")),
                            fallback=_tuple(c.get("fallback")))
             for c in (data.get("capabilities") or [])]
@@ -239,8 +256,13 @@ def _dedup(items: tuple) -> tuple:
     return tuple(out)
 
 
-def _merge_packs(packs: list[CompiledPack], *, result_id: str, source: str) -> CompiledPack:
-    """Additive merge of several compiled packs (inheritance base or composition)."""
+def _merge_packs(packs: list[CompiledPack], *, result_id: str, source: str,
+                 resolve_refute_conflicts: bool = False) -> CompiledPack:
+    """Additive merge of several compiled packs (inheritance base or composition).
+
+    When `resolve_refute_conflicts` (composition), drop any refute marker that matches a co-present
+    member's confirm marker — a technology in the stack must not refute another technology in it.
+    """
     if not packs:
         return CompiledPack(id=result_id, source=source)
     fp = Fingerprints()
@@ -260,12 +282,20 @@ def _merge_packs(packs: list[CompiledPack], *, result_id: str, source: str) -> C
         fixtures += tuple(p.benchmark_fixtures)
         priors.update(p.confidence_priors)
         expl.update(p.explanation_templates)
+
+    confirm = _dedup(confirm)
+    refute = _dedup(refute)
+    if resolve_refute_conflicts:
+        # A refute marker conflicts if it substring-matches (either direction) a present confirm.
+        def _conflicts(r: str) -> bool:
+            return any(r in c or c in r for c in confirm)
+        refute = tuple(r for r in refute if not _conflicts(r))
+
     return CompiledPack(
         id=result_id, source=source,
         lineage=tuple(p.id for p in packs),
         fingerprints=fp,
-        rule=Rule(name=result_id, confirm=_dedup(confirm), refute=_dedup(refute),
-                  contradiction=_dedup(contra)),
+        rule=Rule(name=result_id, confirm=confirm, refute=refute, contradiction=_dedup(contra)),
         capabilities=_dedup(caps), endpoints=_dedup(endpoints), admin_paths=_dedup(admin),
         confidence_priors=priors, priority_hints=_dedup(hints),
         known_false_positives=_dedup(fps_neg), explanation_templates=expl,

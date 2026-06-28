@@ -1,0 +1,28 @@
+id: apache
+source: wappalyzer
+aliases: [apache-httpd, httpd]
+
+fingerprints:
+  headers:
+    - "server: apache"
+
+rule:
+  confirm:
+    - "server: apache"
+  refute:
+    - "server: nginx"
+    - "server: microsoft-iis"
+
+capabilities:
+  - id: apache_investigation
+    expected_information_gain: 2.0
+    requires: [server_header]
+    produces: [webserver_identified]
+    cost: low
+    preferred_order: [headers, error_page]
+
+priority_hints: [headers, body]
+
+stopping_condition:
+  confidence_goal: 0.80
+  max_probes: 8

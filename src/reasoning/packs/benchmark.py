@@ -16,7 +16,10 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.reasoning.packs.normalize import Normalizer
 from src.reasoning.packs.schema import CompiledPack
+
+_NORMALIZER = Normalizer()
 
 
 @dataclass
@@ -31,22 +34,19 @@ class DetectionResult:
         return bool(self.matched_markers)
 
 
-def _response_blob(response: dict) -> tuple[str, str, str, str]:
-    """(headers_blob, cookies_blob, body_blob, favicon) — lower-cased for substring matching."""
-    headers = response.get("headers") or {}
-    if isinstance(headers, dict):
-        headers_blob = " ".join(f"{k}: {v}" for k, v in headers.items()).lower()
-    else:
-        headers_blob = str(headers).lower()
-    cookies = response.get("cookies") or []
-    cookies_blob = " ".join(map(str, cookies)).lower() if isinstance(cookies, list) else str(cookies).lower()
-    body_blob = str(response.get("body", "")).lower()
+def _response_blob(response: dict, normalizer: Normalizer = _NORMALIZER) -> tuple[str, str, str, str]:
+    """(headers, cookies, body, favicon) blobs, CANONICALIZED so fingerprints need not enumerate
+    formatting/version variants. See packs/normalize.py."""
+    headers_blob = normalizer.header_blob(response.get("headers") or {})
+    cookies_blob = normalizer.cookie_blob(response.get("cookies") or [])
+    body_blob = normalizer.text_blob(response.get("body", ""))
     favicon = str(response.get("favicon_hash", ""))
     return headers_blob, cookies_blob, body_blob, favicon
 
 
 def evaluate_pack(pack: CompiledPack, response: dict) -> DetectionResult:
-    """Match a pack's fingerprints against a recorded response. Pure, offline, deterministic."""
+    """Match a pack's fingerprints against a recorded response. Pure, offline, deterministic.
+    Observations are normalized before matching (formatting + version variants collapse)."""
     headers_blob, cookies_blob, body_blob, favicon = _response_blob(response)
     res = DetectionResult(pack_id=pack.id)
     fp = pack.fingerprints
