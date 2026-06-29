@@ -13,6 +13,13 @@ from src.reasoning.actions import (
     Predicate,
     RiskTier,
 )
+from src.reasoning.action_gate import (
+    ActionGate,
+    AuditLog,
+    AuthorizationToken,
+    GateContext,
+    GateDecision,
+)
 from src.reasoning.candidate import Candidate, RankedCandidate
 from src.reasoning.capability_registry import Capability, CapabilityRegistry, open_question_tags
 from src.reasoning.investigation_memory import InvestigationMemory, StrategyAttempt
@@ -129,9 +136,14 @@ from src.reasoning.trace import ExecutionResult, TraceMetadata, TraceStep
 __all__ = [
     "Action",
     "ActionDescriptor",
+    "ActionGate",
     "ActionLibrary",
     "ActionSemantics",
+    "AuditLog",
+    "AuthorizationToken",
     "Belief",
+    "GateContext",
+    "GateDecision",
     "GoalPlanner",
     "InvestigationMemory",
     "InvestigationPlan",
