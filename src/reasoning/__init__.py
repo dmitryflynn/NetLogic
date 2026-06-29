@@ -13,9 +13,11 @@ from src.reasoning.change_detection import (
     DeltaTyper,
     ObservationDiffer,
     ObservationSnapshot,
+    ReinvestigationSeed,
     ScanDelta,
     delta_report,
     diff_states,
+    seed_from_delta,
 )
 from src.reasoning.compiler import Compiler
 from src.reasoning.cross_host import (
@@ -125,6 +127,7 @@ __all__ = [
     "EnvironmentGraph",
     "ObservationDiffer",
     "ObservationSnapshot",
+    "ReinvestigationSeed",
     "ScanDelta",
     "FastPolicy",
     "GreedyPolicy",
@@ -199,6 +202,7 @@ __all__ = [
     "delta_report",
     "diff_states",
     "dispatch_hosts",
+    "seed_from_delta",
     "expand_world",
     "host_expansion_candidates",
     "make_host_candidate",
