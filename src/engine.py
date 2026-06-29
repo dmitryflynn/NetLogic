@@ -557,6 +557,24 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
     except Exception:  # noqa: BLE001 — reasoning must never affect a scan
         pass
 
+    # ── Change detection (Phase 7) — opt-in via --since-last, fail-soft ──
+    # Diff this scan's observations against the prior persisted snapshot for the target. Produces
+    # the delta + re-investigation seed; never affects the scan that produced the current state.
+    if _rs is not None and _g(args, "since_last", False):
+        try:
+            from src.reasoning.change_detection import (  # noqa: PLC0415
+                delta_report, diff_states, seed_from_delta,
+            )
+            from api.storage.reasoning_store import reasoning_store  # noqa: PLC0415
+            prior = reasoning_store.latest_for_target(_g(args, "org_id", "") or "", target)
+            if prior:
+                delta = diff_states(prior, _rs)
+                art["change_delta"] = delta.to_dict()
+                art["change_seed"] = seed_from_delta(delta).to_dict()
+                art["change_report"] = delta_report(delta)
+        except Exception:  # noqa: BLE001 — change detection never affects a scan
+            pass
+
     return art
 
 

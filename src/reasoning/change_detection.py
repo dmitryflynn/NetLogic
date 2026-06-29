@@ -310,7 +310,7 @@ class DeltaAnalyzer:
 import re as _re
 
 _SEV_BOOST = {"critical": 1.0, "high": 0.7, "medium": 0.5, "low": 0.3, "info": 0.1, "none": 0.0}
-_CVE_RE = _re.compile(r"cve-\d{4}-\d{3,7}", _re.I)
+_CVE_RE = _re.compile(r"cve-\d{4}-\d{1,7}", _re.I)
 
 
 def _tag_for(event: DeltaEvent) -> str:

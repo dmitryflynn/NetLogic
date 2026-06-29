@@ -72,6 +72,10 @@ def parse_args():
                    help="Enable multi-host world modeling: discover in-scope neighbors from "
                         "evidence and reason over each as its own host (requires --reason; "
                         "every probe stays scope-gated). Off by default.")
+    p.add_argument("--since-last", action="store_true",
+                   help="Change detection: diff this scan's observations against the prior "
+                        "snapshot for the target and report what changed (new ports/CVEs/hosts, "
+                        "version bumps). No-op on the first scan. Off by default.")
     # ── AI analysis ──
     p.add_argument("--ai",        action="store_true",
                    help="Run AI-powered analysis of findings (needs an API key)")
