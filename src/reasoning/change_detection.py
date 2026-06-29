@@ -300,6 +300,77 @@ class DeltaAnalyzer:
         return DeltaAssessment(severity_counts=counts, top_severity=top)
 
 
+# ── Re-investigation seeding (Phase 7b) — deltas warm-start the next scan ────────────
+#
+# Isolation invariant (Phase 5 carried forward): seeding influences ORDERING + objective selection
+# ONLY. It writes no confidence, beliefs, hypotheses, or evidence — it is a pure function from a
+# factual delta to ordering hints + objective-name seeds. History/deltas own priority; Evidence
+# owns beliefs.
+
+import re as _re
+
+_SEV_BOOST = {"critical": 1.0, "high": 0.7, "medium": 0.5, "low": 0.3, "info": 0.1, "none": 0.0}
+_CVE_RE = _re.compile(r"cve-\d{4}-\d{3,7}", _re.I)
+
+
+def _tag_for(event: DeltaEvent) -> str:
+    """A matching tag for the next scan's candidate ranking (host / cve id / product token)."""
+    if event.type in ("new_host",) and event.host:
+        return event.host
+    if event.type in ("new_cve", "cve_resolved"):
+        m = _CVE_RE.search(event.detail or "")
+        if m:
+            return m.group(0).lower()
+    if event.type in ("tech_added", "tech_removed", "version_changed"):
+        tok = _re.sub(r"[^a-z0-9 ]", " ", (event.detail or "").lower()).split()
+        if tok:
+            return tok[0]
+    return event.host or ""
+
+
+def _objective_for(event: DeltaEvent) -> Optional[str]:
+    if event.type == "new_host" and event.host:
+        return f"identify_framework:{event.host}"
+    if event.type == "new_cve":
+        m = _CVE_RE.search(event.detail or "")
+        if m:
+            return f"verify_cve:{m.group(0).lower()}"
+    if event.type == "new_port" and event.host:
+        return f"investigate_service:{event.host}"
+    if event.type == "tech_added" and event.host:
+        return f"assess_tech:{event.host}"
+    return None
+
+
+@dataclass
+class ReinvestigationSeed:
+    """Pure data the next scan consumes: ordering hints + objective-name seeds. Mutates nothing."""
+    hints: list = field(default_factory=list)            # list[PriorityHint]
+    objectives: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {"hints": [{"tag": h.tag, "boost": h.boost, "reason": h.reason} for h in self.hints],
+                "objectives": list(self.objectives)}
+
+
+def seed_from_delta(delta: ScanDelta, analyzer: DeltaAnalyzer | None = None) -> ReinvestigationSeed:
+    """Turn a factual delta into re-investigation priors: a new CVE/host is high-impact and should
+    be looked at first next time. Output is ONLY PriorityHints + objective names — never state."""
+    from src.reasoning.learned_patterns import PriorityHint  # noqa: PLC0415
+    analyzer = analyzer or DeltaAnalyzer()
+    hints, objectives, seen_obj = [], [], set()
+    for e in delta.all_events():
+        boost = _SEV_BOOST.get(analyzer.severity_of(e), 0.1)
+        tag = _tag_for(e)
+        if tag and boost > 0:
+            hints.append(PriorityHint(tag=tag, boost=round(boost, 3), reason=f"change:{e.type}"))
+        obj = _objective_for(e)
+        if obj and obj not in seen_obj:
+            seen_obj.add(obj)
+            objectives.append(obj)
+    return ReinvestigationSeed(hints=hints, objectives=objectives)
+
+
 # ── Reporting ────────────────────────────────────────────────────────────────────────
 
 def delta_report(delta: ScanDelta, analyzer: DeltaAnalyzer | None = None) -> str:
