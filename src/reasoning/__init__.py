@@ -7,6 +7,16 @@ from src.reasoning.budget import BudgetManager
 from src.reasoning.builder import build_reasoning_state, refresh_beliefs, safe_build_reasoning_state
 from src.reasoning.candidate import Candidate, RankedCandidate
 from src.reasoning.capability_registry import Capability, CapabilityRegistry, open_question_tags
+from src.reasoning.change_detection import (
+    DeltaAnalyzer,
+    DeltaEvent,
+    DeltaTyper,
+    ObservationDiffer,
+    ObservationSnapshot,
+    ScanDelta,
+    delta_report,
+    diff_states,
+)
 from src.reasoning.compiler import Compiler
 from src.reasoning.cross_host import (
     AuthDecision,
@@ -108,8 +118,14 @@ __all__ = [
     "CrossHostGraph",
     "DecisionPolicy",
     "DefaultDecisionPolicy",
+    "DeltaAnalyzer",
+    "DeltaEvent",
+    "DeltaTyper",
     "Dependency",
     "EnvironmentGraph",
+    "ObservationDiffer",
+    "ObservationSnapshot",
+    "ScanDelta",
     "FastPolicy",
     "GreedyPolicy",
     "HostManager",
@@ -180,6 +196,8 @@ __all__ = [
     "apply_decay",
     "build_reasoning_state",
     "default_registry",
+    "delta_report",
+    "diff_states",
     "dispatch_hosts",
     "expand_world",
     "host_expansion_candidates",
