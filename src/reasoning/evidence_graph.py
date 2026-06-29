@@ -141,6 +141,12 @@ class EvidenceGraph:
             return list(self._nodes.values())
         return [n for n in self._nodes.values() if n.kind == kind]
 
+    def snapshot(self):
+        """The immutable observation set of this graph (Phase 7 change detection). The graph owns
+        its own traversal; callers diff snapshots rather than walking nodes themselves."""
+        from src.reasoning.change_detection import ObservationSnapshot  # noqa: PLC0415 — avoid cycle
+        return ObservationSnapshot.from_graph(self)
+
     # ── Edges (deduplicated by (type, source, target)) ────────────────────────────
     def add_edge(self, type: str, source_id: str, target_id: str, *, evidence: str = "",
                  source_probe: str = "passive", dependencies: Optional[Iterable] = None,
