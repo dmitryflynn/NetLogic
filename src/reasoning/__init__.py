@@ -5,8 +5,30 @@ from __future__ import annotations
 
 from src.reasoning.budget import BudgetManager
 from src.reasoning.builder import build_reasoning_state, refresh_beliefs, safe_build_reasoning_state
+from src.reasoning.actions import (
+    Action,
+    ActionDescriptor,
+    ActionLibrary,
+    ActionSemantics,
+    Predicate,
+    RiskTier,
+)
 from src.reasoning.candidate import Candidate, RankedCandidate
 from src.reasoning.capability_registry import Capability, CapabilityRegistry, open_question_tags
+from src.reasoning.investigation_memory import InvestigationMemory, StrategyAttempt
+from src.reasoning.investigation_planner import (
+    GoalPlanner,
+    InvestigationPlan,
+    PlanCompiler,
+    PlanEvaluator,
+    PlanExplainer,
+    PlannedStep,
+)
+from src.reasoning.strategies import (
+    InvestigationTemplate,
+    Strategy,
+    StrategyRegistry,
+)
 from src.reasoning.change_detection import (
     DeltaAnalyzer,
     DeltaEvent,
@@ -105,7 +127,24 @@ from src.reasoning.strategy import StrategyManager
 from src.reasoning.trace import ExecutionResult, TraceMetadata, TraceStep
 
 __all__ = [
+    "Action",
+    "ActionDescriptor",
+    "ActionLibrary",
+    "ActionSemantics",
     "Belief",
+    "GoalPlanner",
+    "InvestigationMemory",
+    "InvestigationPlan",
+    "InvestigationTemplate",
+    "PlanCompiler",
+    "PlanEvaluator",
+    "PlanExplainer",
+    "PlannedStep",
+    "Predicate",
+    "RiskTier",
+    "Strategy",
+    "StrategyAttempt",
+    "StrategyRegistry",
     "BudgetManager",
     "BudgetPolicy",
     "Candidate",

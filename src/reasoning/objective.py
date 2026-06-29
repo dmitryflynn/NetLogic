@@ -5,6 +5,30 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 
+@dataclass(frozen=True)
+class ObjectiveSource:
+    """Provenance for WHY an objective exists (Phase 8). Mirrors KnowledgeSource.
+
+    As objectives come from many producers (generators, deltas, the planner, AI hypotheses, the
+    operator, recurring scans), this answers "why are we investigating this?".
+    """
+    generated_by: str = "generator"   # generator | delta | planner | ai_hypothesis | operator | recurring
+    reason: str = ""
+    confidence: float = 1.0
+    timestamp: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict:
+        return {"generated_by": self.generated_by, "reason": self.reason,
+                "confidence": self.confidence, "timestamp": self.timestamp}
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "ObjectiveSource":
+        d = d or {}
+        return cls(generated_by=d.get("generated_by", "generator"), reason=d.get("reason", ""),
+                   confidence=float(d.get("confidence", 1.0)),
+                   timestamp=float(d.get("timestamp", time.time())))
+
+
 @dataclass
 class Objective:
     name: str
@@ -16,12 +40,26 @@ class Objective:
     host_scope: Literal["per-host", "environment"] = "per-host"
     created_at: float = field(default_factory=time.time)
     evidence_refs: list[str] = field(default_factory=list)
+    # ── Phase 8: goal-directed planning fields (all optional; existing objectives unaffected) ──
+    goal_predicate: list[dict] = field(default_factory=list)   # serialized Predicate specs (AND-ed)
+    constraints: dict = field(default_factory=dict)            # planner constraints (e.g. max_steps)
+    risk_budget: str = "read_only"                             # max risk tier the planner may use
+    source: ObjectiveSource = field(default_factory=ObjectiveSource)
+
+    def predicate_satisfied(self, facts: dict) -> bool:
+        """True iff the goal predicate holds against `facts`. No predicate → falls back to `satisfied`."""
+        if not self.goal_predicate:
+            return self.satisfied
+        from src.reasoning.actions import Predicate, satisfied  # noqa: PLC0415
+        return satisfied([Predicate.from_spec(p) for p in self.goal_predicate], facts)
 
     def to_dict(self) -> dict:
         return {"name": self.name, "priority": self.priority, "satisfied": self.satisfied,
                 "dependencies": list(self.dependencies), "produced_by": self.produced_by,
                 "consumed_by": list(self.consumed_by), "host_scope": self.host_scope,
-                "created_at": self.created_at, "evidence_refs": list(self.evidence_refs)}
+                "created_at": self.created_at, "evidence_refs": list(self.evidence_refs),
+                "goal_predicate": list(self.goal_predicate), "constraints": dict(self.constraints),
+                "risk_budget": self.risk_budget, "source": self.source.to_dict()}
 
     @classmethod
     def from_dict(cls, data: dict) -> Objective:
@@ -32,7 +70,11 @@ class Objective:
                    consumed_by=list(data.get("consumed_by", [])),
                    host_scope=data.get("host_scope", "per-host"),
                    created_at=float(data.get("created_at", time.time())),
-                   evidence_refs=list(data.get("evidence_refs", [])))
+                   evidence_refs=list(data.get("evidence_refs", [])),
+                   goal_predicate=list(data.get("goal_predicate", [])),
+                   constraints=dict(data.get("constraints", {})),
+                   risk_budget=data.get("risk_budget", "read_only"),
+                   source=ObjectiveSource.from_dict(data.get("source")))
 
 
 class ObjectiveDAG:
