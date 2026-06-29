@@ -101,8 +101,9 @@ from src.reasoning.multi_host import (
     host_expansion_candidates,
     make_host_candidate,
 )
-from src.reasoning.objective import Objective, ObjectiveDAG
+from src.reasoning.objective import Objective, ObjectiveDAG, ObjectiveSource
 from src.reasoning.observation import Observation
+from src.reasoning.postcondition import ExecutionOutcome, assert_effects, proof_observation
 from src.reasoning.playbooks import Playbook, PlaybookInstantiator, PlaybookLoader, PlaybookRegistry
 from src.reasoning.primitive_registry import Primitive, PrimitiveRegistry, default_registry
 from src.reasoning.provenance import (
@@ -209,11 +210,15 @@ __all__ = [
     "PatternRecall",
     "PatternValidator",
     "PriorityHint",
+    "ExecutionOutcome",
     "Objective",
     "ObjectiveDAG",
+    "ObjectiveSource",
     "Observation",
     "Playbook",
     "PlaybookInstantiator",
+    "assert_effects",
+    "proof_observation",
     "PlaybookLoader",
     "PlaybookRegistry",
     "PlannerFeedback",
