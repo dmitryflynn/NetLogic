@@ -67,7 +67,7 @@ def test_action_split_descriptor_and_semantics():
     assert a.risk_tier is RiskTier.SAFE_ACTIVE
     # descriptor carries identity/risk/refs; semantics carries pre/effects (separate concerns)
     desc_fields = {f.name for f in dc.fields(ActionDescriptor)}
-    assert desc_fields == {"id", "name", "technique_ref", "risk_tier", "references"}
+    assert desc_fields == {"id", "name", "technique_ref", "risk_tier", "reversible", "references"}
     sem_fields = {f.name for f in dc.fields(ActionSemantics)}
     assert sem_fields == {"preconditions", "effects"}
 

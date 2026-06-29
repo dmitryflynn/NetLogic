@@ -126,11 +126,13 @@ class ActionDescriptor:
     name: str = ""
     technique_ref: str = ""              # e.g. an ATT&CK / technique id
     risk_tier: RiskTier = RiskTier.READ_ONLY
+    reversible: bool = True              # irreversible actions require an extra explicit gate flag
     references: tuple[str, ...] = ()      # CVE/CWE/URL citations
 
     def to_dict(self) -> dict:
         return {"id": self.id, "name": self.name, "technique_ref": self.technique_ref,
-                "risk_tier": self.risk_tier.name.lower(), "references": list(self.references)}
+                "risk_tier": self.risk_tier.name.lower(), "reversible": self.reversible,
+                "references": list(self.references)}
 
 
 @dataclass(frozen=True)
@@ -184,6 +186,7 @@ class Action:
                 id=desc["id"], name=desc.get("name", ""),
                 technique_ref=desc.get("technique_ref", ""),
                 risk_tier=RiskTier.parse(desc.get("risk_tier", "read_only")),
+                reversible=bool(desc.get("reversible", True)),
                 references=tuple(desc.get("references", []))),
             semantics=ActionSemantics(
                 preconditions=tuple(Predicate.from_spec(p) for p in d.get("preconditions", [])),
