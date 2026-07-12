@@ -1,11 +1,9 @@
 """
 NetLogic API — FastAPI application entry point.
 
-Run with:
-    uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-
-Or via Docker:
-    docker build -t netlogic-api . && docker run -p 8000:8000 netlogic-api
+Launched by `netlogic --gui`, which serves this app (API + the built React
+dashboard) and opens the browser. That is the supported way to run the web app;
+this module is not meant to be started directly.
 
 Interactive docs available at http://localhost:8000/docs
 """
