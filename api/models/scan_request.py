@@ -47,6 +47,44 @@ class ScanRequest(BaseModel):
     do_takeover: bool = Field(False, description="Subdomain takeover detection.")
     do_full: bool = Field(False, description="Enable ALL scan modules (overrides individual flags).")
 
+    # ── Reasoning engine phases ─────────────────────────────────────────────
+    do_reason: bool = Field(False, description="Adaptive reasoning loop (observe→reason→act). Deterministic; augmented by AI when configured.")
+    do_since_last: bool = Field(False, description="Change detection: diff against prior snapshot for target and report what changed (new ports/CVEs/versions).")
+    do_multi_host: bool = Field(False, description="Multi-host world modeling: discover in-scope neighbors from evidence and reason over each host. Implies --reason.")
+    do_active_validate: bool = Field(False, description="Active validation: confirm reasoning hypotheses with non-destructive, scope-gated, audited safe_active checks (intrusive/exploit stay denied). Requires reasoning; authorized targets only.")
+    do_ai_driven: bool = Field(False, description="AI-driven adjudication: let the AI resolve findings the deterministic engine can't verify (version-matched CVEs with no sensor) — ruled-out / possibly-exploitable / needs-active-check, with rationale recorded. Requires reasoning + an AI key.")
+    do_ai_agent: bool = Field(
+        False,
+        description=(
+            "AI investigation agent: after baseline sensors, the AI chooses tools "
+            "(HTTP/TCP/tech confirm/chains) to verify leads and build attack chains. "
+            "Requires an AI key. Off by default."
+        ),
+    )
+    agent_depth: bool = Field(
+        False,
+        description=(
+            "Depth mode for the AI investigation agent: higher step/request budgets, "
+            "prompt prioritizes CVE leads and attack chains, early stop blocked until "
+            "enough high-value tool work is done. Implies do_ai_agent."
+        ),
+    )
+    allow_crash_probes: bool = Field(
+        False,
+        description=(
+            "Allow curated crash/DoS verification probes (e.g. http.sys CVE checks). "
+            "MAY disrupt or crash the target. Requires do_ai_agent. Off by default."
+        ),
+    )
+    agent_max_steps: int = Field(
+        12, ge=1, le=40,
+        description="Max AI agent reasoning turns (depth mode default floor is 24).",
+    )
+    agent_max_requests: int = Field(
+        40, ge=1, le=150,
+        description="Max network tool calls by the AI agent (depth mode default floor is 80).",
+    )
+
     # ── AI analysis + authenticated scanning ─────────────────────────────────
     do_ai: bool = Field(False, description="AI-powered analysis + attack-chain reasoning; auto-enables deep detection.")
     ai_provider: str = Field(

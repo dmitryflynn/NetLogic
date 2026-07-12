@@ -49,6 +49,14 @@ def run_streaming_scan(target: str, ports: list, timeout: float,
                        ai_key: str = "", ai_provider: str = "", ai_model: str = "",
                        ai_base_url: str = "", org_id: str = "",
                        deep_probe: bool = False,
+                       do_reason: bool = False, do_since_last: bool = False,
+                       do_multi_host: bool = False, do_active_validate: bool = False,
+                       do_ai_driven: bool = False,
+                       do_ai_agent: bool = False,
+                       agent_depth: bool = False,
+                       allow_crash_probes: bool = False,
+                       agent_max_steps: int = 12,
+                       agent_max_requests: int = 40,
                        emit_callback=None,
                        **extra):
     """Execute a scan and stream results as JSON events via the shared engine.
@@ -74,6 +82,12 @@ def run_streaming_scan(target: str, ports: list, timeout: float,
                 ai_key=ai_key, ai_provider=ai_provider, ai_model=ai_model, ai_base_url=ai_base_url,
                 org_id=org_id,
                 deep_probe=deep_probe,
+                reason=do_reason, since_last=do_since_last, multi_host=do_multi_host,
+                active_validate=do_active_validate, ai_driven=do_ai_driven,
+                ai_agent=do_ai_agent or agent_depth,
+                agent_depth=agent_depth,
+                allow_crash_probes=allow_crash_probes,
+                agent_max_steps=agent_max_steps, agent_max_requests=agent_max_requests,
                 no_diff=False, no_traceroute=False, out=".",
             )
             if deep_probe:
@@ -82,7 +96,17 @@ def run_streaming_scan(target: str, ports: list, timeout: float,
             else:
                 run_scan(target, ports, args, emit=emit)
     except Exception as e:
-        emit("error", message=str(e))
+        # Cooperative cancel from the API layer (JobCancelled raised inside the
+        # emit callback) must propagate — converting it to an "error" event would
+        # re-enter the cancelled callback and double-raise / log a false failure.
+        if type(e).__name__ == "JobCancelled":
+            raise
+        try:
+            emit("error", message=str(e))
+        except Exception:
+            # Secondary failure while reporting the primary error (e.g. cancel
+            # raced mid-emit). Don't mask the original exception.
+            pass
     finally:
         _tls.emit_callback = None
 
