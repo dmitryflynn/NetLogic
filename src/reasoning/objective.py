@@ -45,6 +45,10 @@ class Objective:
     constraints: dict = field(default_factory=dict)            # planner constraints (e.g. max_steps)
     risk_budget: str = "read_only"                             # max risk tier the planner may use
     source: ObjectiveSource = field(default_factory=ObjectiveSource)
+    # ── Track C / C2: evidence types this objective needs gathered (EvidenceType values). When set,
+    # it overrides the static prefix→evidence table so an AI-invented objective becomes investigable
+    # by the ordinary Phase-3 loop (generate_intents reads it). Empty ⇒ fall back to the static map. ──
+    desired_evidence: tuple[str, ...] = ()
 
     def predicate_satisfied(self, facts: dict) -> bool:
         """True iff the goal predicate holds against `facts`. No predicate → falls back to `satisfied`."""
@@ -59,7 +63,8 @@ class Objective:
                 "consumed_by": list(self.consumed_by), "host_scope": self.host_scope,
                 "created_at": self.created_at, "evidence_refs": list(self.evidence_refs),
                 "goal_predicate": list(self.goal_predicate), "constraints": dict(self.constraints),
-                "risk_budget": self.risk_budget, "source": self.source.to_dict()}
+                "risk_budget": self.risk_budget, "source": self.source.to_dict(),
+                "desired_evidence": list(self.desired_evidence)}
 
     @classmethod
     def from_dict(cls, data: dict) -> Objective:
@@ -74,7 +79,8 @@ class Objective:
                    goal_predicate=list(data.get("goal_predicate", [])),
                    constraints=dict(data.get("constraints", {})),
                    risk_budget=data.get("risk_budget", "read_only"),
-                   source=ObjectiveSource.from_dict(data.get("source")))
+                   source=ObjectiveSource.from_dict(data.get("source")),
+                   desired_evidence=tuple(data.get("desired_evidence", []) or ()))
 
 
 class ObjectiveDAG:

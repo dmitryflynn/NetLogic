@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import traceback
-from typing import Any, Callable, Protocol
+from typing import Callable, Protocol
 
 from src.reasoning.probe_plan import ProbePlan, ProbePlanGraph, ProbeSpec, PlanWalker
 from src.reasoning.trace import ExecutionResult, TraceMetadata, TraceStep

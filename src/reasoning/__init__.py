@@ -21,7 +21,7 @@ from src.reasoning.action_gate import (
     GateDecision,
 )
 from src.reasoning.candidate import Candidate, RankedCandidate
-from src.reasoning.capability_registry import Capability, CapabilityRegistry, open_question_tags
+from src.reasoning.capability_registry import Capability, CapabilityRegistry
 from src.reasoning.investigation_memory import InvestigationMemory, StrategyAttempt
 from src.reasoning.investigation_planner import (
     GoalPlanner,
@@ -87,7 +87,6 @@ from src.reasoning.investigation_graph import (
     InvestigationGraph,
 )
 from src.reasoning.learned_patterns import (
-    CandidatePattern,
     LearnedPattern,
     PatternExtractor,
     PatternRecall,

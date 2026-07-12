@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
 
 from src.reasoning.intent import Intent, IntentConstraints
 from src.reasoning.investigation_graph import (

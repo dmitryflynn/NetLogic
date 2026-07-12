@@ -35,7 +35,10 @@ class ReconDirector:
                  registry: list[SensorStep], *, has_ai_key: bool, ai_completer: Any | None = None,
                  refresh: Optional[Callable[[ReasoningState, dict], None]] = None,
                  persist: Optional[Callable[[ReasoningState], None]] = None,
-                 executor: Any | None = None) -> None:
+                 executor: Any | None = None, ai_driven: bool = False) -> None:
+        # ai_driven: give the AI decision authority over findings the deterministic engine can't
+        # verify (capability gaps). Default OFF ⇒ the AI only ever proposes ⇒ byte-identical baseline.
+        self.ai_driven = ai_driven
         self.scheduler = scheduler
         self.strategy = strategy
         self.budget = budget
@@ -56,7 +59,7 @@ class ReconDirector:
         try:
             from src.reasoning import (
                 Compiler, ExecutionKernel, ExecutionPlanner, PrimitiveRegistry,
-                ProbePlanGraph, Reflect, default_registry,
+                Reflect, default_registry,
             )
             from src.reasoning.execution_kernel import (
                 validate_budget, validate_dedup, validate_depth,
@@ -82,6 +85,28 @@ class ReconDirector:
             self._playbook_registry = PlaybookRegistry()
             self._playbook_registry.load_from_dir()
             self._capability_registry = CapabilityRegistry()
+            # Phase 6.5: compile the Technology Pack library ONCE and fold it into the engine —
+            # pack inference rules merge with the built-in JSON rules (so fingerprinting/inference
+            # is pack-driven), and pack capabilities populate the registry. A bad/absent library is
+            # non-fatal: inference falls back to the built-in rules. Compiled once, reused per cycle.
+            self._inference_rules = None
+            try:
+                import os as _os  # noqa: PLC0415
+                from src.reasoning.inference import RuleLoader  # noqa: PLC0415
+                from src.reasoning import packs as _packs_pkg  # noqa: PLC0415
+                from src.reasoning.packs.compiler import PackCompiler  # noqa: PLC0415
+                # Absolute path to the pack library so it resolves regardless of process cwd.
+                _lib_dir = _os.path.join(_os.path.dirname(_packs_pkg.__file__), "library")
+                lib = PackCompiler().compile_dir(_lib_dir)
+                pack_rules = lib.to_inference_rules()
+                if pack_rules:
+                    self._inference_rules = {**RuleLoader.load(), **pack_rules}
+                    # The capability registry starts empty (no caller-registered caps), so adopt
+                    # the pack-derived one outright — its capabilities now drive candidate generation.
+                    self._capability_registry = lib.to_capabilities()
+                    log.info("loaded %d technology pack rule(s) into inference", len(pack_rules))
+            except Exception as exc:  # noqa: BLE001 — packs are additive; never block init
+                log.warning("technology pack load skipped (%s)", exc)
             # How many ranked playbook/capability candidates to actually instantiate per cycle.
             self._max_selected_candidates = 3
             # Phase 6c: breadth cap on multi-host expansion per scan (bounds fan-out).
@@ -107,6 +132,18 @@ class ReconDirector:
                 self._run_multi_host(state, ctx)
             except Exception as exc:  # noqa: BLE001 — multi-host must never break a single-host scan
                 log.warning("multi-host dispatch failed (%s) — primary host result kept", exc)
+
+        # Phase 8 (analysis-only): run the GoalPlanner over the generated objectives so the
+        # read-only investigation plans / attack chains are produced and surfaced. Executes nothing
+        # (the ActionGate + an absent external executor remain the only path above read-only).
+        try:
+            from src.reasoning.planning_pass import plan_investigations  # noqa: PLC0415
+            plans = plan_investigations(state)
+            state.execution.investigation_plans = plans
+            if plans:
+                ctx.emit("reasoning", {"event": "planned", "plans": len(plans)})
+        except Exception:  # noqa: BLE001 — planning must never break a scan
+            log.warning("investigation planning skipped", exc_info=True)
 
         # Integrity audit — catch state corruption immediately (fail-soft: log, never abort).
         try:
@@ -292,11 +329,19 @@ class ReconDirector:
         try:
             from src.reasoning import Intent
             from src.reasoning.investigation_graph import InvestigationGraph
-            from src.reasoning.intent import EvidenceType
 
             from src.reasoning import generators  # noqa: PLC0415
             from src.reasoning.memory import MemoryStore  # noqa: PLC0415
             generators.populate(state)                       # deterministic objectives + hypotheses
+
+            # Track C (cognitive layer): C1 proposes hypotheses (incl. novel-vuln) and C11 proposes
+            # read-only refutation objectives, verified through the deterministic proposal pipeline.
+            # Accepted proposals are SEEDED into the world HERE (in the core; the AI layer only
+            # proposes) BEFORE intents are generated, so AI-seeded objectives get evidence-gathering
+            # intents like any other. Broken/absent AI seeds nothing ⇒ deterministic baseline is
+            # byte-identical. Returns the reasoning-replay transcript (or None).
+            transcript = self._run_cognitive_layer(state, ctx)
+
             intents: list[Intent] = generators.generate_intents(state)
 
             # Phase 5 (revised): Playbooks/Capabilities as lazy Candidates. Matching is cheap;
@@ -305,14 +350,9 @@ class ReconDirector:
             # always-on baseline; selected candidates are additive.
             intents.extend(self._select_candidate_intents(state, ctx))
 
-            # Optional AI augmentation — additive only; absent a completer, nothing changes.
-            if self.ai_completer is not None:
-                try:
-                    from src.reasoning.ai_proposer import AIProposer  # noqa: PLC0415
-                    intents = intents + AIProposer(self.ai_completer).augment(state)
-                except Exception:  # noqa: BLE001
-                    pass
             if not intents:
+                if transcript is not None:
+                    state.execution.ai_transcript = transcript.to_dict()
                 return
             phase3_memory = MemoryStore()
 
@@ -326,7 +366,6 @@ class ReconDirector:
 
             exploit_obj = self.strategy.select_exploit_objective(state)
             if exploit_obj:
-                from src.reasoning.intent import StopCondition
                 obj = state.investigation.objectives.get(exploit_obj)
                 if obj:
                     ctx.emit("reasoning", {"event": "exploit", "objective": exploit_obj})
@@ -390,7 +429,8 @@ class ReconDirector:
             # (rule packs) — confirms/refutes, satisfies objectives, records contradictions.
             try:
                 from src.reasoning.inference import InferenceEngine  # noqa: PLC0415
-                inference_steps = InferenceEngine().infer(state)
+                # Use the pack-merged rule set when available (Phase 6.5); else built-in rules.
+                inference_steps = InferenceEngine(self._inference_rules).infer(state)
                 for s in inference_steps:
                     state.execution.explanations.append({
                         "decision": s.decision, "evidence_ids": list(s.evidence_refs),
@@ -407,13 +447,50 @@ class ReconDirector:
             except Exception:  # noqa: BLE001
                 pass
 
+            # Novel-vulnerability inference (Track C): deterministically REFUTE or mark LIKELY the
+            # novel hypotheses C1 invented, from the same evidence blob. Never CONFIRMS (that needs
+            # active validation). This is what turns a novel hypothesis from 'unresolved' into a real
+            # outcome — the loop the A/B benchmark showed was open.
+            try:
+                from src.reasoning.novel_inference import NovelInferenceEngine  # noqa: PLC0415
+                for s in NovelInferenceEngine().infer(state):
+                    state.execution.explanations.append({
+                        "decision": s.decision, "evidence_ids": list(s.evidence_refs),
+                        "supporting_obs": [s.rule], "confidence_delta": 0.0,
+                        "rule_applied": f"inference:{s.rule}", "ai_summary": ""})
+            except Exception:  # noqa: BLE001
+                pass
+
             # Satisfy objectives whose discriminating evidence arrived this cycle (by type;
-            # content-based satisfaction above takes precedence).
-            from src.reasoning.generators import _OBJECTIVE_EVIDENCE  # noqa: PLC0415
+            # content-based satisfaction above takes precedence). `evidence_for` honors an
+            # objective's own C2-assigned desired_evidence, so AI-invented objectives satisfy too.
+            from src.reasoning.generators import evidence_for  # noqa: PLC0415
             for obj in list(state.investigation.objectives.ready()):
-                wanted = set(_OBJECTIVE_EVIDENCE.get(obj.name.split(":", 1)[0], []))
+                wanted = set(evidence_for(obj))
                 if wanted and (wanted & succeeded_ev):
                     state.investigation.objectives.satisfy(obj.name)
+
+            # AI-driven adjudication (opt-in): the deterministic engine has now done everything it
+            # CAN. Anything still stuck at its prior (a version-matched CVE with no sensor) is where
+            # the AI takes the wheel — it decides the disposition and the core applies the verdict.
+            # This runs BEFORE the transcript resolution so adjudicated hypotheses flow into it.
+            if self.ai_driven:
+                self._run_ai_adjudication(state, ctx, transcript)
+
+            # Track C: link deterministic outcomes back to the AI proposals that seeded them, then
+            # freeze the transcript (the reasoning replay) onto the state. A seeded hypothesis the
+            # InferenceEngine resolved becomes "confirmed"; a satisfied AI-seeded objective becomes
+            # "confirmed"; everything else stays honestly "unresolved".
+            if transcript is not None:
+                resolved: dict[str, str] = {}
+                for h in state.investigation.hypotheses.all():
+                    if h.status in ("confirmed", "refuted"):
+                        resolved[h.label] = h.status
+                for obj in state.investigation.objectives.all():
+                    if obj.satisfied and obj.name not in resolved:
+                        resolved[obj.name] = "confirmed"
+                transcript.resolve_outcomes(resolved)
+                state.execution.ai_transcript = transcript.to_dict()
 
             ctx.emit("reasoning", {"event": "phase3_done",
                                     "executed": len(results),
@@ -422,36 +499,152 @@ class ReconDirector:
         except Exception as exc:
             log.warning("Phase 3 cycle failed (%s) — continuing with Phase 2 results", exc)
 
-    def _build_intents(self, state: ReasoningState) -> list[Intent]:
-        from src.reasoning.intent import Intent, IntentConstraints, StopCondition
-        intents: list[Intent] = []
-        for obj in state.investigation.objectives.ready():
-            if obj.satisfied:
+    def _run_cognitive_layer(self, state: ReasoningState, ctx: StepContext):
+        """Track C: run C1 (Hypothesis Generator) + C11 (Counterfactual Reasoner) through the
+        AICoordinator, then SEED the accepted proposals into the world. Seeding happens HERE, in
+        the deterministic core reading typed accepted proposals — the AI layer only ever proposes,
+        never mutates (isolation preserved). Returns an InvestigationTranscript, or None.
+
+        Fail-soft: absent/broken AI ⇒ no tasks ⇒ nothing seeded ⇒ byte-identical baseline."""
+        completer = self.ai_completer
+        if completer is None:
+            return None
+        try:
+            from src.reasoning.ai import (  # noqa: PLC0415
+                AICoordinator, InvestigationTranscript, ProposalKind, VerifierContext,
+                VerifyDecision,
+            )
+            from src.reasoning.ai.agents import (  # noqa: PLC0415
+                CounterfactualReasoner, HypothesisGenerator, InvestigationDesigner,
+            )
+            from src.reasoning.objective import Objective, ObjectiveSource  # noqa: PLC0415
+
+            known = frozenset(o.name for o in state.investigation.objectives.all())
+            tasks = HypothesisGenerator(completer).generate(state)
+            tasks += CounterfactualReasoner(completer).generate(state)
+            if not tasks:
+                return None
+            coordinator = AICoordinator()
+            accepted = coordinator.run(tasks, ctx=VerifierContext(known_objectives=known))
+        except Exception as exc:  # noqa: BLE001 — any cognitive-layer failure contributes nothing
+            log.warning("cognitive layer skipped (%s)", exc)
+            return None
+
+        transcript = InvestigationTranscript()
+        for d in accepted:
+            p = d.proposal
+            seeded = ""
+            if p.kind == ProposalKind.HYPOTHESIS:
+                seeded = f"ai:{p.payload.objective}"
+                # reason "<objective>:ai" lets the InferenceEngine map this hypothesis back to its
+                # objective (it splits on ':ai') so a confirmed AI framework hypothesis satisfies it.
+                state.investigation.hypotheses.add_hypothesis(
+                    label=seeded, created_by=p.agent, likelihoods=dict(p.payload.candidates),
+                    reason=f"{p.payload.objective}:ai")
+                if p.payload.novel and p.payload.objective not in known:
+                    state.investigation.objectives.add(Objective(
+                        name=p.payload.objective, priority=0.5, produced_by=p.agent,
+                        source=ObjectiveSource(generated_by=f"ai_{p.agent}",
+                                               reason="novel hypothesis",
+                                               confidence=p.economics.estimated_prob_correct)))
+            elif p.kind == ProposalKind.OBJECTIVE:
+                seeded = p.payload.goal_name
+                if seeded not in state.investigation.objectives:
+                    state.investigation.objectives.add(Objective(
+                        name=seeded, priority=p.payload.priority, produced_by=p.agent,
+                        source=ObjectiveSource(generated_by=f"ai_{p.agent}", reason="refutation")))
+            transcript.record(d, trigger=p.agent, seeded_as=seeded)
+
+        # C2 (Investigation Designer): now that C1/C11 have seeded the AI objectives (novel:/refute:),
+        # design HOW to investigate them — attach the gatherable evidence that makes them reachable by
+        # the ordinary Phase-3 loop. A second, atomic coordinator pass. The AI only chooses evidence
+        # types (filtered to a read-only vocabulary); attaching them to the objective is done HERE.
+        try:
+            c2_tasks = InvestigationDesigner(completer).generate(state)
+            if c2_tasks:
+                c2_known = frozenset(o.name for o in state.investigation.objectives.all())
+                c2_coord = AICoordinator()
+                for d in c2_coord.run(c2_tasks, ctx=VerifierContext(known_objectives=c2_known)):
+                    obj = state.investigation.objectives.get(d.proposal.payload.goal_name)
+                    req = getattr(d.proposal.payload, "required_evidence", ())
+                    if obj is not None and req:
+                        obj.desired_evidence = tuple(req)
+                    transcript.record(d, trigger="investigation_designer",
+                                      seeded_as=d.proposal.payload.goal_name)
+                for rec in c2_coord.store.rejected():
+                    transcript.record(
+                        VerifyDecision(accepted=False, proposal=rec.proposal,
+                                       stage_failed=rec.stage_failed, reasons=rec.reasons),
+                        trigger="rejected")
+        except Exception as exc:  # noqa: BLE001 — designer failure never breaks the scan
+            log.warning("investigation designer skipped (%s)", exc)
+
+        # Record rejections too, so the replay shows what the pipeline caught and why.
+        for rec in coordinator.store.rejected():
+            transcript.record(
+                VerifyDecision(accepted=False, proposal=rec.proposal,
+                               stage_failed=rec.stage_failed, reasons=rec.reasons),
+                trigger="rejected")
+        ctx.emit("reasoning", {"event": "cognitive", "accepted": len(accepted),
+                                "rejected": len(coordinator.store.rejected())})
+        return transcript
+
+    def _run_ai_adjudication(self, state: ReasoningState, ctx: StepContext, transcript) -> None:
+        """AI-DRIVEN mode: let the AI resolve the exploitability findings the deterministic engine
+        couldn't. The agent RETURNS verdicts (data); the core APPLIES them here (resolves the
+        hypothesis + records the rationale) — so the AI owns the JUDGEMENT while the isolation
+        invariant (AI never mutates the world) is preserved. Fail-soft: no completer / broken AI /
+        no decisions ⇒ nothing changes ⇒ identical to ai_driven OFF.
+
+        Verdict → world:
+          ruled_out          → hypothesis REFUTED  → investigation reads NOT EXPLOITABLE
+          likely_exploitable → exploitable mass raised over 0.5 (still active, never auto-confirmed)
+                               → investigation reads POSSIBLY EXPLOITABLE
+          needs_active_check → left at its prior → stays a lead (UNVERIFIED)
+        """
+        completer = self.ai_completer
+        if completer is None:
+            return
+        try:
+            from src.reasoning.ai.agents import FindingAdjudicator  # noqa: PLC0415
+            decisions = FindingAdjudicator(completer).decide(state)
+        except Exception as exc:  # noqa: BLE001 — adjudication never breaks the scan
+            log.warning("ai adjudication skipped (%s)", exc)
+            return
+        if not decisions:
+            return
+
+        hyps = {h.label: h for h in state.investigation.hypotheses.all()}
+        applied = 0
+        for d in decisions:
+            hyp = hyps.get(d["hypothesis_label"])
+            if hyp is None or hyp.status != "active":
                 continue
-            ev_types: list[str] = []
-            if "framework" in obj.name.lower():
-                ev_types.extend(["server_header", "http_headers", "http_body"])
-            elif "port" in obj.name.lower() or "service" in obj.name.lower():
-                ev_types.append("open_port")
-            elif "tls" in obj.name.lower() or "tls" in obj.name.lower():
-                ev_types.extend(["tls_version", "tls_alpn"])
-            elif "dns" in obj.name.lower():
-                ev_types.append("dns_records")
-            elif "cve" in obj.name.lower() or "vuln" in obj.name.lower():
-                ev_types.extend(["cve", "banner"])
-            else:
-                continue
-            from src.reasoning.intent import EvidenceType
-            mapped = [et for et in EvidenceType if et.value in ev_types]
-            if mapped:
-                intents.append(Intent(
-                    objective_id=obj.name,
-                    target_ref=state.target,
-                    goal=obj.name,
-                    desired_evidence=mapped,
-                    constraints=IntentConstraints(read_only=True),
-                ))
-        return intents
+            verdict = d["verdict"]
+            rationale = d["rationale"]
+            if verdict == "ruled_out":
+                state.investigation.hypotheses.resolve(hyp.id, "refuted")
+            elif verdict == "likely_exploitable":
+                # Never manufacture a CONFIRMED vuln from a bare LLM call — just make "exploitable"
+                # lead so the finding surfaces as POSSIBLY EXPLOITABLE for a human/active check.
+                hyp.likelihoods = {"exploitable": 0.6, "not_exploitable": 0.4}
+            else:  # needs_active_check — leave it a lead, but record the AI looked
+                pass
+            # Mark the AI's authorship for the analyst view (dynamic attr; degrades gracefully if the
+            # state is ever re-serialized — the status change is the durable part).
+            hyp.ai_adjudicated = True
+            hyp.ai_rationale = rationale
+            applied += 1
+            if transcript is not None:
+                try:
+                    transcript.record_note(
+                        agent="finding_adjudicator", summary=f"{d['cve']} → {verdict}",
+                        rationale=rationale, outcome=("refuted" if verdict == "ruled_out"
+                                                      else "possible" if verdict == "likely_exploitable"
+                                                      else "unresolved"))
+                except Exception:  # noqa: BLE001 — transcript is a nicety, not load-bearing
+                    pass
+        ctx.emit("reasoning", {"event": "ai_adjudication", "decided": applied})
 
     @staticmethod
     def _known_ports(art: dict) -> list[dict]:

@@ -104,6 +104,8 @@ class ExecutionState:
     execution_history: list[dict] = field(default_factory=list)
     explanations: list[dict] = field(default_factory=list)       # design §10.2
     provenance: dict = field(default_factory=dict)               # Phase 5 §1: Obs→Inference→Hypothesis
+    investigation_plans: list[dict] = field(default_factory=list)  # Phase 8: read-only GoalPlanner output
+    ai_transcript: dict = field(default_factory=dict)            # Track C: cognitive-layer reasoning replay
 
 
 @dataclass

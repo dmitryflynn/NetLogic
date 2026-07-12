@@ -20,7 +20,6 @@ impact inputs (kev/epss/cvss/exploit/version_matched/probe_confirmed).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from src.fusion.gate import _impact_of
 from src.fusion.signals import Signal

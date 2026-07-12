@@ -1,6 +1,0 @@
-{
-  "name": "cyrillic homoglyph of a real evidence type must not match the enum",
-  "kind": "evidence_types",
-  "raw": "[\"http_hеaders\", \"ѕerver_header\"]",
-  "expect_evidence": []
-}

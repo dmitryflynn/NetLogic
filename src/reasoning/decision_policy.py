@@ -53,7 +53,6 @@ class DecisionPolicy(ABC):
     def rank_actions(self, steps: list[SensorStep], ctx: StepContext,
                      seen: Optional[set] = None) -> list[RankedAction]:
         """Rank SensorSteps by priority (highest first), excluding `seen`."""
-        pass
 
     @abstractmethod
     def _score_candidate(self, candidate) -> float:
@@ -62,7 +61,6 @@ class DecisionPolicy(ABC):
         This is the single point where policies diverge: GreedyPolicy ignores cost,
         BudgetPolicy maximizes gain-per-cost, FastPolicy minimizes latency, etc.
         """
-        pass
 
     def rank_candidates(self, candidates: list, *, exclude_unmet_prereqs: bool = True,
                         satisfied: Optional[set] = None, hints: Optional[list] = None) -> list:
@@ -104,7 +102,6 @@ class DecisionPolicy(ABC):
     @abstractmethod
     def explain(self) -> str:
         """Human-readable explanation of this policy's logic."""
-        pass
 
     def simulate(self, steps: list[SensorStep], ctx: StepContext) -> dict:
         """Simulate the policy without committing. For testing / analysis."""

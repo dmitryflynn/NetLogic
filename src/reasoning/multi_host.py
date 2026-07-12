@@ -77,7 +77,6 @@ def dispatch(world_state, run_host: RunHost) -> list[str]:
     Dispatch is at the loop level, never inside a single host's reasoning. Returns hosts run."""
     ran: list[str] = []
     for hr in world_state.hosts.all():
-        budget = getattr(hr.state.execution, "budget", None)
         # hr.state carries its own BudgetManager via the director; here we honor an explicit one if set
         bm = getattr(hr, "budget_manager", None)
         if bm is not None and bm.exhausted():
