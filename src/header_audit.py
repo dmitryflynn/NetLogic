@@ -92,6 +92,9 @@ def fetch_headers(url: str, timeout: float = 8.0) -> tuple[dict, int]:
     Follows redirects (urllib default), ignores cert errors. Never raises:
     on any failure returns ({}, 0) so the caller can produce a sane
     "could not audit" result instead of a misleading all-missing report.
+
+    Also stashes a short body snippet on ``headers['_body_snippet']`` so bot-
+    challenge pages can be detected when vendor headers are intermittent.
     """
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -103,16 +106,24 @@ def fetch_headers(url: str, timeout: float = 8.0) -> tuple[dict, int]:
         "Origin": PROBE_ORIGIN,
     })
 
+    def _pack(msg, status: int, body: bytes = b"") -> tuple[dict, int]:
+        headers = _flatten_headers(msg)
+        headers["_request_origin"] = PROBE_ORIGIN
+        if body:
+            headers["_body_snippet"] = body[:2048].decode("utf-8", errors="replace")
+        return headers, status
+
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-            headers = _flatten_headers(resp.headers)
-            headers["_request_origin"] = PROBE_ORIGIN
-            return headers, resp.status
+            body = resp.read(2048)
+            return _pack(resp.headers, resp.status, body)
     except urllib.error.HTTPError as e:
         # A 4xx/5xx still carries response headers worth auditing.
-        headers = _flatten_headers(e.headers)
-        headers["_request_origin"] = PROBE_ORIGIN
-        return headers, e.code
+        try:
+            body = e.read(2048) if e.fp else b""
+        except Exception:
+            body = b""
+        return _pack(e.headers, e.code, body)
     except Exception:
         return {}, 0
 
@@ -164,13 +175,15 @@ def check_hsts(headers: dict, is_https: bool = True) -> Optional[HeaderFinding]:
 def check_csp(headers: dict) -> Optional[HeaderFinding]:
     val = headers.get("content-security-policy", "")
     if not val:
+        # Missing CSP is a hardening gap, not proof the app is XSS-exploitable.
         return HeaderFinding(
-            severity="HIGH", cvss=6.1,
+            severity="MEDIUM", cvss=4.3,
             header="Content-Security-Policy",
             title="Missing Content-Security-Policy",
-            detail="No CSP header. The site is fully vulnerable to Cross-Site Scripting (XSS) "
-                   "injection with no browser-level mitigation. Attackers can inject arbitrary "
-                   "scripts to steal cookies, credentials, or perform actions as the victim.",
+            detail="No Content-Security-Policy header. Browsers will not enforce a CSP-based "
+                   "XSS mitigation layer. Actual XSS risk depends on application code and "
+                   "output encoding — absence of CSP alone is not evidence of an exploitable "
+                   "XSS vulnerability.",
             recommendation="Add a restrictive CSP: Content-Security-Policy: default-src 'self'; "
                            "script-src 'self'; object-src 'none'; base-uri 'self'",
             present=False
@@ -307,8 +320,12 @@ def check_cors(headers: dict) -> Optional[HeaderFinding]:
     acac = headers.get("access-control-allow-credentials", "").lower()
     req_origin = headers.get("_request_origin", "")
 
+    # Never grade CORS off an edge challenge interstitial.
+    if _is_bot_challenge_response(headers, 0):
+        return None
+
     # Reflected Origin + Credentials (CRITICAL)
-    if acao == req_origin and acac == "true":
+    if acao == req_origin and acac == "true" and req_origin:
         return HeaderFinding(
             severity="CRITICAL", cvss=9.1,
             header="Access-Control-Allow-Origin",
@@ -466,6 +483,40 @@ def calculate_score(findings: list[HeaderFinding], headers: dict) -> tuple[int, 
     return score, grade
 
 
+# ─── Bot / edge challenge detection ─────────────────────────────────────────────
+
+def _is_bot_challenge_response(headers: dict, status: int) -> Optional[str]:
+    """Return a short label if this response is an edge bot-challenge interstitial.
+
+    Auditing CSP/CORS/clickjacking against a Vercel/Cloudflare challenge page
+    produces false application findings — those headers describe the challenge
+    shell, not the real app.
+    """
+    if not headers:
+        return None
+    mitigated = (headers.get("x-vercel-mitigated") or "").lower()
+    if mitigated == "challenge" or headers.get("x-vercel-challenge-token"):
+        return "Vercel bot challenge"
+    cf_mit = (headers.get("cf-mitigated") or "").lower()
+    if "challenge" in cf_mit or headers.get("cf-challenge"):
+        return "Cloudflare bot challenge"
+    body = (headers.get("_body_snippet") or "").lower()
+    if body and (
+        "vercel" in (headers.get("server") or "").lower()
+        or "x-vercel-id" in headers
+    ):
+        if any(m in body for m in (
+            "security checkpoint", "vercel.*challenge", "_vercel",
+            "enable javascript", "browser check", "just a moment",
+            "cf-browser-verification", "challenge-platform",
+        )) or ("challenge" in body and "vercel" in body):
+            return "Vercel bot challenge"
+    if body and ("cf-ray" in headers or "cloudflare" in (headers.get("server") or "").lower()):
+        if any(m in body for m in ("just a moment", "cf-browser-verification", "challenge-platform", "attention required")):
+            return "Cloudflare bot challenge"
+    return None
+
+
 # ─── Main Auditor ────────────────────────────────────────────────────────────────
 
 def audit_headers(target: str, port: int = 443, timeout: float = 8.0) -> HeaderAuditResult:
@@ -494,6 +545,37 @@ def audit_headers(target: str, port: int = 443, timeout: float = 8.0) -> HeaderA
 
     result.server_banner = headers.get("server", "")
     result.powered_by    = headers.get("x-powered-by", "")
+
+    challenge = _is_bot_challenge_response(headers, status)
+    if challenge:
+        # Do not grade the real app from an interstitial. One honest finding.
+        result.findings.append(HeaderFinding(
+            severity="INFO", cvss=0.0,
+            header="(edge)",
+            title=f"Header audit limited: {challenge}",
+            detail=(
+                f"The edge returned a bot/JS challenge response (HTTP {status}), not the "
+                f"application document. Security headers below describe the challenge page "
+                f"or are unavailable — they are not reliable evidence of application hardening. "
+                f"Allowlist the scanner IP or re-test with a browser session for a full audit."
+            ),
+            recommendation="Allowlist scanner IPs on the WAF/bot protection, or audit headers "
+                           "from an authenticated browser session.",
+            present=True,
+        ))
+        # Still note HSTS if present on the challenge response (edge policy).
+        hsts = check_hsts(headers, is_https)
+        if hsts and hsts.present:
+            result.findings.append(hsts)
+        result.headers_present = [h for h in (
+            "strict-transport-security", "content-security-policy",
+            "x-frame-options", "x-content-type-options", "referrer-policy",
+            "permissions-policy",
+        ) if h in headers]
+        result.headers_missing = []
+        # Incomplete audit — do not imply grade A / 100. "N" = not scored.
+        result.score, result.grade = 0, "N"
+        return result
 
     # Run all checks
     checks = [

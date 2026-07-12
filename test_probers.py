@@ -366,6 +366,8 @@ def test_open_redirect_requires_reflected_marker(monkeypatch):
     monkeypatch.setattr(vp.urllib.request, "build_opener", lambda *a, **k: FakeOpener())
     f = vp.probe_open_redirect("h", 80)
     assert f and f.cve_id == "CWE-601"
+    assert f.poc and f.poc.get("curl")
+    assert "netlogic-redirect-test.invalid" in (f.poc.get("expected") or f.evidence)
 
     # Redirect that does NOT honor our marker (internal redirect) → no finding.
     class SafeOpener:
@@ -373,6 +375,65 @@ def test_open_redirect_requires_reflected_marker(monkeypatch):
             return FakeResp(302, "https://example.com/dashboard")
     monkeypatch.setattr(vp.urllib.request, "build_opener", lambda *a, **k: SafeOpener())
     assert vp.probe_open_redirect("h", 80) is None
+
+
+def test_open_redirect_rejects_same_site_marker_in_query(monkeypatch):
+    """Zipenvy-class FP: HTTPS upgrade keeps host; marker only in query string."""
+    class FakeResp:
+        def __init__(self, code, loc):
+            self.status = code
+            self.headers = {"location": loc}
+    class SameSiteOpener:
+        def open(self, req, timeout=None):
+            # Real zipenvy pattern: Location still on target host, marker only in ?url=
+            return FakeResp(
+                301,
+                "https://zipenvy.com/?url=https://netlogic-redirect-test.invalid",
+            )
+    monkeypatch.setattr(vp.urllib.request, "build_opener", lambda *a, **k: SameSiteOpener())
+    assert vp.probe_open_redirect("zipenvy.com", 80) is None
+    assert vp.probe_open_redirect("zipenvy.com", 443, scheme="https") is None
+
+    # Relative Location with marker in query — still same site.
+    class RelOpener:
+        def open(self, req, timeout=None):
+            return FakeResp(302, "/login?next=https://netlogic-redirect-test.invalid")
+    monkeypatch.setattr(vp.urllib.request, "build_opener", lambda *a, **k: RelOpener())
+    assert vp.probe_open_redirect("zipenvy.com", 443, scheme="https") is None
+
+    # True open redirect: Location host IS the marker domain.
+    class ExternalOpener:
+        def open(self, req, timeout=None):
+            return FakeResp(302, "https://netlogic-redirect-test.invalid/phish")
+    monkeypatch.setattr(vp.urllib.request, "build_opener", lambda *a, **k: ExternalOpener())
+    f = vp.probe_open_redirect("zipenvy.com", 443, scheme="https")
+    assert f and f.cve_id == "CWE-601"
+    assert f.poc and "curl" in f.poc
+
+
+def test_is_external_open_redirect_unit():
+    m = "netlogic-redirect-test.invalid"
+    assert vp.is_external_open_redirect(f"https://{m}/", "zipenvy.com", m)
+    assert vp.is_external_open_redirect(f"//{m}/x", "zipenvy.com", m)
+    assert not vp.is_external_open_redirect(
+        f"https://zipenvy.com/?url=https://{m}", "zipenvy.com", m
+    )
+    assert not vp.is_external_open_redirect(f"/?url=https://{m}", "zipenvy.com", m)
+    assert not vp.is_external_open_redirect("https://example.com/dashboard", "h", m)
+    assert not vp.is_external_open_redirect("", "h", m)
+    # Apex → www same-site bounce with attacker URL only in query (real zipenvy case)
+    assert not vp.location_is_external(
+        "https://www.zipenvy.com/api/auth/callback?callbackUrl=https://evil.com",
+        "zipenvy.com",
+    )
+    assert vp.hosts_same_site("www.zipenvy.com", "zipenvy.com")
+    assert not vp.is_external_open_redirect(
+        "https://www.zipenvy.com/api/auth/callback?callbackUrl=https://evil.com",
+        "zipenvy.com",
+        "evil.com",
+    )
+    # True external
+    assert vp.location_is_external("https://evil.com/phish", "zipenvy.com")
 
 
 def test_ghostcat_cpong_vs_silence(monkeypatch):

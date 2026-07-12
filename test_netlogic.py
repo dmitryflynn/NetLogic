@@ -57,30 +57,68 @@ class TestBannerParsing(unittest.TestCase):
 
 
 class TestOSGuess(unittest.TestCase):
-    def test_linux(self):    self.assertIn("Linux", guess_os_from_ttl(64))
-    def test_windows(self):  self.assertIn("Windows", guess_os_from_ttl(128))
-    def test_none(self):     self.assertIsNone(guess_os_from_ttl(None))
+    """TTL residual is not a reliable OS signal on internet paths / CDNs."""
+    def test_no_guess_from_ttl(self):
+        self.assertIsNone(guess_os_from_ttl(64))
+        self.assertIsNone(guess_os_from_ttl(128))
+        self.assertIsNone(guess_os_from_ttl(246))  # used to false-claim "Cisco/HP"
+        self.assertIsNone(guess_os_from_ttl(None))
 
 
 class TestCVECorrelation(unittest.TestCase):
+    """Correlate tests use a stubbed NVD lookup (no network, no offline VDB)."""
+
+    def setUp(self):
+        import src.nvd_lookup as nl
+        import src.cve_correlator as cc
+        from src.nvd_lookup import NVDCve, _ver_lt
+
+        self._nl = nl
+        self._cc = cc
+        self._orig_nl = nl.lookup_cves_for_service
+        self._orig_cc = cc.lookup_cves_for_service
+        self._orig_unavail = getattr(nl, "_nvd_unavailable", False)
+        self._orig_avail = nl.nvd_is_available
+
+        def _lookup(product, version, min_cvss=4.0):
+            p = (product or "").lower()
+            v = version or ""
+            out = []
+            if p in ("openssh", "ssh"):
+                if _ver_lt(v, "9.3"):
+                    out.append(NVDCve("CVE-2023-38408", "x", 9.8, "CRITICAL", "", "", "", ""))
+                if _ver_lt(v, "8.5"):
+                    out.append(NVDCve("CVE-2021-41617", "x", 7.0, "HIGH", "", "", "", ""))
+            if p == "vsftpd" and v.startswith("2.3.4"):
+                out.append(NVDCve("CVE-2011-2523", "backdoor", 10.0, "CRITICAL", "", "", "", ""))
+            return [c for c in out if c.cvss_score >= min_cvss]
+
+        nl._nvd_unavailable = False
+        nl.nvd_is_available = lambda: True
+        nl.lookup_cves_for_service = _lookup
+        cc.lookup_cves_for_service = _lookup
+
+    def tearDown(self):
+        self._nl.lookup_cves_for_service = self._orig_nl
+        self._cc.lookup_cves_for_service = self._orig_cc
+        self._nl._nvd_unavailable = self._orig_unavail
+        self._nl.nvd_is_available = self._orig_avail
+
     def test_openssh_old_has_cves(self):
         matches = correlate([_make_port_result(22, "ssh", "openssh", "6.6.1")])
         cves = [c for m in matches for c in m.cves]
         self.assertGreater(len(cves), 0)
 
-    def test_openssh_new_no_offline_false_positives(self):
-        # A modern OpenSSH (9.9) must not trip the legacy OFFLINE signatures, which
-        # all target < 9.3. (We can't assert "zero CVEs" anymore: live NVD legitimately
-        # returns newer CVEs whose version ranges include 9.9 — that's correct behavior.)
+    def test_openssh_new_no_old_cve_false_positives(self):
         matches = correlate([_make_port_result(22, "ssh", "openssh", "9.9.0")])
         cve_ids = {c.id for m in matches for c in m.cves}
-        legacy_offline = {
+        legacy = {
             "CVE-2023-38408", "CVE-2021-41617", "CVE-2018-15473",
             "CVE-2016-3115", "CVE-2001-0529",
         }
-        leaked = legacy_offline & cve_ids
+        leaked = legacy & cve_ids
         self.assertEqual(leaked, set(),
-                         f"Legacy offline sigs misfired on OpenSSH 9.9: {leaked}")
+                         f"version correlator false-positive on OpenSSH 9.9: {leaked}")
 
     def test_redis_misconfiguration_flagged(self):
         matches = correlate([_make_port_result(6379, "redis")])

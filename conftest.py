@@ -4,7 +4,7 @@ Pytest session bootstrap — test isolation for NetLogic.
 Several modules bind their on-disk state directory at import time:
   • api/agents/registry.py   → $NETLOGIC_SCANS_DIR/agents.json
   • api/storage/json_store.py → $NETLOGIC_SCANS_DIR/scans/*.json
-  • src/epss.py, src/vdb_engine.py → $NETLOGIC_DATA_DIR caches
+  • src/epss.py → $NETLOGIC_DATA_DIR caches
 
 Without this file the test suite wrote into the developer's real ~/.netlogic,
 leaving behind dozens of phantom agents (test-host, agent-a, …) that eventually

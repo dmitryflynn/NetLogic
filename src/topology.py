@@ -152,15 +152,36 @@ def map_topology(target: str, ip: Optional[str] = None, *,
         hops = _traceroute(target)
         responded = [h for h in hops if h != "*"]
         if responded:
+            # Classify hops: private/local addresses are the *scanner's* path
+            # (home router, ISP CPE), not the target's infrastructure. Keep them
+            # for diagnostics but annotate so reports don't look like the target
+            # is dual-homed on 192.168.0.1.
+            try:
+                from src.ip_scope import is_private_or_local  # noqa: PLC0415
+            except Exception:  # pragma: no cover
+                def is_private_or_local(x: str) -> bool:  # type: ignore
+                    return str(x).startswith(("10.", "192.168.", "172."))
+
+            public_hops = [h for h in responded if not is_private_or_local(h)]
+            private_hops = [h for h in responded if is_private_or_local(h)]
             topo.traceroute_hops = hops
-            # hop_count = path depth (position of the last responding hop).
-            # Intermediate "*" entries are real network hops that simply didn't
-            # answer the probe, so they count toward depth; trailing "*" were
-            # already trimmed by _parse_traceroute, so len(hops) ends on a
-            # responder and matches the displayed path.
             topo.hop_count = len(hops)
-            topo.notes.append(f"{len(responded)} responding hop(s) over {len(hops)} "
-                              "network hop(s) to target — network path mapped.")
+            if private_hops and public_hops:
+                topo.notes.append(
+                    f"Path: {len(private_hops)} local/scanner hop(s) then "
+                    f"{len(public_hops)} public hop(s) toward target "
+                    f"(private addresses are the probe path, not target LAN)."
+                )
+            elif private_hops and not public_hops:
+                topo.notes.append(
+                    f"{len(private_hops)} hop(s) answered but all are private/local "
+                    f"(scanner network only — public path to target not visible)."
+                )
+            else:
+                topo.notes.append(
+                    f"{len(responded)} responding hop(s) over {len(hops)} "
+                    "network hop(s) to target — network path mapped."
+                )
         else:
             # No hop answered (all "*", or traceroute unavailable / failed).
             topo.notes.append("Traceroute path not traceable (ICMP/UDP probes filtered "

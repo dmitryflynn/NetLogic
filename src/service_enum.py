@@ -20,6 +20,7 @@ from __future__ import annotations
 import socket
 import struct
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
@@ -362,9 +363,20 @@ def probe_snmp(host: str, port: int = 161, timeout: float = 3.0) -> list[Service
 
 # ─── HTTP reachability / auth state ──────────────────────────────────────────────
 
+def _is_edge_bot_challenge(hdrs: dict, status: int) -> Optional[str]:
+    """Detect edge bot/JS challenge pages that must not be labeled as app auth."""
+    mitigated = (hdrs.get("x-vercel-mitigated") or "").lower()
+    if mitigated == "challenge" or hdrs.get("x-vercel-challenge-token"):
+        return "Vercel bot challenge"
+    cf_mit = (hdrs.get("cf-mitigated") or "").lower()
+    if "challenge" in cf_mit or hdrs.get("cf-challenge"):
+        return "Cloudflare bot challenge"
+    return None
+
+
 def probe_http_auth_state(host: str, port: int, scheme: str = "http",
                           timeout: float = 4.0) -> list[ServiceAttribute]:
-    """Is the web root open (200) or auth-gated (401/403/login redirect)?"""
+    """Is the web root open (200), auth-gated, or blocked by an edge challenge?"""
     import urllib.request, urllib.error  # noqa: PLC0415
     attrs: list[ServiceAttribute] = []
     try:
@@ -384,7 +396,15 @@ def probe_http_auth_state(host: str, port: int, scheme: str = "http",
 
     if status is None:
         return attrs
-    if status in (401, 407) or "www-authenticate" in hdrs:
+
+    challenge = _is_edge_bot_challenge(hdrs, status)
+    if challenge:
+        state, detail, sev = "bot_challenge", (
+            f"Web root returns HTTP {status} from {challenge} — this is edge bot "
+            f"protection, not application authentication. The real app surface is "
+            f"not fully observable without an allowlisted client or browser session."
+        ), "INFO"
+    elif status in (401, 407) or "www-authenticate" in hdrs:
         state, detail, sev = "auth_required", \
             f"Web root returns HTTP {status} with authentication challenge — surface is auth-gated.", "INFO"
     elif status == 403:

@@ -30,7 +30,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.scanner        import scan_host, scan_cidr, COMMON_PORTS, EXTENDED_PORTS
 from src.cve_correlator import correlate
 from src.osint          import run_osint
-from src.nvd_lookup     import clear_cache, preload_cache, cache_stats
 from src.reporter       import (
     print_terminal_report, generate_json_report,
     generate_html_report, save_json_report, save_html_report, C,
@@ -96,6 +95,10 @@ def parse_args():
     p.add_argument("--allow-crash-probes", action="store_true",
                    help="Allow curated crash/DoS verification probes (e.g. http.sys). "
                         "MAY disrupt or crash the target. Requires --ai-agent.")
+    p.add_argument("--allow-freeform-proof", action="store_true",
+                   help="Tier C: allow freeform http_proof payloads (GET/query/headers; "
+                        "POST only on search/login/graphql-like paths). Destructive patterns "
+                        "and PUT/PATCH/DELETE stay blocked. Opt-in; requires --ai-agent.")
     p.add_argument("--agent-max-steps", type=int, default=12,
                    help="Max AI agent reasoning turns (default: 12; depth mode floor 24)")
     p.add_argument("--agent-max-requests", type=int, default=40,
@@ -133,13 +136,6 @@ def parse_args():
                    "or JSON (e.g. '{\"takeover\":{\"enabled\":false}}') to override")
     p.add_argument("--nvd-key",   default="",
                    help="NVD API key for higher rate limits (or set NETLOGIC_NVD_KEY env var)")
-    p.add_argument("--clear-cache", action="store_true", help="Clear NVD cache and exit")
-    p.add_argument("--cache-stats", action="store_true", help="Show NVD cache stats and exit")
-    p.add_argument("--preload-cache", action="store_true", help="Pre-populate NVD cache for common products")
-    p.add_argument("--vdb-sync", nargs="?", type=int, const=0, default=None, metavar="N",
-                   help="Sync the local offline CVE database from NVD (optionally only the first N products), then exit")
-    p.add_argument("--vdb-status", action="store_true",
-                   help="Show local offline CVE database freshness/stats and exit")
     p.add_argument("--gui", "-gui", action="store_true",
                    help="Start the web dashboard (no other flags allowed)")
     # ── Fusion benchmark ──
@@ -223,30 +219,39 @@ def print_header_results(audit, no_color=False):
     if not audit:
         return
     reset = C.RESET if not no_color else ""
+    incomplete = (getattr(audit, "grade", "") or "") == "N"
     grade_color = {
-        "A": C.GREEN, "B": C.GREEN, "C": C.YELLOW, "D": C.ORANGE, "F": C.RED
+        "A": C.GREEN, "B": C.GREEN, "C": C.YELLOW, "D": C.ORANGE, "F": C.RED, "N": C.DIM
     }.get(audit.grade, C.DIM) if not no_color else ""
 
     print(f"\n{'─'*70}")
-    print(f"  HTTP SECURITY HEADERS  —  Score: {audit.score}/100  Grade: {grade_color}{C.BOLD if not no_color else ''}{audit.grade}{reset}")
+    if incomplete:
+        print(f"  HTTP SECURITY HEADERS  —  Score: n/a  Grade: {grade_color}{C.BOLD if not no_color else ''}N (incomplete){reset}")
+    else:
+        print(f"  HTTP SECURITY HEADERS  —  Score: {audit.score}/100  Grade: {grade_color}{C.BOLD if not no_color else ''}{audit.grade}{reset}")
     print(f"{'─'*70}")
     if audit.server_banner:
         print(f"  Server   : {audit.server_banner}")
     if audit.powered_by:
         print(f"  Powered-By: {audit.powered_by}")
-    print(f"  Present  : {', '.join(audit.headers_present) or 'none'}")
-    print(f"  Missing  : {(C.YELLOW if not no_color else '')}{', '.join(audit.headers_missing) or 'none'}{reset}")
+    if incomplete:
+        print(f"  {C.DIM if not no_color else ''}Note: edge bot-challenge response — app header hardening not scored.{reset}")
+    else:
+        print(f"  Present  : {', '.join(audit.headers_present) or 'none'}")
+        print(f"  Missing  : {(C.YELLOW if not no_color else '')}{', '.join(audit.headers_missing) or 'none'}{reset}")
 
     for f in sorted(audit.findings, key=lambda x: x.cvss, reverse=True):
-        if f.severity == "INFO":
+        # Always show incomplete-audit notices; skip other INFO noise.
+        if f.severity == "INFO" and "challenge" not in (f.title or "").lower() and "limited" not in (f.title or "").lower():
             continue
         sev_color = {
             "CRITICAL": C.RED, "HIGH": C.ORANGE,
-            "MEDIUM": C.YELLOW, "LOW": C.GREEN
+            "MEDIUM": C.YELLOW, "LOW": C.GREEN, "INFO": C.DIM
         }.get(f.severity, C.DIM) if not no_color else ""
         print(f"\n  {sev_color}{C.BOLD if not no_color else ''}{f.severity:<10}{reset}  {f.title}")
-        print(f"  {C.DIM if not no_color else ''}{f.detail[:120]}{'…' if len(f.detail)>120 else ''}{reset}")
-        print(f"  {C.CYAN if not no_color else ''}Fix: {f.recommendation[:100]}{reset}")
+        print(f"  {C.DIM if not no_color else ''}{f.detail[:160]}{'…' if len(f.detail)>160 else ''}{reset}")
+        if f.recommendation and f.severity != "INFO":
+            print(f"  {C.CYAN if not no_color else ''}Fix: {f.recommendation[:100]}{reset}")
 
 
 # ─── Takeover Printer ─────────────────────────────────────────────────────────
@@ -361,7 +366,16 @@ def print_dns_results(dns, no_color=False):
     else:
         print(f"{spf.record[:70]}")
         print(f"  {'':9}all={spf.all_mechanism or 'none'}  lookups≈{spf.mechanism_count}")
+        dmarc_reject = (
+            getattr(dns, "dmarc", None)
+            and getattr(dns.dmarc, "present", False)
+            and (getattr(dns.dmarc, "policy", "") or "").lower() == "reject"
+        )
         for finding in spf.findings:
+            # Softfail noise is already demoted in aggregate findings when DMARC
+            # rejects — don't re-print the scary line under the SPF record.
+            if dmarc_reject and "softfail" in (finding.title or "").lower():
+                continue
             print(f"  {'':9}{Y}⚠ {finding.description}{R}")
 
     # DKIM
@@ -490,17 +504,36 @@ def _write_reports(art: dict, target: str, args):
     ts = time.strftime("%Y%m%d_%H%M%S")
 
     # ── JSON report ──
+    json_path = None
     if args.report in ("json", "all"):
         os.makedirs(args.out, exist_ok=True)
         from src import engine
         report = engine.build_json_report(art)
-        save_json_report(report, os.path.join(args.out, f"netlogic_{safe_name}_{ts}.json"))
+        json_path = os.path.join(args.out, f"netlogic_{safe_name}_{ts}.json")
+        save_json_report(report, json_path)
 
     # ── HTML report ──
     if args.report in ("html", "all"):
         os.makedirs(args.out, exist_ok=True)
         html_content = generate_html_report(host_result, vuln_matches, osint_result)
         save_html_report(html_content, os.path.join(args.out, f"netlogic_{safe_name}_{ts}.html"))
+
+    # ── HackerOne-oriented markdown (Tier D) ──
+    if args.report in ("json", "html", "all", "terminal"):
+        try:
+            from src.hackerone_export import write_hackerone_report
+            os.makedirs(args.out, exist_ok=True)
+            h1_path = os.path.join(args.out, f"netlogic_{safe_name}_{ts}.hackerone.md")
+            # Prefer serialized report when JSON was written (includes all art keys)
+            export_src = art
+            if json_path and os.path.isfile(json_path):
+                import json as _json
+                with open(json_path, encoding="utf-8") as fh:
+                    export_src = _json.load(fh)
+            write_hackerone_report(export_src, h1_path, target=target)
+            print(f"[+] HackerOne draft → {h1_path}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[!] HackerOne export skipped: {exc}")
 
 
 def run_single(target, args):
@@ -644,8 +677,8 @@ def run_gui():
     print(f"  Agent key: {api_key}")
     print()
     print("  Open the URL and sign in with your account to use the dashboard.")
-    print("  The Agent key above is a MACHINE credential — use it only for remote")
-    print("  agents (netlogic_agent.py) and programmatic API access, not to log in.")
+    print("  The Agent key above is a MACHINE credential for programmatic API access,")
+    print("  not for interactive login.")
     print("  Press Ctrl+C to stop.")
     print()
     # Flush now: uvicorn.run() blocks below, so anything still buffered would never
@@ -656,9 +689,6 @@ def run_gui():
 
     # NOTE: the API server starts its own built-in in-process scan agent on startup
     # (api/main.py lifespan → local_agent.start), which has all scan capabilities.
-    # We deliberately do NOT spawn a second external netlogic_agent.py here — doing so
-    # registered a duplicate "localhost" agent in the fleet. Remote/extra agents are
-    # still added by running netlogic_agent.py manually against this controller.
 
     import uvicorn  # noqa: PLC0415
     uvicorn.run("api.main:app", host=host, port=port, log_level="warning")
@@ -901,16 +931,14 @@ def main():
         # are harmless when left at their defaults.
         bool_flags = ["tls", "headers", "takeover", "osint", "stack", "dns",
                        "probe", "full", "ai", "deep_probe", "no_diff",
-                       "no_traceroute", "cidr", "no_color", "clear_cache",
-                       "preload_cache", "cache_stats", "vdb_status",
+                       "no_traceroute", "cidr", "no_color",
                        "reason", "multi_host", "since_last"]
         if any(getattr(args, f) for f in bool_flags):
             print("error: --gui cannot be combined with scan flags", file=sys.stderr)
             sys.exit(1)
         value_flags = ["ai_key", "ai_provider", "ai_model", "ai_base_url",
                        "ssh_user", "ssh_key", "ssh_pass", "ports", "report",
-                       "out", "timeout", "threads", "min_cvss", "nvd_key",
-                       "vdb_sync"]
+                       "out", "timeout", "threads", "min_cvss", "nvd_key"]
         # For value flags, check they're different from their defaults
         defaults = {"ports": "quick", "timeout": 2.0, "threads": 100,
                     "min_cvss": 4.0, "report": "terminal", "out": ".",
@@ -926,35 +954,6 @@ def main():
             print("error: --gui does not take a target argument", file=sys.stderr)
             sys.exit(1)
         run_gui()
-        return
-
-    if args.clear_cache:
-        clear_cache()
-        if not args.target:
-            return
-    if args.preload_cache:
-        preload_cache()
-        if not args.target:
-            return
-    if args.cache_stats:
-        stats = cache_stats()
-        print(f"  NVD cache: {stats.get('entries', 0)} entries, "
-              f"{stats.get('size_bytes', 0) // 1024} KB")
-        if not args.target:
-            return
-
-    # ── Offline VDB management (sync/status) — run and exit ──
-    if args.vdb_status:
-        from src.vdb_syncer import print_status
-        print_status()
-        return
-    if args.vdb_sync is not None:
-        from src.vdb_syncer import run_vdb_sync, print_status
-        print(f"[*] Syncing local offline CVE database from NVD"
-              f"{f' (first {args.vdb_sync} products)' if args.vdb_sync else ''}…")
-        run_vdb_sync(limit=args.vdb_sync)
-        print()
-        print_status()
         return
 
     if not args.target:

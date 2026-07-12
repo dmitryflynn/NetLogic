@@ -232,32 +232,40 @@ def probe_udp_protocol(host: str, port: int, timeout: float = 2.0) -> Optional[t
 
     sock = None
     try:
+        from src.ip_scope import reply_from_target  # noqa: PLC0415
+
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.settimeout(timeout)
         data, proto = probes[port]
         sock.sendto(data, (host, port))
 
-        try:
-            resp, _ = sock.recvfrom(2048)
-            if len(resp) > 0:
-                if port == 161 and resp[0] == 0x30:  # SNMP response starts with SEQUENCE
-                    return ("snmp", _snmp_sysdescr(resp))
-                elif port == 53 and len(resp) >= 2:  # DNS response
-                    return ("dns", None)
-                elif port == 123 and len(resp) >= 4:  # NTP response
-                    return ("ntp", None)
-                elif port == 137 and len(resp) >= 12:  # NBNS node-status reply
-                    return ("netbios", None)
-                elif port == 1900 and (b"HTTP" in resp[:8] or b"SERVER" in resp.upper()):
-                    # Pull the SERVER: header (device/version) out of the SSDP reply.
-                    detail = None
-                    for line in resp.split(b"\r\n"):
-                        if line[:7].upper() == b"SERVER:":
-                            detail = line[7:].decode("utf-8", errors="replace").strip() or None
-                            break
-                    return ("ssdp", detail)
-        except socket.timeout:
-            pass
+        # Drain until an in-scope reply (source IP must be the target). LAN UPnP
+        # answering SSDP would otherwise open "1900/ssdp" on every Cloudflare edge.
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                sock.settimeout(max(0.05, deadline - time.time()))
+                resp, addr = sock.recvfrom(2048)
+            except socket.timeout:
+                break
+            if not resp or not reply_from_target(addr[0], host):
+                continue
+            if port == 161 and resp[0] == 0x30:  # SNMP response starts with SEQUENCE
+                return ("snmp", _snmp_sysdescr(resp))
+            elif port == 53 and len(resp) >= 2:  # DNS response
+                return ("dns", None)
+            elif port == 123 and len(resp) >= 4:  # NTP response
+                return ("ntp", None)
+            elif port == 137 and len(resp) >= 12:  # NBNS node-status reply
+                return ("netbios", None)
+            elif port == 1900 and (b"HTTP" in resp[:8] or b"SERVER" in resp.upper()):
+                # Pull the SERVER: header (device/version) out of the SSDP reply.
+                detail = None
+                for line in resp.split(b"\r\n"):
+                    if line[:7].upper() == b"SERVER:":
+                        detail = line[7:].decode("utf-8", errors="replace").strip() or None
+                        break
+                return ("ssdp", detail)
     except Exception:
         pass
     finally:
@@ -456,23 +464,23 @@ def probe_port(host: str, port: int, timeout: float = 2.0) -> PortResult:
 # ─── TTL → OS Estimation ────────────────────────────────────────────────────────
 
 def guess_os_from_ttl(ttl: Optional[int]) -> Optional[str]:
-    if ttl is None:
-        return None
-    if ttl <= 64:
-        return "Linux/Unix"
-    if ttl <= 128:
-        return "Windows"
-    if ttl <= 255:
-        return "Network Device (Cisco/HP)"
+    """TTL-based OS fingerprinting is unreliable on the public internet.
+
+    Observed TTL is residual after an unknown hop count, and CDNs/anycast
+    (Vercel, Cloudflare, …) make the classic 64/128/255 initial-TTL heuristic
+    produce confident wrong answers (e.g. \"Network Device (Cisco/HP)\" for a
+    Vercel app). We keep the observed TTL for diagnostics but do **not**
+    publish an OS guess from TTL alone.
+    """
     return None
 
 
 def get_ttl(host: str, timeout: float = 2.0) -> Optional[int]:
-    """Best-effort TTL from a single system ping, used to estimate the host OS.
+    """Best-effort TTL from a single system ping (diagnostic only).
 
     Returns the observed TTL (already decremented by network hops) or None if the
     host doesn't answer ICMP / ping is unavailable. Degrades gracefully — a None
-    just means os_guess stays unknown, never an error.
+    just means TTL is unknown. OS is not inferred from this value.
     """
     if sys.platform.startswith("win"):
         cmd = ["ping", "-n", "1", "-w", str(int(max(1.0, timeout) * 1000)), host]

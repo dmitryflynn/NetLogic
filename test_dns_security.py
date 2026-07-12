@@ -267,6 +267,46 @@ def test_dnssec_lookup_failure_not_disabled(monkeypatch):
 
 # ─── Spoofability scoring ─────────────────────────────────────────────────────
 
+def test_spoofability_softfail_zero_when_dmarc_reject():
+    """SPF ~all must not inflate spoofability when DMARC p=reject enforces."""
+    spf = dns.SPFResult(present=True, all_mechanism="~all", valid=True)
+    dkim = dns.DKIMResult(found_selectors=["google"])
+    dmarc = dns.DMARCResult(present=True, policy="reject")
+    spoofable, score = dns.calculate_spoofability(spf, dkim, dmarc)
+    assert spoofable is False
+    assert score == 0
+
+
+def test_spf_softfail_finding_demoted_under_dmarc_reject(monkeypatch):
+    """Report must not present SPF ~all as a standalone weakness under p=reject."""
+    def fake_spf(domain):
+        r = dns.SPFResult(present=True, record="v=spf1 ~all", all_mechanism="~all", valid=True)
+        r.findings.append(dns.AuditFinding(
+            title="Weak SPF Policy (Softfail)",
+            description="softfail",
+            remediation="use -all",
+            severity="LOW",
+            category="SPF",
+        ))
+        return r
+
+    monkeypatch.setattr(dns, "check_spf", fake_spf)
+    monkeypatch.setattr(dns, "check_dmarc", lambda d: dns.DMARCResult(
+        present=True, policy="reject", record="v=DMARC1; p=reject", pct=100))
+    monkeypatch.setattr(dns, "check_dkim", lambda d: dns.DKIMResult(found_selectors=["google"]))
+    monkeypatch.setattr(dns, "check_dnssec", lambda d: dns.DNSSecResult(enabled=True))
+    monkeypatch.setattr(dns, "check_caa", lambda d: dns.CAAResult(present=True))
+    monkeypatch.setattr(dns, "check_mx", lambda d: [])
+    monkeypatch.setattr(dns, "check_zone_transfer", lambda d: (False, []))
+    monkeypatch.setattr(dns, "check_wildcard_dns", lambda d: False)
+    res = dns.check_dns_security("example.com")
+    # findings are plain dicts from _finding()
+    spf_items = [f for f in res.findings if "SPF" in f.get("title", "") or "softfail" in f.get("title", "").lower()]
+    assert spf_items, res.findings
+    assert all(f.get("severity") == "INFO" for f in spf_items)
+    assert any("DMARC" in f.get("title", "") or "mitigated" in f.get("title", "").lower() for f in spf_items)
+
+
 def test_spoofability_lookup_failure_not_scored(monkeypatch):
     # All three failed => score 0, NOT a false 'spoofable'.
     spf = dns.SPFResult(lookup_failed=True)

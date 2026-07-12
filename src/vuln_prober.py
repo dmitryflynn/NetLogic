@@ -4,6 +4,7 @@ Safe, read-only active probes that attempt to confirm specific known vulnerabili
 All probes are non-destructive and do not modify target state.
 """
 
+import re
 import socket
 import base64
 import ssl
@@ -11,6 +12,7 @@ import urllib.request
 import urllib.error
 from dataclasses import dataclass, field
 from typing import Optional
+from urllib.parse import urlparse
 
 
 # ─── Data Models ─────────────────────────────────────────────────────────────
@@ -24,6 +26,9 @@ class CVEProbe:
     detail: str
     evidence: str = ""
     remediation: str = ""
+    # Operator-facing reproduction (curl + expected signal). Always filled for
+    # confirmed probes so executive / H1 summaries can ship a How-to-reproduce.
+    poc: dict = field(default_factory=dict)
 
 @dataclass
 class VulnProbeResult:
@@ -33,6 +38,115 @@ class VulnProbeResult:
 
 
 # ─── Low-level Helpers ────────────────────────────────────────────────────────
+
+def _normalize_host(host: str) -> str:
+    """Lowercase host without port / trailing dot (for redirect comparisons)."""
+    h = (host or "").strip().lower().rstrip(".")
+    if not h:
+        return ""
+    # Strip brackets for IPv6 literals
+    if h.startswith("[") and "]" in h:
+        h = h[1:h.index("]")]
+        return h
+    # hostname:port (not IPv6)
+    if h.count(":") == 1:
+        h = h.rsplit(":", 1)[0]
+    return h.rstrip(".")
+
+
+def parse_location_host(location: str) -> str:
+    """Hostname from a Location header, or '' if relative / unparseable."""
+    loc = (location or "").strip()
+    if not loc:
+        return ""
+    if loc.startswith("/") and not loc.startswith("//"):
+        return ""
+    if loc.startswith("//"):
+        parsed = urlparse("https:" + loc)
+    else:
+        parsed = urlparse(loc)
+        if not parsed.scheme:
+            return ""
+    return _normalize_host(parsed.hostname or "")
+
+
+def hosts_same_site(a: str, b: str) -> bool:
+    """True if hosts are equal or one is a subdomain of the other (www vs apex)."""
+    ha, hb = _normalize_host(a), _normalize_host(b)
+    if not ha or not hb:
+        return False
+    return ha == hb or ha.endswith("." + hb) or hb.endswith("." + ha)
+
+
+def location_is_external(location: str, target_host: str) -> bool:
+    """True when Location navigates the browser off the target site (host comparison only).
+
+    Echoing an attacker URL inside a same-site Location *query* is NOT external:
+    ``Location: https://www.zipenvy.com/cb?callbackUrl=https://evil.com`` stays on zipenvy.
+    """
+    loc_host = parse_location_host(location)
+    if not loc_host:
+        return False
+    return not hosts_same_site(loc_host, target_host)
+
+
+def is_external_open_redirect(location: str, target_host: str, marker: str) -> bool:
+    """True only when Location sends the browser to an *external* host we control.
+
+    CWE-601 requires the redirect *destination host* to leave the target origin.
+    Same-site HTTP→HTTPS upgrades (or other redirects) that merely echo the probe
+    marker in a query string are NOT open redirects — e.g.::
+
+        Location: https://zipenvy.com/?url=https://netlogic-redirect-test.invalid
+        Location: https://www.zipenvy.com/api/auth/callback?callbackUrl=https://evil.com
+
+    Both keep the browser on the zipenvy site; only the query contains the external URL.
+    """
+    loc = (location or "").strip()
+    if not loc or not marker:
+        return False
+    if not location_is_external(loc, target_host):
+        return False
+    loc_host = parse_location_host(loc)
+    # Probe control: destination host must be our marker domain (not just "marker in URL").
+    return marker.lower() in loc_host
+
+
+def http_poc(host: str, port: int, scheme: str, path: str, expected: str,
+             method: str = "GET") -> dict:
+    """Build a deterministic non-destructive operator PoC dict."""
+    p = path if (path or "").startswith("/") else f"/{path or ''}"
+    # Default port omission for cleaner curls
+    if (scheme == "https" and int(port) == 443) or (scheme == "http" and int(port) == 80):
+        base = f"{scheme}://{host}{p}"
+    else:
+        base = f"{scheme}://{host}:{port}{p}"
+    curl = f"curl -sk -D- -o /dev/null -X {method} '{base}'"
+    return {
+        "curl": curl,
+        "expected": (expected or "")[:400],
+        "how_to_reproduce": (
+            f"1. Run the curl below (read-only; does not modify the target).\n"
+            f"2. Confirm the vulnerable signal: {(expected or '')[:240]}\n"
+            f"3. Safe response: no such signal / redirect stays on `{host}`."
+        ),
+    }
+
+
+def ensure_probe_poc(probe: "CVEProbe", host: str, port: int, scheme: str) -> "CVEProbe":
+    """Fill ``probe.poc`` from evidence when missing (path extracted from evidence)."""
+    if probe.poc and probe.poc.get("curl"):
+        return probe
+    method, path = "GET", "/"
+    ev = probe.evidence or ""
+    m = re.search(r"\b(GET|POST|HEAD|PUT|OPTIONS)\s+(\S+)", ev, re.I)
+    if m:
+        method, path = m.group(1).upper(), m.group(2)
+        # Strip trailing punctuation from path tokens
+        path = path.rstrip(".,;→")
+    probe.poc = http_poc(host, port, scheme, path, expected=ev or probe.detail, method=method)
+    return probe
+
 
 def _raw_http(host: str, port: int, request_bytes: bytes,
               timeout: float = 5.0, max_recv: int = 16384) -> Optional[str]:
@@ -357,7 +471,12 @@ def probe_tomcat_default_creds(host: str, port: int, timeout: float = 5.0) -> Op
 
 def probe_open_redirect(host: str, port: int, scheme: str = "http",
                         timeout: float = 4.0) -> Optional[CVEProbe]:
-    """CWE-601: Open redirect — attacker-controlled redirect destination."""
+    """CWE-601: Open redirect — attacker-controlled *external* redirect destination.
+
+    Confirms only when the Location **host** is external to the target AND is the
+    probe marker domain. Marker text merely reflected into a same-site Location
+    query string is a false positive (common on HTTPS upgrade / canonical redirects).
+    """
     marker = "netlogic-redirect-test.invalid"
     test_paths = [
         f"/?url=https://{marker}", f"/?redirect=https://{marker}",
@@ -383,22 +502,30 @@ def probe_open_redirect(host: str, port: int, scheme: str = "http",
             try:
                 resp = opener.open(req, timeout=timeout)
                 resp_code = resp.status
-                location = resp.headers.get("location", "")
+                location = resp.headers.get("location", "") or resp.headers.get("Location", "")
             except urllib.error.HTTPError as e:
                 resp_code = e.code
-                location = e.headers.get("location", "")
-            if resp_code in (301, 302, 303, 307, 308) and location and marker in location:
-                return CVEProbe(
-                    cve_id="CWE-601",
-                    title="Open Redirect — Attacker-Controlled Location Header",
-                    severity="MEDIUM", confirmed=True,
-                    detail=(f"Open redirect confirmed at {path}. Server redirects to an arbitrary external URL. "
-                            "Used in phishing attacks — attacker sends links from your trusted domain "
-                            "that redirect to a malicious site."),
-                    evidence=f"GET {path} → HTTP {resp_code} Location: {location[:80]}",
-                    remediation="Validate redirect destinations against an allowlist; use relative paths only; "
-                                "display interstitial warning for external redirects."
-                )
+                location = e.headers.get("location", "") or e.headers.get("Location", "")
+            if resp_code not in (301, 302, 303, 307, 308) or not location:
+                continue
+            if not is_external_open_redirect(location, host, marker):
+                continue
+            expected = (
+                f"HTTP {resp_code} with Location host = {marker} "
+                f"(observed Location: {location[:120]})"
+            )
+            return CVEProbe(
+                cve_id="CWE-601",
+                title="Open Redirect — Attacker-Controlled Location Header",
+                severity="MEDIUM", confirmed=True,
+                detail=(f"Open redirect confirmed at {path}. Server redirects the browser to an "
+                        "external host controlled by the attacker parameter. Used in phishing — "
+                        "links from your trusted domain land on a malicious site."),
+                evidence=f"GET {path} → HTTP {resp_code} Location: {location[:120]}",
+                remediation="Validate redirect destinations against an allowlist; use relative paths only; "
+                            "display interstitial warning for external redirects.",
+                poc=http_poc(host, port, scheme, path, expected=expected),
+            )
         except Exception:
             continue
     return None
@@ -614,54 +741,40 @@ def probe_web_vulnerabilities(target: str, ports: list,
         _BASELINE = _compute_baseline(target, port, scheme=scheme, timeout=timeout)
 
         # Universal HTTP probes — run on every HTTP port
+        def _add(p):
+            if p:
+                result.confirmed.append(ensure_probe_poc(p, target, port, scheme))
+
         listing = probe_directory_listing(target, port, scheme=scheme, timeout=timeout)
-        if listing:
-            result.confirmed.append(listing)
+        _add(listing)
 
         for probe in probe_php_info_exposure(target, port, scheme=scheme, timeout=timeout):
-            result.confirmed.append(probe)
+            _add(probe)
 
         redirect = probe_open_redirect(target, port, scheme=scheme, timeout=timeout)
-        if redirect:
-            result.confirmed.append(redirect)
+        _add(redirect)
 
-        log4j = probe_log4shell_headers(target, port, scheme=scheme, timeout=timeout)
-        if log4j:
-            result.confirmed.append(log4j)
-
-        nginx = probe_nginx_alias_traversal(target, port, scheme=scheme, timeout=timeout)
-        if nginx:
-            result.confirmed.append(nginx)
-
-        iis = probe_iis_shortname(target, port, scheme=scheme, timeout=timeout)
-        if iis:
-            result.confirmed.append(iis)
+        _add(probe_log4shell_headers(target, port, scheme=scheme, timeout=timeout))
+        _add(probe_nginx_alias_traversal(target, port, scheme=scheme, timeout=timeout))
+        _add(probe_iis_shortname(target, port, scheme=scheme, timeout=timeout))
 
         # Service / port specific probes
         svc = port_result.service or ""
 
         # Apache path traversal
         if svc in ("http", "https", "http-alt", "https-alt") or port in (80, 443, 8080, 8443):
-            apache = probe_apache_path_traversal(target, port, scheme=scheme, timeout=timeout)
-            if apache:
-                result.confirmed.append(apache)
-            shellshock = probe_shellshock(target, port, scheme=scheme, timeout=timeout)
-            if shellshock:
-                result.confirmed.append(shellshock)
+            _add(probe_apache_path_traversal(target, port, scheme=scheme, timeout=timeout))
+            _add(probe_shellshock(target, port, scheme=scheme, timeout=timeout))
 
         # Spring Boot actuator
         if port in (8080, 8443, 8000, 8001, 8008, 8888) or svc in ("http-alt", "https-alt"):
             for probe in probe_spring_actuator(target, port, scheme=scheme, timeout=timeout):
-                result.confirmed.append(probe)
-            tomcat = probe_tomcat_default_creds(target, port, timeout=timeout)
-            if tomcat:
-                result.confirmed.append(tomcat)
+                _add(probe)
+            _add(probe_tomcat_default_creds(target, port, timeout=timeout))
 
         # Grafana
         if svc == "grafana" or port == 3000:
-            grafana = probe_grafana_path_traversal(target, port, scheme=scheme, timeout=timeout)
-            if grafana:
-                result.confirmed.append(grafana)
+            _add(probe_grafana_path_traversal(target, port, scheme=scheme, timeout=timeout))
 
         _BASELINE = None  # clear baseline after per-port probes
 
@@ -671,8 +784,13 @@ def probe_web_vulnerabilities(target: str, ports: list,
     if 8009 in all_port_nums or has_tomcat:
         ghostcat = probe_ghostcat(target, 8009, timeout=timeout)
         if ghostcat:
-            result.confirmed.append(ghostcat)
+            result.confirmed.append(ensure_probe_poc(ghostcat, target, 8009, "http"))
             result.probes_run += 1
+
+    # Final safety: every confirmed finding must carry a PoC for report export.
+    for f in result.confirmed:
+        if not (f.poc and f.poc.get("curl")):
+            ensure_probe_poc(f, target, 80, "http")
 
     result.confirmed.sort(key=lambda f: _SEV_ORDER.get(f.severity, 5))
     return result

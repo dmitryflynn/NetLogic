@@ -114,8 +114,10 @@ def print_terminal_report(host_result, vuln_matches, osint_result=None):
                 elif epss >= 0.1:  epss_str = f"  {C.ORANGE}EPSS {epss*100:.0f}%{C.RESET}"
                 elif epss > 0:     epss_str = f"  {C.DIM}EPSS {epss*100:.1f}%{C.RESET}"
                 else:              epss_str = ""
-                print(f"\n    {color}{C.BOLD}{badge}{C.RESET}  {C.BOLD}{cve.id}{C.RESET}  CVSS {cve.cvss_score}{epss_str}")
-                print(f"    {C.DIM}{cve.description[:100]}{'…' if len(cve.description) > 100 else ''}{C.RESET}")
+                desc = (cve.description or "").strip()
+                title = desc[:90] + ("…" if len(desc) > 90 else "") if desc else cve.id
+                print(f"\n    {color}{C.BOLD}{badge}{C.RESET}  {C.BOLD}{title}{C.RESET}  CVSS {cve.cvss_score}{epss_str}")
+                print(f"    {C.DIM}Related: {cve.id}{C.RESET}")
                 has_msf = getattr(cve, 'has_metasploit', False)
                 has_pub = getattr(cve, 'has_public_exploit', False)
                 if has_msf:
@@ -205,6 +207,12 @@ def print_vuln_probe_results(probe_result, no_color: bool = False):
         print(f"  {f.detail[:130]}{'…' if len(f.detail)>130 else ''}")
         if f.evidence:
             print(f"  {D}Evidence   : {f.evidence[:100]}{R}")
+        poc = getattr(f, "poc", None) or {}
+        if isinstance(poc, dict) and poc.get("curl"):
+            curl = str(poc["curl"])
+            print(f"  {Cy}PoC / repro: {curl[:120]}{'…' if len(curl) > 120 else ''}{R}")
+            if poc.get("expected"):
+                print(f"  {D}Expect     : {str(poc['expected'])[:100]}{R}")
         if f.remediation:
             print(f"  {Cy}Remediation: {f.remediation[:110]}{'…' if len(f.remediation)>110 else ''}{R}")
 
@@ -508,14 +516,16 @@ def generate_html_report(host_result, vuln_matches, osint_result=None) -> str:
         for cve in sorted(vm.cves, key=lambda c: c.cvss_score, reverse=True):
             sev = cve.severity.upper()
             color = SEV_HTML_COLOR.get(sev, "#888")
+            desc = (cve.description or "").strip()
+            title = (desc[:120] + ("…" if len(desc) > 120 else "")) if desc else "Known issue"
             vuln_rows += f"""
             <tr>
+              <td style="font-size:0.9em">{esc(title)}</td>
               <td><code>{esc(cve.id)}</code></td>
               <td><span style="color:{color};font-weight:700">{esc(sev)}</span></td>
               <td>{esc(cve.cvss_score)}</td>
               <td>{esc(vm.port)}/{esc(vm.service)}</td>
               <td>{esc(vm.product or "–")} {esc(vm.version or "")}</td>
-              <td style="font-size:0.85em">{esc(cve.description[:120])}…</td>
               <td>{"⚡ Yes" if cve.exploit_available else "–"}</td>
             </tr>"""
 
@@ -581,8 +591,8 @@ def generate_html_report(host_result, vuln_matches, osint_result=None) -> str:
 
 <div class="stat-grid">
   <div class="stat"><div class="num">{len(h.ports)}</div><div class="label">Open Ports</div></div>
-  <div class="stat"><div class="num" style="color:#ff4444">{critical}</div><div class="label">Critical CVEs</div></div>
-  <div class="stat"><div class="num" style="color:#ff8c00">{high}</div><div class="label">High CVEs</div></div>
+  <div class="stat"><div class="num" style="color:#ff4444">{critical}</div><div class="label">Critical vulns</div></div>
+  <div class="stat"><div class="num" style="color:#ff8c00">{high}</div><div class="label">High vulns</div></div>
   <div class="stat"><div class="num">{total_vulns}</div><div class="label">Total Findings</div></div>
 </div>
 
@@ -597,7 +607,7 @@ def generate_html_report(host_result, vuln_matches, osint_result=None) -> str:
 <section>
   <h2>Vulnerability Findings</h2>
   <table>
-    <thead><tr><th>CVE ID</th><th>Severity</th><th>CVSS</th><th>Port/Service</th><th>Product</th><th>Description</th><th>Exploit</th></tr></thead>
+    <thead><tr><th>Vulnerability</th><th>Related CVE</th><th>Severity</th><th>CVSS</th><th>Port/Service</th><th>Product</th><th>Exploit</th></tr></thead>
     <tbody>{vuln_rows or "<tr><td colspan='7' style='color:#44ff88'>No known vulnerabilities identified.</td></tr>"}</tbody>
   </table>
 </section>

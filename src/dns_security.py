@@ -707,7 +707,12 @@ def calculate_spoofability(spf: SPFResult, dkim: DKIMResult, dmarc: DMARCResult)
     elif spf.all_mechanism in ("+all", "?all", ""):
         score += 3
     elif spf.all_mechanism == "~all":
-        score += 1
+        # Softfail only hurts when DMARC does not enforce. With p=reject the
+        # ~all contribution is noise in the composite score.
+        if not dmarc.lookup_failed and dmarc.present and (dmarc.policy or "") == "reject":
+            pass
+        else:
+            score += 1
 
     # DMARC
     if dmarc.lookup_failed:
@@ -725,6 +730,59 @@ def calculate_spoofability(spf: SPFResult, dkim: DKIMResult, dmarc: DMARCResult)
 
     spoofable = score >= 5
     return spoofable, min(score, 10)
+
+
+def email_auth_posture_for_ai(dns_result) -> dict:
+    """Compact multi-layer email-auth view for AI synthesis (not a severity verdict).
+
+    Gives the model SPF + DKIM + DMARC together so it can reason over the *bundle*
+    instead of elevating a single checklist item (e.g. SPF softfail) in isolation.
+    """
+    if dns_result is None:
+        return {}
+
+    def _g(obj, name, default=None):
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(name, default)
+        return getattr(obj, name, default)
+
+    spf = _g(dns_result, "spf") or {}
+    dkim = _g(dns_result, "dkim") or {}
+    dmarc = _g(dns_result, "dmarc") or {}
+
+    spf_mech = str(_g(spf, "all_mechanism", "") or "")
+    dmarc_pol = str(_g(dmarc, "policy", "") or "")
+    dkim_ok = bool(_g(dkim, "found_selectors"))
+    spoofable = bool(_g(dns_result, "email_spoofable", False))
+    score = int(_g(dns_result, "spoofability_score", 0) or 0)
+
+    layers = {
+        "spf_present": bool(_g(spf, "present", False)),
+        "spf_all": spf_mech or None,
+        "spf_record": (str(_g(spf, "record", "") or "")[:160] or None),
+        "dmarc_present": bool(_g(dmarc, "present", False)),
+        "dmarc_policy": dmarc_pol or None,
+        "dmarc_record": (str(_g(dmarc, "record", "") or "")[:160] or None),
+        "dkim_selectors_found": dkim_ok,
+        "dkim_selectors": list(_g(dkim, "found_selectors") or [])[:8],
+    }
+    # Strip empties
+    layers = {k: v for k, v in layers.items() if v not in (None, "", [], False) or k.endswith("_present") or k == "dkim_selectors_found"}
+
+    return {
+        "family": "email_auth",
+        "spoofable": spoofable,
+        "score_0_to_10": score,
+        "layers": layers,
+        "note": (
+            "Composite control family: judge email spoofing risk from ALL layers "
+            "together (and the spoofable flag). Do not promote a single-layer "
+            "hygiene note to a vulnerability when the overall posture already "
+            "negates the claimed impact."
+        ),
+    }
 
 
 # ─── Finding Builder ─────────────────────────────────────────────────────────
@@ -768,19 +826,62 @@ def check_dns_security(domain: str) -> DNSSecurityResult:
     # posture — never re-derive a 'missing/insecure' finding from .present /
     # .found_selectors / .enabled in that case, or we resurrect the exact false
     # positives the sub-checks deliberately suppressed.
+    dmarc_enforcing = (
+        result.dmarc.present
+        and not result.dmarc.lookup_failed
+        and (result.dmarc.policy or "").lower() in ("reject", "quarantine")
+    )
+
     if result.spf.lookup_failed:
         pass
     elif not result.spf.present:
-        result.findings.append(_finding(
-            "HIGH", "Missing SPF Record",
-            "No SPF record found. Anyone can send emails appearing to come from this domain.",
-            f"Add TXT record: v=spf1 include:_spf.google.com -all"
-        ))
+        # Missing SPF is far less severe when DMARC already rejects unauthenticated mail.
+        if dmarc_enforcing and (result.dmarc.policy or "").lower() == "reject":
+            result.findings.append(_finding(
+                "INFO", "SPF Record Not Published (DMARC reject in place)",
+                "No SPF record found. Direct spoofed mail is still typically rejected by "
+                "receivers that honor DMARC p=reject, but publishing SPF improves alignment "
+                "and deliverability diagnostics.",
+                "Add TXT record: v=spf1 include:_spf.google.com -all",
+            ))
+        else:
+            result.findings.append(_finding(
+                "HIGH", "Missing SPF Record",
+                "No SPF record found. Anyone can send emails appearing to come from this domain.",
+                f"Add TXT record: v=spf1 include:_spf.google.com -all"
+            ))
     elif result.spf.findings:
         for finding in result.spf.findings:
+            sev = finding.severity
+            title = finding.title
+            desc = finding.description
+            # SPF softfail alone is not a spoofing vulnerability when DMARC rejects.
+            if (
+                dmarc_enforcing
+                and (result.dmarc.policy or "").lower() == "reject"
+                and "softfail" in (finding.title or "").lower()
+            ):
+                sev = "INFO"
+                title = "SPF Softfail (~all) — mitigated by DMARC reject"
+                desc = (
+                    "SPF uses ~all (softfail). Receiving servers that enforce DMARC "
+                    f"p=reject ({result.dmarc.policy}) will still reject unauthenticated "
+                    "mail that fails alignment. This is a hygiene/alignment note, not "
+                    "evidence the domain is spoofable."
+                )
+            elif (
+                dmarc_enforcing
+                and (result.dmarc.policy or "").lower() == "quarantine"
+                and "softfail" in (finding.title or "").lower()
+            ):
+                sev = "INFO"
+                title = "SPF Softfail (~all) — DMARC quarantine in place"
+                desc = (
+                    "SPF uses ~all. DMARC p=quarantine reduces residual spoofing risk. "
+                    "Treat as hygiene; overall email auth is not 'open'."
+                )
             result.findings.append(_finding(
-                finding.severity, finding.title, finding.description,
-                finding.remediation,
+                sev, title, desc, finding.remediation,
             ))
 
     if not result.dkim.lookup_failed and not result.dkim.found_selectors:
