@@ -31,6 +31,17 @@ export interface ScanRequest {
   ssh_key?: string
   ssh_pass?: string
   ssh_port?: number
+  // Reasoning engine phases
+  do_reason?: boolean
+  do_since_last?: boolean
+  do_multi_host?: boolean
+  do_active_validate?: boolean
+  do_ai_driven?: boolean
+  do_ai_agent?: boolean
+  agent_depth?: boolean
+  allow_crash_probes?: boolean
+  agent_max_steps?: number
+  agent_max_requests?: number
   // Intelligent agent routing: require capabilities and/or pin to a vantage point
   required_capabilities?: string[]
   agent_selector?: Record<string, string>
@@ -115,7 +126,7 @@ export interface FusionResult {
 export interface ScanSections {
   topology?: Record<string, unknown>
   exploitability?: { attributes?: Record<string, unknown>[] }
-  webFingerprint?: Record<string, unknown>
+  webFingerprint?: Record<string, unknown>   // includes saas?: SaaSHit[], is_spa?: boolean
   ai?: { markdown?: string; error?: string; provider?: string; model?: string; beyond_cves?: string[] }
   fusion?: FusionResult
   tls?: { results?: Record<string, unknown>[] }
@@ -124,12 +135,182 @@ export interface ScanSections {
   dns?: Record<string, unknown>
   authenticated?: Record<string, unknown>
   scanDiff?: Record<string, unknown>
+  reasoning?: {
+    reasoning_enabled?: boolean
+    world_modeling_enabled?: boolean
+    started_at?: number
+    investigation?: {
+      persona?: string
+      objectives?: ReasoningObjective[]
+      goals?: unknown[]
+      hypotheses?: ReasoningHypothesis[]
+      unknowns?: unknown[]
+      contradictions?: { subject?: string; reason?: string; candidates?: string[] }[]
+      dead_ends?: { step?: string; reason?: string }[]
+    }
+    execution?: {
+      budget?: Record<string, unknown>
+      tokens_used?: number
+      probe_history?: unknown[]
+      execution_history?: { step?: string; persona?: string; gained?: boolean; rationale?: string }[]
+      explanations?: unknown[]
+      provenance?: { edges?: unknown[]; nodes?: unknown[] } & Record<string, unknown>
+      investigation_plans?: InvestigationPlan[]
+      ai_transcript?: AITranscript
+    }
+    world?: {
+      graph?: { nodes?: EvidenceNode[] }
+      hosts?: Record<string, unknown>
+      observations?: unknown[]
+      beliefs?: Record<string, number>
+      technology?: unknown[]
+      interesting_hosts?: string[]
+      interesting_services?: { service?: string; port?: number; reason?: string }[]
+      potential_pivots?: unknown[]
+    }
+  }
+  /** Phase 7 change-detection event (only with --since-last). */
+  change?: {
+    delta?: { added?: Record<string, unknown>[]; removed?: Record<string, unknown>[]; changed?: Record<string, unknown>[] }
+    seed?: { hints?: unknown[]; objectives?: string[] }
+    report?: string
+  }
+  /** Active validation event (only with --active-validate): gated safe_active confirmation checks. */
+  activeValidation?: {
+    confirmed?: number
+    executed?: number
+    results?: {
+      probe?: string; confirms?: string; gated_allowed?: boolean; executed?: boolean
+      succeeded?: boolean; denials?: string[]; evidence?: string
+      ai_skipped?: boolean; ai_reason?: string
+    }[]
+    /** Information goals the AI asked for that the deterministic layer won't actively observe. */
+    capability_gaps?: { goal?: string; reason?: string; kind?: 'missing_sensor' | 'out_of_scope' | string }[]
+  }
+  /** Analyst-readable view: raw objectives regrouped into investigations (Q / evidence / conclusion). */
+  investigations?: {
+    question?: string; subject?: string; kind?: string; conclusion?: string; confidence?: number
+    gathered?: number; total_evidence?: number
+    adjudicated_by_ai?: boolean; rationale?: string
+    evidence?: { name?: string; satisfied?: boolean }[]
+  }[]
+  /** Architecture Summary: scattered observations synthesised into one plain-English picture (no AI). */
+  architecture?: {
+    narrative?: string
+    stack_kind?: string
+    execution_model?: string
+    components?: { role?: string; name?: string; evidence?: string; confidence?: number }[]
+    attack_surfaces?: string[]
+  }
+  /** AI overlay OVER the architecture: grounded, prioritised investigation objectives (needs AI key). */
+  investigationPlan?: { title?: string; reason?: string; component?: string; priority?: number }[]
+  /** Deterministic triage: matched CVEs ranked + bucketed into attention vs low-signal noise (no AI). */
+  triage?: {
+    attention?: TriageItem[]
+    noise?: TriageItem[]
+    counts?: { attention?: number; noise?: number; kev?: number; total?: number }
+  }
+  /** AI investigation agent (do_ai_agent): tool-driven verification + chains. */
+  aiAgent?: {
+    confirmed?: number
+    leads?: number
+    steps_used?: number
+    requests_used?: number
+    high_value_used?: number
+    depth_mode?: boolean
+    stopped_reason?: string
+    findings?: {
+      id?: string; title?: string; severity?: string; status?: string
+      evidence_refs?: string[]; rationale?: string
+    }[]
+    chains?: { from?: string; to?: string; why?: string }[]
+    turns?: { step?: number; thought?: string; results?: { tool?: string; summary?: string; ok?: boolean }[]; stop?: boolean }[]
+    observations?: { observation_id?: string; tool?: string; summary?: string }[]
+  }
+}
+
+export interface SaaSHit {
+  service?: string; category?: string; evidence?: string; severity?: string; detail?: string
+}
+
+export interface TriageItem {
+  cve?: string; port?: number; service?: string
+  cvss?: number; cvss_vector?: string; cwe?: string
+  epss?: number; kev?: boolean; exploit_available?: boolean
+  reachable?: string; priority?: string; bucket?: string; rationale?: string
+  kind?: string; title?: string          // "cve" | "web" (SaaS / exposed-file); title = display label
+}
+
+export interface AITranscriptEntry {
+  proposal_id?: string
+  agent?: string
+  kind?: string
+  summary?: string
+  rationale?: string
+  accepted?: boolean
+  uncertainty?: string
+  stage_failed?: string
+  seeded_as?: string
+  outcome?: string
+}
+
+export interface AITranscript {
+  entries?: AITranscriptEntry[]
+  summary?: { proposed?: number; accepted?: number; confirmed?: number; refuted?: number; unresolved?: number }
+}
+
+export interface InvestigationPlan {
+  objective?: string
+  goal_reachable?: boolean
+  steps?: { action_id?: string; risk_tier?: string; establishes?: string[]; rationale?: string }[]
+  unmet_preconditions?: string[]
+  max_risk_tier?: string
+  score?: number
+  rationale?: string
+}
+
+export interface ReasoningObjective {
+  name?: string
+  priority?: number
+  satisfied?: boolean
+  produced_by?: string
+  risk_budget?: string
+  source?: { generated_by?: string; reason?: string; confidence?: number }
+}
+
+export interface ReasoningHypothesis {
+  id?: string
+  label?: string
+  status?: string
+  likelihoods?: Record<string, number>
+  entropy?: number
+  reason?: string
+}
+
+export interface EvidenceObservation {
+  kind?: string
+  evidence?: string
+  source?: string
+  reliability?: string
+  obs_id?: string
+  data?: Record<string, unknown>
+}
+
+export interface EvidenceNode {
+  id?: string
+  kind?: string
+  key?: string
+  label?: string
+  attrs?: Record<string, unknown>
+  observations?: EvidenceObservation[]
 }
 
 /** Pull the latest payload for each deep-scan section out of the event list. */
 export function extractSections(events: ScanEvent[]): ScanSections {
   const types = ['topology', 'service_exploitability', 'web_fingerprint', 'ai', 'fusion',
-    'tls', 'headers', 'stack', 'dns', 'authenticated', 'scan_diff'] as const
+    'tls', 'headers', 'stack', 'dns', 'authenticated', 'scan_diff', 'reasoning', 'change',
+    'active_validation', 'investigations', 'triage', 'architecture', 'investigation_plan',
+    'ai_agent'] as const
   const last = new Map<string, Record<string, unknown>>()
   for (const e of events) {
     if (e.data && types.includes(e.type as typeof types[number])) {
@@ -148,6 +329,14 @@ export function extractSections(events: ScanEvent[]): ScanSections {
     dns:            last.get('dns'),
     authenticated:  last.get('authenticated'),
     scanDiff:       last.get('scan_diff'),
+    reasoning:      last.get('reasoning') as ScanSections['reasoning'],
+    change:         last.get('change') as ScanSections['change'],
+    activeValidation: last.get('active_validation') as ScanSections['activeValidation'],
+    investigations: (last.get('investigations') as { investigations?: ScanSections['investigations'] } | undefined)?.investigations,
+    triage:         last.get('triage') as ScanSections['triage'],
+    architecture:   last.get('architecture') as ScanSections['architecture'],
+    investigationPlan: (last.get('investigation_plan') as { objectives?: ScanSections['investigationPlan'] } | undefined)?.objectives,
+    aiAgent:        last.get('ai_agent') as ScanSections['aiAgent'],
   }
 }
 
