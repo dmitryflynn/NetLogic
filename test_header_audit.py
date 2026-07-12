@@ -266,5 +266,30 @@ def test_score_bounds_never_negative():
     assert grade == "F"
 
 
+def test_missing_csp_is_medium_hardening_not_proven_xss():
+    f = ha.check_csp({})
+    assert f is not None and f.present is False
+    assert f.severity == "MEDIUM"
+    assert "fully vulnerable" not in f.detail.lower()
+
+
+def test_vercel_challenge_skips_app_header_false_positives(monkeypatch):
+    """Challenge interstitials must not produce CORS/CSP 'app is broken' findings."""
+    _patch_fetch(monkeypatch, {
+        "https://": _canned({
+            "Server": "Vercel",
+            "X-Vercel-Mitigated": "challenge",
+            "X-Vercel-Challenge-Token": "tok",
+            "X-Vercel-Id": "id",
+            "Access-Control-Allow-Origin": "*",  # must be ignored on challenge
+        }, status=403),
+    })
+    res = ha.audit_headers("example.com", 443)
+    titles = [f.title for f in res.findings]
+    assert any("challenge" in t.lower() for t in titles)
+    assert not any("CORS" in t for t in titles)
+    assert not any("Missing Content-Security-Policy" in t for t in titles)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

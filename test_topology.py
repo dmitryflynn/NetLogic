@@ -232,9 +232,10 @@ def test_map_topology_full(monkeypatch):
     assert t.asn == "AS1" and t.asn_org == "Org" and t.country == "US"
     assert t.ipv6 == ["2606:2800::1"]
     assert t.traceroute_hops == ["192.168.1.1", "10.0.0.1", "*", "93.184.216.34"]
-    # hop_count = path depth (4), 3 responders.
+    # hop_count = path depth (4), 3 responders. Private (192.168/10.x) hops are annotated
+    # as scanner-path, then the public hop toward the target.
     assert t.hop_count == 4
-    assert any("responding hop" in n for n in t.notes)
+    assert any("local/scanner hop" in n for n in t.notes)
     assert any("IPv6 reachable" in n for n in t.notes)
 
 

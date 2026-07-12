@@ -491,10 +491,12 @@ def analyze_tls(host: str, port: int = 443, timeout: float = 5.0) -> TLSResult:
                 detail=f"Certificate expires on {cert.not_after}. Renew immediately to avoid outages."
             ))
         elif cert.days_until_expiry is not None and cert.days_until_expiry < 90:
+            # 30–90 days is operational hygiene, not a security defect. Keep as
+            # INFO so demos don't lead with a MEDIUM for a healthy cert.
             result.findings.append(TLSFinding(
-                severity="MEDIUM", cvss=4.0,
-                title=f"Certificate Expiring in {cert.days_until_expiry} Days",
-                detail=f"Certificate expires {cert.not_after}. Plan renewal soon."
+                severity="INFO", cvss=0.0,
+                title=f"Certificate Expires in {cert.days_until_expiry} Days",
+                detail=f"Certificate expires {cert.not_after}. Plan renewal in the normal ops cycle."
             ))
 
         if cert.is_self_signed:
