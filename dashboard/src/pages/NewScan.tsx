@@ -30,6 +30,7 @@ const DEFAULT: ScanRequest = {
   do_ai_agent:    false,
   agent_depth:    false,
   allow_crash_probes: false,
+  allow_freeform_proof: false,
   agent_max_steps: 12,
   agent_max_requests: 40,
   ssh_user:    '',
@@ -281,8 +282,9 @@ export default function NewScan() {
                   ...prev,
                   do_ai_agent: on,
                   agent_depth: on,
-                  // turning it off should also disarm crash probes
+                  // turning it off should also disarm opt-in intrusive tools
                   allow_crash_probes: on ? prev.allow_crash_probes : false,
+                  allow_freeform_proof: on ? prev.allow_freeform_proof : false,
                 }))
               }}
               className="accent-accent mt-0.5"
@@ -298,6 +300,26 @@ export default function NewScan() {
             </span>
           </label>
           {form.agent_depth && form.do_ai_agent && (
+            <>
+            <label className="flex items-start gap-3 cursor-pointer select-none pl-7 pt-1 border-t border-border/40">
+              <input
+                type="checkbox"
+                checked={!!form.allow_freeform_proof}
+                onChange={() => toggle('allow_freeform_proof')}
+                className="accent-accent mt-0.5"
+              />
+              <span>
+                <span className="text-[12px] font-medium text-accent">
+                  Freeform proof payloads (Tier C)
+                </span>
+                <span className="block text-[10px] text-text-dim mt-0.5 leading-relaxed">
+                  Lets the agent craft custom GET/query/header proofs (and limited POST on
+                  search/login/graphql-like paths) to concretely expose vulns.
+                  <span className="text-low"> Engine blocks destructive patterns and never
+                  allows PUT/PATCH/DELETE — designed not to wipe or mutate user data.</span>
+                </span>
+              </span>
+            </label>
             <label className="flex items-start gap-3 cursor-pointer select-none pl-7 pt-1 border-t border-border/40">
               <input
                 type="checkbox"
@@ -316,6 +338,7 @@ export default function NewScan() {
                 </span>
               </span>
             </label>
+            </>
           )}
         </div>
 
@@ -344,6 +367,7 @@ export default function NewScan() {
                 ['do_ai_agent', 'AI Investigation Agent (AI chooses tools after baseline)'],
                 ['agent_depth', 'Agent depth mode (CVE leads, chains, no early stop)'],
                 ['allow_crash_probes', 'Allow crash/DoS probes (MAY disrupt target)'],
+                ['allow_freeform_proof', 'Freeform proof payloads (Tier C, non-destructive)'],
               ] as [keyof ScanRequest, string][]
             ).map(([key, label]) => (
               <label
@@ -375,6 +399,7 @@ export default function NewScan() {
               AI Investigation Agent: baseline first, then AI picks tools. Depth mode raises budgets (~24 steps / 80 requests),
               prioritizes CVE leads & attack chains, and blocks early stop until enough high-value checks run.
               Crash probes (http.sys etc.) stay off unless allowed — they can blue-screen a host.
+              Freeform proof (Tier C) stays off unless allowed — still non-destructive (no wipe/delete).
             </span>
           </p>
         </div>

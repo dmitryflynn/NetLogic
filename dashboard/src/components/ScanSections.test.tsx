@@ -52,7 +52,7 @@ const investigations: ScanSectionsT = {
 describe('ScanSections — Investigations panel', () => {
   it('renders one card per investigation with its question and conclusion', () => {
     render(<ScanSections s={investigations} />)
-    expect(screen.getByText('Findings detail')).toBeInTheDocument()
+    expect(screen.getByText('Vulnerability detail')).toBeInTheDocument()
     expect(screen.getByText('Can CVE-2021-31166 be exploited?')).toBeInTheDocument()
     expect(screen.getByText('LIKELY NOT EXPLOITABLE')).toBeInTheDocument()
     expect(screen.getByText('What technology is running on ex.com:80?')).toBeInTheDocument()
@@ -274,23 +274,29 @@ describe('ScanSections — Active Validation panel', () => {
   })
 })
 
-describe('ScanSections — Top Findings (triage)', () => {
-  it('leads with attention items and a priority badge, tucking noise into a disclosure', () => {
+describe('ScanSections — Vulnerabilities (triage)', () => {
+  it('leads with vulnerability titles and a priority badge, tucking catalog leads into a disclosure', () => {
     const s = {
       triage: {
-        attention: [{ cve: 'CVE-2021-44228', cvss: 10, kev: true, priority: 'P1', bucket: 'attention',
+        attention: [{ cve: 'CVE-2021-44228', title: 'Remote code execution via JNDI lookup',
+                      cvss: 10, kev: true, priority: 'P1', bucket: 'attention',
                       service: 'http', port: 8080, rationale: 'CISA KEV — actively exploited in the wild' }],
-        noise: [{ cve: 'CVE-2016-3115', priority: 'P5', bucket: 'noise', rationale: 'version-match only, no corroborating signal' }],
+        noise: [{ cve: 'CVE-2016-3115', title: 'OpenSSH privilege issue', priority: 'P5', bucket: 'noise',
+                  rationale: 'version-match only, no corroborating signal' }],
         counts: { attention: 1, noise: 1, kev: 1, total: 2 },
       },
     } as ScanSectionsT
     render(<ScanSections s={s} />)
-    expect(screen.getByText('Top Findings')).toBeInTheDocument()
+    expect(screen.getByText('Vulnerabilities')).toBeInTheDocument()
+    // Vulnerability title is primary
+    expect(screen.getByText('Remote code execution via JNDI lookup')).toBeInTheDocument()
+    // CVE is supporting context (may be split across nodes)
+    expect(screen.getByText('Related:')).toBeInTheDocument()
     expect(screen.getByText('CVE-2021-44228')).toBeInTheDocument()
     expect(screen.getByText('P1')).toBeInTheDocument()
     expect(screen.getByText('KEV')).toBeInTheDocument()
-    // the noise CVE is behind the disclosure summary, not a top-level finding
-    expect(screen.getByText(/version\/pattern lead\(s\) filtered/)).toBeInTheDocument()
+    // catalog leads are behind the disclosure summary
+    expect(screen.getByText(/catalog lead\(s\) filtered/)).toBeInTheDocument()
   })
 
   it('surfaces a web/SaaS finding in the hero with its title and a SaaS tag', () => {
@@ -313,7 +319,7 @@ describe('ScanSections — Top Findings (triage)', () => {
                 counts: { attention: 0, noise: 1, kev: 0, total: 1 } },
     } as ScanSectionsT
     render(<ScanSections s={s} />)
-    expect(screen.getByText(/No verified high-priority findings/)).toBeInTheDocument()
+    expect(screen.getByText(/No verified high-priority vulnerabilities/)).toBeInTheDocument()
   })
 
   it('renders no Top Findings panel without triage', () => {

@@ -258,7 +258,7 @@ function EventTechPanel({ e }: { e: ScanEvent }) {
   )
 }
 
-function formatRow(e: ScanEvent): Row {
+function formatRow(e: ScanEvent): Row | null {
   const d = asRec(e.data)
   const msg = e.message || ''
 
@@ -289,22 +289,33 @@ function formatRow(e: ScanEvent): Row {
       }
     }
     case 'vuln': {
+      // Operator-facing: vulnerability first; CVE ids are related catalog context.
       const cves = Array.isArray(d.cves) ? d.cves as Record<string, unknown>[] : null
       if (cves?.length) {
-        const ids = cves.map((c) => str(c.id || c.cve_id, 24)).filter(Boolean).join(', ')
+        const first = cves[0] || {}
+        const desc = str(first.description || first.title, 80)
+        const ids = cves.map((c) => str(c.id || c.cve_id, 24)).filter(Boolean)
+        const where = `:${d.port ?? '?'}${d.service ? ` (${d.service})` : ''}`
+        const head = desc || (ids[0] ? `Known issue ${ids[0]}` : 'Catalog vulnerability')
         return {
           cat: 'finding',
-          label: 'CVE',
-          summary: `${ids} on :${d.port ?? '?'}${d.service ? ` (${d.service})` : ''}`,
-          detail: str(cves[0]?.description, 240),
+          label: 'VULN',
+          summary: `${head} on ${where}`
+            + (ids.length ? ` · related ${ids.slice(0, 3).join(', ')}` : ''),
+          detail: str(first.description, 240)
+            + (ids.length ? `\nRelated CVE(s): ${ids.join(', ')}` : ''),
           tone: 'text-critical',
           badge: String(cves.length),
         }
       }
+      const title = str(d.title || d.description, 100)
+      const cid = str(d.cve_id || d.id, 32)
       return {
         cat: 'finding',
-        label: 'CVE',
-        summary: `${str(d.cve_id || d.id, 32)}  ${str(d.title || d.description, 100)}`,
+        label: 'VULN',
+        summary: title
+          ? `${title}${cid ? ` · related ${cid}` : ''}`
+          : (cid || 'Vulnerability'),
         tone: 'text-critical',
       }
     }
@@ -461,15 +472,10 @@ function formatRow(e: ScanEvent): Row {
         summary: `${d.confirmed ?? 0} confirmed · ${d.executed ?? 0} executed`,
         tone: 'text-accent',
       }
-    case 'fusion': {
-      const s = asRec(d.summary)
-      return {
-        cat: 'analysis',
-        label: 'FUSION',
-        summary: `${s.confirmed ?? 0} confirmed · ${s.potential ?? 0} potential · ${s.discarded ?? 0} filtered`,
-        tone: 'text-high',
-      }
-    }
+    case 'fusion':
+      // Fusion runs in the backend but is not shown as its own feed category —
+      // operator-facing analysis lands under AI / triage / investigations.
+      return null
     case 'ai':
       return {
         cat: 'analysis',
@@ -550,7 +556,12 @@ export default function ScanFeed({
   const [expanded, setExpanded] = useState<Record<number, boolean>>({})
 
   const rows = useMemo(
-    () => events.map((e, i) => ({ i, e, row: formatRow(e) })),
+    () => events
+      .map((e, i) => {
+        const row = formatRow(e)
+        return row ? { i, e, row } : null
+      })
+      .filter((x): x is { i: number; e: ScanEvent; row: Row } => x != null),
     [events],
   )
 

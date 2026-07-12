@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { useJobs, useDeleteJob, useAgents, useVdbStatus, useVdbSync } from '../api/scan'
+import { useJobs, useDeleteJob, useAgents } from '../api/scan'
 import StatusBadge from '../components/StatusBadge'
 
 function fmtTime(ts: number | null): string {
@@ -18,9 +18,7 @@ function elapsed(job: { started_at: number | null; completed_at: number | null }
 export default function Dashboard() {
   const { data: jobs = [], isLoading } = useJobs(50)
   const { data: agents = [] }          = useAgents()
-  const { data: vdb }                  = useVdbStatus()
   const deleteJob                       = useDeleteJob()
-  const vdbSync                         = useVdbSync()
 
   const online  = agents.filter((a) => a.status !== 'offline').length
   const busy    = agents.filter((a) => a.status === 'busy').length
@@ -35,16 +33,6 @@ export default function Dashboard() {
         <Stat label="Agents Busy"    value={busy} />
         <Stat label="Total Jobs"     value={jobs.length} />
         <div className="ml-auto flex items-center gap-2">
-          <button
-            className="btn text-[11px] flex items-center gap-1.5"
-            onClick={() => vdbSync.mutate()}
-            disabled={vdbSync.isPending}
-            title={vdb ? `NVD cache: ${vdb.entries} entries · ${vdb.size_kb} KB · ${vdb.nvd_available ? 'NVD online' : 'NVD offline'}` : 'Sync CVE database'}
-          >
-            <span className={`w-1.5 h-1.5 rounded-full ${vdb?.nvd_available ? 'bg-low' : 'bg-text-dim'}`} />
-            {vdbSync.isPending ? 'Syncing…' : 'VDB Sync'}
-            {vdb && <span className="text-text-dim">{vdb.entries} entries</span>}
-          </button>
           <Link to="/scans/new" className="btn btn-primary">
             + New Scan
           </Link>

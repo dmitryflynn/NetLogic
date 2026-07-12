@@ -63,6 +63,20 @@ export default function Markdown({ text, onExplore, exploring }: { text: string;
     // blank
     if (!line.trim()) { i++; continue }
 
+    // fenced code block ``` (used by the analyst's Proof-of-concept commands)
+    if (/^```/.test(line.trim())) {
+      i++
+      const code: string[] = []
+      while (i < lines.length && !/^```/.test(lines[i].trim())) { code.push(lines[i]); i++ }
+      i++ // closing fence
+      blocks.push(
+        <pre key={key++} className="my-2 bg-base border border-border/60 rounded p-2.5 overflow-x-auto text-[11px] font-mono text-text leading-relaxed whitespace-pre">
+          <code>{code.join('\n')}</code>
+        </pre>,
+      )
+      continue
+    }
+
     // heading
     const h = /^(#{1,6})\s+(.*)$/.exec(line)
     if (h) {
@@ -70,6 +84,25 @@ export default function Markdown({ text, onExplore, exploring }: { text: string;
       const level = h[1].length
       const content = h[2]
       const sev = SEV_CLASS(content)
+      // Level-3 headings are per-finding / per-chain subsections — render each as a
+      // collapsible section OPEN by default, so every vuln gets its own drop-down.
+      if (level === 3) {
+        i++
+        const inner: string[] = []
+        while (i < lines.length && !/^#{1,3}\s+/.test(lines[i])) { inner.push(lines[i]); i++ }
+        blocks.push(
+          <details key={key++} open className="group my-2 border border-border/60 rounded-md overflow-hidden">
+            <summary className={`cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden px-3 py-2 bg-elevated/40 hover:bg-elevated flex items-center gap-2 font-semibold text-[12px] ${sev || 'text-text-bright'}`}>
+              <span className="text-text-dim text-[9px] transition-transform group-open:rotate-90">▶</span>
+              <span className="flex-1 min-w-0">{renderInline(content)}</span>
+            </summary>
+            <div className="px-3 py-2 border-t border-border/40">
+              <Markdown text={inner.join('\n')} onExplore={onExplore} exploring={exploring} />
+            </div>
+          </details>,
+        )
+        continue
+      }
       const cls = level <= 1
         ? 'text-text-bright font-display font-bold text-[15px] mt-4 mb-2'
         : level === 2

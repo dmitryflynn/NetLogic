@@ -40,6 +40,7 @@ export interface ScanRequest {
   do_ai_agent?: boolean
   agent_depth?: boolean
   allow_crash_probes?: boolean
+  allow_freeform_proof?: boolean
   agent_max_steps?: number
   agent_max_requests?: number
   // Intelligent agent routing: require capabilities and/or pin to a vantage point
@@ -96,39 +97,13 @@ export interface VulnEvent {
   epss?: number   // EPSS probability of exploitation (0–1)
 }
 
-// One adjudicated finding from the fusion gate + AI.
-export interface FusionRow {
-  subject: string
-  port?: number | null
-  decision: 'confirmed' | 'potential' | 'discarded'
-  impact: 'critical' | 'high' | 'medium' | 'low'
-  pinned: boolean
-  agreement: number
-  rationale?: string
-  ai?: { verdict: string; reason: string } | null
-  safety_override?: boolean
-}
-
-export interface FusionResult {
-  confirmed: FusionRow[]
-  potential: FusionRow[]
-  discarded: FusionRow[]
-  summary: {
-    signals: number
-    confirmed: number
-    potential: number
-    discarded: number
-    ai_adjudicated: number
-  }
-}
-
 // Aggregated deep-scan sections derived from the event stream.
+// Fusion still runs in the backend for adjudication but is not an operator-facing UI section.
 export interface ScanSections {
   topology?: Record<string, unknown>
   exploitability?: { attributes?: Record<string, unknown>[] }
   webFingerprint?: Record<string, unknown>   // includes saas?: SaaSHit[], is_spa?: boolean
   ai?: { markdown?: string; error?: string; provider?: string; model?: string; beyond_cves?: string[] }
-  fusion?: FusionResult
   tls?: { results?: Record<string, unknown>[] }
   headers?: Record<string, unknown>
   stack?: Record<string, unknown>
@@ -307,7 +282,8 @@ export interface EvidenceNode {
 
 /** Pull the latest payload for each deep-scan section out of the event list. */
 export function extractSections(events: ScanEvent[]): ScanSections {
-  const types = ['topology', 'service_exploitability', 'web_fingerprint', 'ai', 'fusion',
+  // 'fusion' intentionally omitted — backend-only adjudication, not rendered in the GUI.
+  const types = ['topology', 'service_exploitability', 'web_fingerprint', 'ai',
     'tls', 'headers', 'stack', 'dns', 'authenticated', 'scan_diff', 'reasoning', 'change',
     'active_validation', 'investigations', 'triage', 'architecture', 'investigation_plan',
     'ai_agent'] as const
@@ -322,7 +298,6 @@ export function extractSections(events: ScanEvent[]): ScanSections {
     exploitability: last.get('service_exploitability') as ScanSections['exploitability'],
     webFingerprint: last.get('web_fingerprint'),
     ai:             last.get('ai') as ScanSections['ai'],
-    fusion:         last.get('fusion') as unknown as ScanSections['fusion'],
     tls:            last.get('tls') as ScanSections['tls'],
     headers:        last.get('headers'),
     stack:          last.get('stack'),
@@ -487,31 +462,6 @@ export const useSetAgentActive = () => {
   })
 }
 
-// ── VDB (Vulnerability Database) ──────────────────────────────────────────────
-
-export interface VdbStatus {
-  entries: number
-  size_kb: number
-  cache_dir: string
-  nvd_available: boolean
-  synced?: boolean
-}
-
-export const useVdbStatus = () =>
-  useQuery<VdbStatus>({
-    queryKey: ['vdb-status'],
-    queryFn: () => api.get('/vdb/status'),
-    staleTime: 30_000,
-  })
-
-export const useVdbSync = () => {
-  const qc = useQueryClient()
-  return useMutation<VdbStatus, Error>({
-    mutationFn: () => api.post('/vdb/sync'),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['vdb-status'] }),
-  })
-}
-
 // ── AI settings ───────────────────────────────────────────────────────────────
 
 export interface AiSettings {
@@ -520,7 +470,7 @@ export interface AiSettings {
   base_url: string
   key_set: boolean
   key_hint: string
-  inherits_ai?: boolean   // fusion only: using the AI-analysis config (no separate key)
+  inherits_ai?: boolean
   providers: string[]
   presets: Record<string, { base_url: string; model: string }>
 }

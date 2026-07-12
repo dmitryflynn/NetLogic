@@ -34,9 +34,13 @@ describe('ScanFeed — click to expand technical detail', () => {
     expect(screen.getByText(/Microsoft-IIS/)).toBeInTheDocument()       // nested data.headers.server
   })
 
-  it('surfaces the CVE array detail for a finding row', () => {
+  it('surfaces vulnerability detail with related CVE context', () => {
     render(<ScanFeed events={events} />)
-    fireEvent.click(screen.getByText(/CVE-2021-31166 on/))
-    expect(screen.getByText(/cvss=9\.8/)).toBeInTheDocument()           // array-of-objects field
+    // Primary label is the vulnerability description, not a bare CVE list
+    const row = screen.getByText(/HTTP\.sys RCE on/)
+    expect(row.textContent).toMatch(/related CVE-2021-31166/i)
+    fireEvent.click(row)
+    expect(screen.getByText('Technical detail')).toBeInTheDocument()
+    expect(screen.getAllByText(/CVE-2021-31166/).length).toBeGreaterThan(0)
   })
 })

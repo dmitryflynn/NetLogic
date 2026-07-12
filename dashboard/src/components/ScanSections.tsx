@@ -1,38 +1,10 @@
 import { useEffect, useRef } from 'react'
-import type { ScanSections, FusionRow, SaaSHit } from '../api/scan'
+import type { ScanSections, SaaSHit } from '../api/scan'
 import Markdown from './Markdown'
 
 const SEV: Record<string, string> = {
   CRITICAL: 'text-critical', HIGH: 'text-high', MEDIUM: 'text-medium',
   LOW: 'text-low', INFO: 'text-text-dim',
-}
-
-const DECISION: Record<string, { label: string; cls: string }> = {
-  confirmed: { label: 'CONFIRMED', cls: 'text-low border-low/40' },
-  potential: { label: 'POTENTIAL · verify', cls: 'text-medium border-medium/40' },
-}
-
-function FusionFinding({ r }: { r: FusionRow }) {
-  const sev = SEV[(r.impact || '').toUpperCase()] ?? 'text-text-dim'
-  const d = DECISION[r.decision]
-  return (
-    <div className="border-b border-border/40 pb-2 last:border-0">
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className={`text-[10px] font-bold uppercase ${sev}`}>{r.impact}</span>
-        <span className="text-text-bright font-mono break-all">{r.subject}</span>
-        {r.port != null && <span className="text-text-dim">:{r.port}</span>}
-        {d && <span className={`text-[10px] px-1.5 py-0.5 rounded border ${d.cls}`}>{d.label}</span>}
-        {r.pinned && <span className="text-[10px] text-accent" title="Pinned: KEV / probe-confirmed — never dropped">★ pinned</span>}
-        {r.agreement > 1 && <span className="text-[10px] text-text-dim">{r.agreement}× corroborated</span>}
-        {r.safety_override && (
-          <span className="text-[10px] text-high" title="AI judged it a false positive but it's high-impact → kept for verification (never auto-dropped)">held</span>
-        )}
-      </div>
-      {r.ai?.reason
-        ? <p className="text-text-dim mt-0.5 text-[11px]">AI: {r.ai.reason}</p>
-        : (r.rationale && <p className="text-text-dim mt-0.5 text-[11px]">{r.rationale}</p>)}
-    </div>
-  )
 }
 
 function Panel({ title, subtitle, children, collapsible, defaultOpen = true }: {
@@ -98,7 +70,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
   }
 
   const ROLE_ORDER = ['frontend', 'hosting', 'cdn', 'waf', 'server', 'auth', 'backend', 'payments', 'analytics', 'monitoring', 'email', 'language', 'cloud']
-  // Plan B: Top Findings + Findings Detail lead; Fusion/engine panels collapse when
+  // Plan B: Top Findings + Findings Detail lead; engine panels collapse when
   // triage or investigations already own the story (kill CVE re-lists).
   const hasTriage = ((s.triage?.attention?.length ?? 0) + (s.triage?.noise?.length ?? 0)) > 0
   const hasInvestigations = (s.investigations?.length ?? 0) > 0
@@ -106,16 +78,16 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
 
   return (
     <>
-      {/* ── Top Findings first (verdict) — web/SaaS + verified; pattern CVEs stay in noise ── */}
+      {/* ── Vulnerabilities first (verdict); catalog version-leads stay filtered ── */}
       {hasTriage && (
-        <Panel title="Top Findings"
+        <Panel title="Vulnerabilities"
                subtitle={(s.triage!.attention?.length ?? 0) > 0
-                 ? `${s.triage!.attention!.length} worth attention · ${s.triage!.noise?.length ?? 0} version leads filtered`
-                 : `no verified findings · ${s.triage!.noise?.length ?? 0} version/pattern leads filtered`}>
+                 ? `${s.triage!.attention!.length} worth attention · ${s.triage!.noise?.length ?? 0} catalog leads filtered`
+                 : `no verified vulnerabilities · ${s.triage!.noise?.length ?? 0} catalog lead(s) filtered`}>
           {(s.triage!.attention?.length ?? 0) === 0 ? (
             <p className="text-[12px] text-emerald-400">
-              ✓ No verified high-priority findings. {s.triage!.noise?.length ?? 0} banner/version
-              pattern match(es) were filtered — not reported as vulnerabilities (patch level
+              ✓ No verified high-priority vulnerabilities. {s.triage!.noise?.length ?? 0} version/catalog
+              lead(s) were filtered — not reported as vulnerabilities (patch level
               unverifiable from a version string alone).
             </p>
           ) : (
@@ -127,13 +99,18 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className={`text-text-bright ${t.kind === 'web' ? 'font-medium' : 'font-mono'}`}>{t.title || t.cve}</span>
+                      <span className="text-text-bright font-medium">{t.title || t.cve || 'Vulnerability'}</span>
                       {t.kind === 'web' && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 uppercase">SaaS</span>}
                       {t.kind !== 'web' && t.cvss != null && t.cvss > 0 && <span className="text-text-dim text-[10px]">CVSS {t.cvss.toFixed(1)}</span>}
                       {t.kev && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-rose-500/20 text-rose-400 border border-rose-500/40 uppercase">KEV</span>}
                       {t.exploit_available && !t.kev && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/40 uppercase">exploit</span>}
                       {t.kind !== 'web' && (t.service || t.port) && <span className="text-text-dim text-[10px]">{t.service}{t.port ? `:${t.port}` : ''}</span>}
                     </div>
+                    {t.cve && (
+                      <p className="text-text-dim text-[10px] mt-0.5 font-mono">
+                        Related: <span className="text-text-dim/90">{t.cve}</span>
+                      </p>
+                    )}
                     <p className="text-text-dim text-[11px] mt-0.5">{t.rationale}</p>
                   </div>
                 </div>
@@ -144,12 +121,13 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
             <details className="mt-2 group">
               <summary className="text-[11px] text-text-dim cursor-pointer select-none hover:text-text">
                 <span className="inline-block transition-transform group-open:rotate-90">▶</span>{' '}
-                {s.triage!.noise!.length} version/pattern lead(s) filtered (not findings)
+                {s.triage!.noise!.length} catalog lead(s) filtered (not vulnerabilities)
               </summary>
               <ul className="mt-1 space-y-0.5">
                 {s.triage!.noise!.map((t, i) => (
-                  <li key={i} className="text-[11px] text-text-dim flex items-center gap-2">
-                    <span className={t.kind === 'web' ? '' : 'font-mono'}>{t.title || t.cve}</span>
+                  <li key={i} className="text-[11px] text-text-dim flex flex-col gap-0.5 sm:flex-row sm:items-center sm:gap-2">
+                    <span className="text-text-dim">{t.title || 'Catalog lead'}</span>
+                    {t.cve && <span className="font-mono text-[10px] text-text-dim/80">({t.cve})</span>}
                     <span className="text-text-dim/70">{t.rationale}</span>
                   </li>
                 ))}
@@ -280,14 +258,14 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
           return rank(a.conclusion ?? '') - rank(b.conclusion ?? '')
         })
         return (
-        <Panel title="Findings detail"
+        <Panel title="Vulnerability detail"
                collapsible defaultOpen={!hasTriage || (s.triage?.attention?.length ?? 0) > 0}
                subtitle={adjudicated > 0 ? `${adjudicated} AI-resolved` : undefined}>
           <p className="text-text-dim text-[11px] mb-3">
-            One card per investigated issue with evidence. Version/banner pattern matches without
+            One card per investigated vulnerability with evidence. Version/banner catalog matches without
             a non-destructive remote proof stay <span className="text-slate-400">UNVERIFIED</span> (leads,
-            not findings). The AI can judge and propose checks — it does not auto-send exploit/DoS
-            payloads (e.g. http.sys crash probes).
+            not confirmed vulnerabilities). Related CVE identifiers may appear in the evidence — the
+            primary object is the weakness on this host, not the catalog ID.
           </p>
           <div className="space-y-3">
             {sorted.map((iv, i) => {
@@ -339,39 +317,6 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
         </Panel>
         )
       })()}
-
-      {/* ── Fusion strip: counts; per-subject list only if Investigations absent ── */}
-      {s.fusion && (s.fusion.summary?.confirmed + s.fusion.summary?.potential + s.fusion.summary?.discarded) > 0 && (
-        <Panel title="Fusion status"
-               collapsible defaultOpen={!collapseAdvanced}
-               subtitle={`${s.fusion.summary.confirmed} confirmed · ${s.fusion.summary.potential} potential · ${s.fusion.summary.discarded} filtered`}>
-          <div className="flex gap-3 text-[11px] flex-wrap pb-1 border-b border-border/40">
-            <span className="text-low">✓ {s.fusion.summary.confirmed} confirmed</span>
-            <span className="text-medium">? {s.fusion.summary.potential} potential</span>
-            <span className="text-text-dim">✕ {s.fusion.summary.discarded} filtered (incl. version patterns)</span>
-            {s.fusion.summary.ai_adjudicated > 0 && (
-              <span className="text-accent">{s.fusion.summary.ai_adjudicated} AI-judged</span>
-            )}
-          </div>
-          {!hasInvestigations && (
-            <>
-              {[...(s.fusion.confirmed ?? []), ...(s.fusion.potential ?? [])].map((r, i) => (
-                <FusionFinding key={i} r={r} />
-              ))}
-              {(s.fusion.confirmed?.length ?? 0) + (s.fusion.potential?.length ?? 0) === 0 && (
-                <p className="text-text-dim text-[11px]">
-                  All {s.fusion.summary.discarded} signal(s) filtered — nothing met the confirmation bar.
-                </p>
-              )}
-            </>
-          )}
-          {hasInvestigations && (
-            <p className="text-text-dim text-[11px]">
-              Per-finding detail is under Findings detail above (no duplicate CVE list).
-            </p>
-          )}
-        </Panel>
-      )}
 
       {/* ── Reasoning Engine (the "how" — collapsed so the conclusions above stay primary) ── */}
       {s.reasoning?.reasoning_enabled && (
@@ -782,7 +727,10 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
       ) && (
         <Panel title="Changes Since Last Scan" collapsible defaultOpen={false}>
           {arr((s.scanDiff as Record<string, unknown>).cves_added).map((c, i) => (
-            <p key={`ca${i}`} className="text-critical">+ NEW CVE {str(c.cve)} on port {str(c.port)}</p>
+            <p key={`ca${i}`} className="text-critical">
+              + New vulnerability on port {str(c.port)}
+              {c.cve ? <span className="text-text-dim font-mono text-[11px]"> (related {str(c.cve)})</span> : null}
+            </p>
           ))}
           {arr((s.scanDiff as Record<string, unknown>).version_changes).map((c, i) => (
             <p key={`vc${i}`} className="text-medium">~ port {str(c.port)}: {str(c.old)} → {str(c.new)}</p>
