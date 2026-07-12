@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-# Honor NETLOGIC_DATA_DIR (same convention as src/epss.py and the VDB cache) so
+# Honor NETLOGIC_DATA_DIR (same convention as src/epss.py) so
 # state stays isolated under test/CI and relocatable in production. Unset in a
 # normal install → defaults to ~/.netlogic, so production behavior is unchanged.
 _DATA_DIR = Path(os.environ.get("NETLOGIC_DATA_DIR") or (Path.home() / ".netlogic"))

@@ -2,7 +2,7 @@
 
 **Cloud-Native Attack Surface Mapper & Vulnerability Correlator** — v3.0
 
-NetLogic is a network security platform combining active port scanning, CVE correlation (NVD API + SQLite VDB + offline signatures), SSL/TLS analysis, HTTP security auditing, DNS/email security assessment, subdomain takeover detection, passive OSINT, active vulnerability probing, an AI-driven reasoning engine, cross-host attack chain discovery, and deep probe agent architecture — all accessible from a web dashboard (React SPA), remote agent network, desktop app (Electron), or directly via CLI. The core scan engine is pure Python 3.9+ stdlib with zero third-party dependencies.
+NetLogic is a network security platform combining active port scanning, CVE correlation (live NVD API), SSL/TLS analysis, HTTP security auditing, DNS/email security assessment, subdomain takeover detection, passive OSINT, active vulnerability probing, an AI-driven reasoning engine, cross-host attack chain discovery, and deep probe agent architecture — delivered as a **web app** (React dashboard + FastAPI). The core scan engine is pure Python 3.9+ stdlib with zero third-party dependencies.
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE.txt)
@@ -15,7 +15,7 @@ NetLogic is a network security platform combining active port scanning, CVE corr
 | Module | Description |
 |---|---|
 | **Port Scanner** | TCP connect scan with 43/58 ports, 22 service probes, banner grabbing |
-| **CVE Correlator** | NVD API v2.0 + offline SQLite VDB + 192 embedded signatures; EPSS enrichment via FIRST.org |
+| **CVE Correlator** | Live NVD API v2.0 + EPSS enrichment via FIRST.org |
 | **TLS Analyzer** | Protocol versions, weak ciphers, POODLE/BEAST/CRIME/DROWN, cert expiry |
 | **HTTP Header Audit** | HSTS, CSP, X-Frame-Options, CORS, cookie flags; 0–100 score |
 | **Stack Fingerprint** | CMS, framework, cloud provider, CDN, WAF detection from banner/header/body |
@@ -33,7 +33,6 @@ NetLogic is a network security platform combining active port scanning, CVE corr
 | **Multi-Host Orchestration** | Full scan pipeline per host → cross-host context and reachability matrix → attack chain discovery |
 | **AI Sensor Directors** | LLM decides which sensors to prioritise based on open ports, tech stack, and CVEs |
 | **Authenticated SSH** | Credentialed `ssh` subprocess reads real installed package versions (60+ product mappings) |
-| **VDB (Offline CVE DB)** | SQLite database with incremental NVD sync; product-aware version matching with CONFIRMED/POTENTIAL status |
 | **Service Enum** | Protocol-level attribute extraction (SSH KEX, SMBv1, RDP NLA, SNMP community, HTTP auth state) |
 | **Topology Mapper** | Reverse DNS, IPv6, traceroute, ASN/org/country via ip-api.com |
 | **Reachability Prober** | Post-compromise lateral movement matrix from subnet adjacency |
@@ -51,34 +50,26 @@ NetLogic is a network security platform combining active port scanning, CVE corr
 
 | Mode | Description |
 |---|---|
-| **CLI** | `netlogic <target>` — zero third-party dependencies, pure Python 3.9+ stdlib. Entry point via `api.cli:main` → `netlogic.py:main()`. |
-| **GUI / Local** | `netlogic --gui` — starts FastAPI + React SPA with auto-generated secrets and in-process scan agent. No external agent needed. |
-| **SaaS / Web** | FastAPI controller + React dashboard. Scans delegated to registered remote agents. Built-in local agent starts automatically. |
-| **Remote Agent** | `netlogic_agent.py` polls controller via agent protocol (heartbeat/task/events/complete), runs stdlib engine on local network. |
-| **Desktop** | Electron shell (`electron/main.js`) bundles the Python backend. Built for Windows via NSIS. |
+| **Local web** | `netlogic --gui` — FastAPI + React SPA with auto-generated secrets and an in-process scan agent. |
+| **SaaS / production** | `uvicorn api.main:app` or Docker Compose. Controller serves the dashboard and API; built-in local agent runs scans. |
+
+The product surface is the **web app** (React dashboard + FastAPI). The scan engine under `src/` powers jobs started from the UI.
 
 ---
 
 ## Quick Start
 
 ```bash
-# CLI — install and run (stdlib only)
-pip install -e .
-netlogic scanme.nmap.org --full
-
-# Or without installation
-python netlogic.py scanme.nmap.org --full
-
-# Web dashboard (local mode) — install API deps, then
+# Web dashboard (local) — install API deps, then
 pip install -r requirements-api.txt
+pip install -e .
 netlogic --gui
 # → Dashboard at http://localhost:8000, auto-generated secrets in ~/.netlogic/secrets.json
 
-# SaaS mode
-pip install -r requirements-api.txt
+# Or run the API directly
 uvicorn api.main:app --host 0.0.0.0 --port 8000
 
-# Docker
+# Docker (API + built dashboard)
 docker compose up --build
 ```
 
@@ -215,14 +206,11 @@ netlogic example.com --ssh-user admin --ssh-key ~/.ssh/id_rsa --ssh-port 2222
 ### Vulnerability database management
 
 ```
-# Show offline CVE DB status (freshness, count)
-netlogic --vdb-status
+
 
 # Full sync from NVD
-netlogic --vdb-sync
 
 # Partial sync (first N products)
-netlogic --vdb-sync 50
 ```
 
 ### Benchmark
@@ -263,9 +251,7 @@ netlogic example.com --no-color
 ### NVD cache management
 
 ```
-netlogic --clear-cache
 netlogic --cache-stats
-netlogic --preload-cache
 netlogic example.com --nvd-key YOUR_NVD_KEY
 ```
 
@@ -471,12 +457,6 @@ Located in `src/orchestrator.py`. Triggered by comma-separated targets. Runs `ru
 
 ## CVE Coverage
 
-### Offline: SQLite VDB (`src/vdb_engine.py`)
-- Pre-populated SQLite with CPE→CVE mappings for ~70 enterprise products
-- Product-aware matching with CONFIRMED/POTENTIAL status
-- KEV and Metasploit flags per vulnerability
-- Incremental sync from NVD (`--vdb-sync`)
-- Status via `--vdb-status`
 
 ### Live: NVD API v2.0 (`src/nvd_lookup.py`)
 - Live lookup for uncovered products/versions
@@ -523,19 +503,16 @@ Two modes:
 
 ```
 netlogic/
-├── netlogic.py                  ← CLI entry point (argparse, all scan modes)
-├── netlogic_agent.py            ← Remote agent runner (stdlib-only, agent protocol)
+├── netlogic.py                  ← Local launcher (`--gui`, optional CLI helpers)
 │
-├── src/                         ← Scan engine (zero third-party deps)
+├── src/                         ← Scan engine (used by the web API)
 │   ├── scanner.py               ← TCP scanner, 22 service probes, banner grabbing
 │   ├── engine.py                ← Orchestrator: SensorStep pipeline, all scan modules + fusion
 │   ├── orchestrator.py          ← Multi-host: per-host scan → cross-host context
 │   ├── ai_analyst.py            ← LLM integration (9 providers, stdlib-only transport)
-│   ├── cve_correlator.py        ← CVE matching: NVD + offline sigs
+│   ├── cve_correlator.py        ← CVE matching: NVD 
 │   ├── nvd_lookup.py            ← NVD API v2.0 client, disk cache, CISA KEV
 │   ├── epss.py                  ← EPSS enrichment (FIRST.org, 24h cache)
-│   ├── vdb_engine.py            ← SQLite local vulnerability database
-│   ├── vdb_syncer.py            ← Incremental VDB sync from NVD
 │   ├── service_prober.py        ← Unauthenticated service access, default creds, admin paths
 │   ├── vuln_prober.py           ← CVE-specific safe active probes
 │   ├── osint.py                 ← DoH, CT logs, ASN lookup
@@ -552,7 +529,7 @@ netlogic/
 │   ├── service_enum.py          ← Protocol attribute extraction (SSH KEX, SMBv1, RDP NLA, SNMP)
 │   ├── ssl_utils.py             ← Configurable SSL context management, TLS probe
 │   ├── scan_diff.py             ← Change-over-time: diffs against prior JSON report
-│   ├── json_bridge.py           ← Streaming JSON events for agent/Electron
+│   ├── json_bridge.py           ← Streaming JSON events for agent / REST API
 │   ├── reporter.py              ← Terminal, JSON, HTML output renderers
 │   │
 │   ├── fusion/                  ← Precision funnel (12 files)
@@ -663,7 +640,6 @@ netlogic/
 │   │   ├── agents.py            ← /v1/agents/*
 │   │   ├── health.py            ← /health + /v1/health
 │   │   ├── license.py           ← /v1/license/*
-│   │   ├── vdb.py               ← /v1/vdb/*
 │   │   └── settings.py          ← /v1/settings/*
 │   └── storage/
 │       ├── json_store.py         ← 10 MB cap, 500 file cap, atomic writes
@@ -674,10 +650,6 @@ netlogic/
 │   └── src/
 │       └── pages/               ← Dashboard, NewScan, ScanDetail, Agents, Targets,
 │                                   TargetTimeline, Settings, License, Login, SignUp, Legal
-│
-├── electron/                    ← Desktop app shell (Electron)
-│   ├── main.js                  ← BrowserWindow, sandbox, contextIsolation
-│   └── preload.js               ← IPC bridge
 │
 ├── docs/                        ← Design documentation
 │   ├── DEPLOY_SAAS.md, saas-auth.md
@@ -737,13 +709,11 @@ POST   /v1/agents/{id}/activate         Enable agent
 POST   /v1/agents/{id}/deactivate       Disable agent
 ```
 
-### License / VDB / Settings
+### License / Settings
 
 ```
 GET    /v1/license              License status
 POST   /v1/license/activate     Activate key                    [3/hr/IP]
-GET    /v1/vdb/status           VDB stats + freshness
-POST   /v1/vdb/sync             Refresh from NVD (background)
 GET    /v1/settings/ai          Get org AI config (key masked)
 POST   /v1/settings/ai          Update org AI config (encrypted)
 POST   /v1/settings/ai/test     Test AI connection

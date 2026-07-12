@@ -1,6 +1,6 @@
 """CLI entry point for the installed `netlogic` command.
 
-Delegates to the root `netlogic.py` which contains the full CLI (scan, GUI, benchmark).
+Delegates to the root `netlogic.py` (local web launcher via `--gui`, plus optional helpers).
 """
 import os
 import sys
