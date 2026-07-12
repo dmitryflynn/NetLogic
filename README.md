@@ -46,12 +46,14 @@ NetLogic is a network security platform combining active port scanning, CVE corr
 
 ---
 
-## Deployment Modes
+## How to Run
 
-| Mode | Description |
-|---|---|
-| **Local web** | `netlogic --gui` — FastAPI + React SPA with auto-generated secrets and an in-process scan agent. |
-| **SaaS / production** | `uvicorn api.main:app` or Docker Compose. Controller serves the dashboard and API; built-in local agent runs scans. |
+There are exactly two ways to run NetLogic:
+
+| Mode | Command | What it does |
+|---|---|---|
+| **Web app** | `netlogic --gui` | Starts FastAPI + serves the React SPA + in-process scan agent, auto-generates secrets, and opens the dashboard in your browser. This is the only way to run the web app. |
+| **CLI** | `netlogic <target> [flags]` | One-shot terminal scan (no server), prints/writes the report. |
 
 The product surface is the **web app** (React dashboard + FastAPI). The scan engine under `src/` powers jobs started from the UI.
 
@@ -60,17 +62,17 @@ The product surface is the **web app** (React dashboard + FastAPI). The scan eng
 ## Quick Start
 
 ```bash
-# Web dashboard (local) — install API deps, then
+# One-time install
 pip install -r requirements-api.txt
 pip install -e .
+
+# Run the web dashboard
 netlogic --gui
 # → Dashboard at http://localhost:8000, auto-generated secrets in ~/.netlogic/secrets.json
+# (first run builds the dashboard automatically; requires Node.js)
 
-# Or run the API directly
-uvicorn api.main:app --host 0.0.0.0 --port 8000
-
-# Docker (API + built dashboard)
-docker compose up --build
+# Or a one-shot CLI scan
+netlogic scanme.nmap.org --full
 ```
 
 ---
@@ -659,8 +661,7 @@ netlogic/
 │   └── DESIGN_PARTNER_PACK.md
 │
 ├── db/migrations/               ← PostgreSQL schema migrations
-├── benchmark/                   ← HTTP cassette recordings for fusion benchmark
-└── scripts/                     ← Dev utilities (run_api_dev.py)
+└── benchmark/                   ← HTTP cassette recordings for fusion benchmark
 ```
 
 ---
