@@ -3,7 +3,6 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useJob, useCancelJob, useStreamScan, extractSections, exploreBeyond, downloadExport, type PortEvent, type VulnEvent } from '../api/scan'
 import StatusBadge from '../components/StatusBadge'
 import PortTable from '../components/PortTable'
-import VulnCard from '../components/VulnCard'
 import ScanFeed from '../components/ScanFeed'
 import ScanSections from '../components/ScanSections'
 
@@ -22,11 +21,21 @@ export default function ScanDetail() {
   const { data: job, isLoading } = useJob(id)
   const cancel = useCancelJob()
 
-  // SSE stream — only active while job is running/queued
+  // SSE stream while job is running/queued. After finish, fall back to persisted job.events
+  // so the event log remains accessible (not only during the live window).
   const live = (job?.status === 'running' || job?.status === 'queued')
-  const { events, ports, progress, streaming } = useStreamScan(live ? id : null)
+  const { events: streamEvents, ports, progress, streaming } = useStreamScan(live ? id : null)
 
-  const activeEvents = live ? events : (job?.events ?? [])
+  // Prefer the richest event list: live SSE while connected; otherwise stored history.
+  // If the stream ended but the job poll still has fewer events, keep stream buffer until
+  // the job payload catches up (avoids a flash of empty log at completion).
+  const activeEvents = useMemo(() => {
+    const stored = job?.events ?? []
+    if (live && streamEvents.length > 0) return streamEvents
+    if (!live && streamEvents.length > stored.length) return streamEvents
+    if (stored.length > 0) return stored
+    return streamEvents
+  }, [live, streamEvents, job?.events])
 
   // The scan engine emits vulns nested as {port, service, cves:[{id, cvss_score,...}]};
   // flatten to the VulnEvent shape the UI expects. Used for both live and stored.
@@ -170,51 +179,39 @@ export default function ScanDetail() {
             </div>
           )}
 
-          {/* Open Ports */}
-          {displayPorts.length > 0 && (
-            <section>
-              <p className="section-title mb-3">
-                Open Ports ({displayPorts.length})
-              </p>
-              <PortTable ports={displayPorts} />
-            </section>
-          )}
+          {/* Demo-flow ordering: on a COMPLETED scan lead with Architecture Summary → Top Findings
+              (ScanSections), then ports/CVEs as supporting EVIDENCE. During LIVE streaming keep the raw
+              evidence first — that's what actually arrives first; the synthesis appears at the end. */}
+          {(() => {
+            const evidence = (
+              <>
+                {/* Open Ports — supporting context only. Pattern-matched CVEs are NOT
+                    listed here (not findings); filtered leads live under Top Findings. */}
+                {displayPorts.length > 0 && (
+                  <section>
+                    <p className="section-title mb-3">Open Ports ({displayPorts.length})</p>
+                    <PortTable ports={displayPorts} />
+                  </section>
+                )}
+              </>
+            )
+            const analysis = (
+              <ScanSections s={sections} onExplore={onExplore} exploreMd={exploreMd} exploring={exploring} />
+            )
+            return live ? <>{evidence}{analysis}</> : <>{analysis}{evidence}</>
+          })()}
 
-          {/* Vulnerabilities — raw correlator output. Only shown during live
-              streaming (fusion hasn't run yet) or when fusion has no data.
-              Once fusion adjudication is available it becomes the authoritative
-              view — the raw list is redundant and may contain false positives
-              the gate already filtered out. */}
-          {(!sections.fusion || live) && displayVulns.length > 0 && (
-            <section>
-              <p className="section-title mb-3">
-                Vulnerabilities ({displayVulns.length})
-              </p>
-              <div className="space-y-2">
-                {displayVulns
-                  .sort((a, b) => (Number(b.kev) - Number(a.kev))
-                                  || ((b.epss ?? 0) - (a.epss ?? 0))
-                                  || ((b.cvss ?? 0) - (a.cvss ?? 0)))
-                  .map((v) => (
-                    <VulnCard key={`${v.cve_id}-${v.port}`} vuln={v} />
-                  ))}
-              </div>
-            </section>
-          )}
-
-          {/* Deep-scan sections: AI, exploitability, authenticated, web fp, topology, TLS, changes */}
-          <ScanSections s={sections} onExplore={onExplore} exploreMd={exploreMd} exploring={exploring} />
-
-          {/* Live feed while scanning */}
-          {live && events.length > 0 && (
-            <section>
-              <p className="section-title mb-3">Live Events</p>
-              <ScanFeed events={events} />
-            </section>
+          {/* Event stream — live while scanning; persists after completion from job.events */}
+          {activeEvents.length > 0 && (
+            <ScanFeed
+              events={activeEvents}
+              live={!!live && streaming}
+              defaultOpen={live || job.status === 'failed'}
+            />
           )}
 
           {displayPorts.length === 0 && displayVulns.length === 0 &&
-           !live && job.status === 'completed' && (
+           !live && job.status === 'completed' && activeEvents.length === 0 && (
             <p className="text-text-dim text-[12px] text-center mt-8">
               No open ports or vulnerabilities found.
             </p>
@@ -250,15 +247,33 @@ export default function ScanDetail() {
                 {job.config.do_stack   && <Flag label="Stack" />}
                 {job.config.do_probe   && <Flag label="Probe" />}
                 {job.config.do_osint   && <Flag label="OSINT" />}
+                {job.config.do_ai_agent && <Flag label="AI Agent" />}
+                {job.config.agent_depth && <Flag label="Depth" />}
+                {job.config.allow_crash_probes && <Flag label="Crash probes" />}
               </dl>
             </div>
 
             <div>
               <p className="section-title mb-2">Results</p>
               <dl className="space-y-1.5 text-[11px]">
+                {sections.architecture?.stack_kind && (
+                  <Row k="Stack" v={<span className="text-text-bright capitalize">{sections.architecture.stack_kind.replace(/-/g, ' ')}</span>} />
+                )}
+                {(sections.architecture?.components?.length ?? 0) > 0 && (
+                  <Row k="Components" v={<span className="text-text-bright">{sections.architecture!.components!.length}</span>} />
+                )}
                 <Row k="Ports" v={<span className="text-low">{displayPorts.length}</span>} />
                 {findingsTotal > 0 && <Row k="Findings" v={<span className="text-high">{findingsTotal}</span>} />}
-                <Row k="Vulns" v={<span className="text-critical">{displayVulns.length}</span>} />
+                {displayVulns.length > 0 && (
+                  <Row k="Pattern leads" v={
+                    <span className="text-text-dim" title="Banner/version catalog matches — filtered, not findings">
+                      {displayVulns.length} filtered
+                    </span>
+                  } />
+                )}
+                {(sections.fusion?.summary?.confirmed ?? 0) > 0 && (
+                  <Row k="Confirmed" v={<span className="text-critical">{sections.fusion!.summary.confirmed}</span>} />
+                )}
               </dl>
             </div>
           </div>

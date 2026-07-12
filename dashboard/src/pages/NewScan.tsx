@@ -22,6 +22,16 @@ const DEFAULT: ScanRequest = {
   ai_key:      '',
   ai_model:    '',
   ai_base_url: '',
+  do_reason:      false,
+  do_since_last:  false,
+  do_multi_host:  false,
+  do_active_validate: false,
+  do_ai_driven:   false,
+  do_ai_agent:    false,
+  agent_depth:    false,
+  allow_crash_probes: false,
+  agent_max_steps: 12,
+  agent_max_requests: 40,
   ssh_user:    '',
   ssh_key:     '',
   ssh_pass:    '',
@@ -30,6 +40,7 @@ const DEFAULT: ScanRequest = {
 
 export default function NewScan() {
   const [form, setForm] = useState<ScanRequest>(DEFAULT)
+  const [phaseTest, setPhaseTest] = useState(false)
   const [err,  setErr]  = useState('')
   const create          = useCreateJob()
   const { data: agents = [] } = useAgents()
@@ -62,6 +73,16 @@ export default function NewScan() {
       }
       return next
     })
+  }
+
+  function togglePhaseTest() {
+    const on = !phaseTest
+    setPhaseTest(on)
+    setForm((prev) => ({
+      ...prev,
+      do_reason: on, do_since_last: on, do_multi_host: on,
+      do_active_validate: on, do_ai_driven: on, do_ai_agent: on, agent_depth: on,
+    }))
   }
 
   async function submit(e: FormEvent) {
@@ -245,6 +266,116 @@ export default function NewScan() {
           </div>
           <p className="text-[10px] text-text-dim/70">
             Authenticated scanning reads real installed package versions (patch-level ground truth). Key auth recommended.
+          </p>
+        </div>
+
+        {/* AI Deep Verification — the demo-facing one-click for the tool-driven agent */}
+        <div className="panel p-4 space-y-3 border-accent/40">
+          <label className="flex items-start gap-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={!!form.agent_depth && !!form.do_ai_agent}
+              onChange={() => {
+                const on = !(form.agent_depth && form.do_ai_agent)
+                setForm((prev) => ({
+                  ...prev,
+                  do_ai_agent: on,
+                  agent_depth: on,
+                  // turning it off should also disarm crash probes
+                  allow_crash_probes: on ? prev.allow_crash_probes : false,
+                }))
+              }}
+              className="accent-accent mt-0.5"
+            />
+            <span>
+              <span className="section-title text-accent">AI Deep Verification</span>
+              <span className="block text-[11px] text-text-dim mt-1 leading-relaxed">
+                Baseline sensors run first, then the AI drives read-only tools (HTTP/TLS/DNS probes,
+                dir enum, tech confirm, timing) to verify CVE leads and build attack chains — instead of
+                leaving them as unverified banner matches. Raises budgets (~24 steps / 80 requests) and
+                blocks early stop until enough high-value checks run.
+              </span>
+            </span>
+          </label>
+          {form.agent_depth && form.do_ai_agent && (
+            <label className="flex items-start gap-3 cursor-pointer select-none pl-7 pt-1 border-t border-border/40">
+              <input
+                type="checkbox"
+                checked={!!form.allow_crash_probes}
+                onChange={() => toggle('allow_crash_probes')}
+                className="accent-high mt-0.5"
+              />
+              <span>
+                <span className="text-[12px] font-medium text-high">
+                  Confirm crash-class CVEs (http.sys / MS15-034)
+                </span>
+                <span className="block text-[10px] text-text-dim mt-0.5 leading-relaxed">
+                  Sends curated crash/DoS probes so the agent can actively CONFIRM CVEs a banner alone
+                  can't (e.g. CVE-2021-31166). <span className="text-high">May crash or blue-screen the
+                  host — authorized lab targets you own only.</span>
+                </span>
+              </span>
+            </label>
+          )}
+        </div>
+
+        {/* Phase Test */}
+        <div className="panel p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="section-title">Phase Test</p>
+            <label className="flex items-center gap-2 text-[11px] text-accent cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={phaseTest}
+                onChange={togglePhaseTest}
+                className="accent-accent"
+              />
+              Phase Test (all phases)
+            </label>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {(
+              [
+                ['do_reason',     'Adaptive Reasoning Loop'],
+                ['do_since_last', 'Change Detection Since Last Scan'],
+                ['do_multi_host', 'Multi-Host World Modeling'],
+                ['do_active_validate', 'Active Validation (safe, authorized)'],
+                ['do_ai_driven', 'AI-Driven Adjudication (AI resolves unverifiable CVEs)'],
+                ['do_ai_agent', 'AI Investigation Agent (AI chooses tools after baseline)'],
+                ['agent_depth', 'Agent depth mode (CVE leads, chains, no early stop)'],
+                ['allow_crash_probes', 'Allow crash/DoS probes (MAY disrupt target)'],
+              ] as [keyof ScanRequest, string][]
+            ).map(([key, label]) => (
+              <label
+                key={key}
+                className="flex items-center gap-2 text-[12px] text-text-dim cursor-pointer select-none hover:text-text"
+              >
+                <input
+                  type="checkbox"
+                  checked={!!form[key]}
+                  onChange={() => {
+                    if (key === 'agent_depth' && !form.agent_depth) {
+                      // Depth implies agent on
+                      setForm((prev) => ({ ...prev, agent_depth: true, do_ai_agent: true }))
+                      return
+                    }
+                    toggle(key)
+                  }}
+                  className="accent-accent"
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <p className="text-[10px] text-text-dim/70">
+            Reasoning loop enables deterministic observe→reason→act analysis. Change detection diffs against the prior scan snapshot.
+            Multi-host modeling discovers in-scope neighbors and reasons over each host individually.
+            Active validation confirms hypotheses with non-destructive, scope-gated, audited checks (safe_active only; requires reasoning). Authorized targets only.
+            <span className="block mt-1 text-accent/80">
+              AI Investigation Agent: baseline first, then AI picks tools. Depth mode raises budgets (~24 steps / 80 requests),
+              prioritizes CVE leads & attack chains, and blocks early stop until enough high-value checks run.
+              Crash probes (http.sys etc.) stay off unless allowed — they can blue-screen a host.
+            </span>
           </p>
         </div>
 
