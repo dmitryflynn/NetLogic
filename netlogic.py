@@ -76,6 +76,30 @@ def parse_args():
                    help="Change detection: diff this scan's observations against the prior "
                         "snapshot for the target and report what changed (new ports/CVEs/hosts, "
                         "version bumps). No-op on the first scan. Off by default.")
+    p.add_argument("--active-validate", action="store_true",
+                   help="Actively CONFIRM reasoning hypotheses with NON-DESTRUCTIVE safe_active "
+                        "checks (benign GETs) through the ActionGate — scope-gated, audited, capped "
+                        "at safe_active (intrusive/exploit stay denied). Explicit operator opt-in; "
+                        "requires --reason; off by default. For AUTHORIZED targets only.")
+    p.add_argument("--ai-driven", action="store_true",
+                   help="AI-driven adjudication: let the AI RESOLVE findings the deterministic engine "
+                        "cannot verify (version-matched CVEs with no sensor) — ruled-out / possibly-"
+                        "exploitable / needs-active-check, with its rationale recorded. The AI owns the "
+                        "judgement; the engine applies it. Requires --reason + an AI key; off by default.")
+    p.add_argument("--ai-agent", action="store_true",
+                   help="AI investigation agent: after baseline sensors, the AI chooses tools "
+                        "(HTTP/TCP/tech confirm/chains) to verify leads. Requires AI key; off by default.")
+    p.add_argument("--agent-depth", action="store_true",
+                   help="Depth mode for the AI agent: higher budgets, prioritizes CVE leads and "
+                        "attack chains, blocks early stop until enough high-value tool work. "
+                        "Implies --ai-agent.")
+    p.add_argument("--allow-crash-probes", action="store_true",
+                   help="Allow curated crash/DoS verification probes (e.g. http.sys). "
+                        "MAY disrupt or crash the target. Requires --ai-agent.")
+    p.add_argument("--agent-max-steps", type=int, default=12,
+                   help="Max AI agent reasoning turns (default: 12; depth mode floor 24)")
+    p.add_argument("--agent-max-requests", type=int, default=40,
+                   help="Max network tool calls by the AI agent (default: 40; depth mode floor 80)")
     # ── AI analysis ──
     p.add_argument("--ai",        action="store_true",
                    help="Run AI-powered analysis of findings (needs an API key)")
@@ -878,7 +902,8 @@ def main():
         bool_flags = ["tls", "headers", "takeover", "osint", "stack", "dns",
                        "probe", "full", "ai", "deep_probe", "no_diff",
                        "no_traceroute", "cidr", "no_color", "clear_cache",
-                       "preload_cache", "cache_stats", "vdb_status"]
+                       "preload_cache", "cache_stats", "vdb_status",
+                       "reason", "multi_host", "since_last"]
         if any(getattr(args, f) for f in bool_flags):
             print("error: --gui cannot be combined with scan flags", file=sys.stderr)
             sys.exit(1)

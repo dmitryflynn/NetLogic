@@ -15,7 +15,6 @@ artifacts dict. build_json_report() turns artifacts into the saved JSON report.
 """
 from __future__ import annotations
 
-import json
 from dataclasses import asdict
 
 from src.scanner import scan_host
@@ -43,7 +42,12 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
     threads = _g(args, "threads", 100)
     min_cvss = _g(args, "min_cvss", 4.0)
     full = _g(args, "full", False)
-    ai_deep = _g(args, "ai", False)
+    # --ai-agent / --agent-depth also need the AI completer (surface tools after baseline).
+    ai_deep = (
+        _g(args, "ai", False)
+        or _g(args, "ai_agent", False)
+        or _g(args, "agent_depth", False)
+    )
 
     # Which deep modules to run. --ai implies the rich passive set; --full = all.
     do_tls      = _g(args, "tls", False)      or full or ai_deep
@@ -115,7 +119,6 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
 
     # TLS
     if True:
-        from src.tls_analyzer import analyze_tls_ports  # noqa: PLC0415
         REGISTRY.append(SensorStep(
             name="tls", persona="technology_fingerprinting", is_passive=True,
             applies=lambda ctx: do_tls,
@@ -228,9 +231,16 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
         from src.web_fingerprint import fingerprint_web  # noqa: PLC0415
         REGISTRY.append(SensorStep(
             name="web_fingerprint", persona="application_mapping",
-            applies=lambda ctx: _sensor_applies(ctx, "web_fingerprint", (ai_deep or full))
-                                and http_port is not None,
-            run=lambda ctx: _run_web_fingerprint(ctx, target, http_port, ports_open,
+            # Runs by default whenever a web port is open — the modern-web recon (JS-bundle SaaS
+            # analysis + SPA-awareness) is NetLogic's highest-signal, differentiating output on
+            # serverless/SPA targets, so the accessible/free tier gets it without --full or --ai.
+            # Read-only GETs of the target's own assets; a per-sensor plan can still opt out.
+            applies=lambda ctx: _sensor_applies(ctx, "web_fingerprint", True)
+                                and (https_port or http_port) is not None,
+            # Prefer the HTTPS/serving port (web_port), NOT http_port: on modern hosts port 80
+            # often 403s / redirects (WAF, forced-HTTPS) so fingerprinting it finds nothing —
+            # the app (and its bundle/SaaS) lives on 443.
+            run=lambda ctx: _run_web_fingerprint(ctx, target, web_port, ports_open,
                                                  timeout, fingerprint_web),
             base_gain=1.2,
         ))
@@ -374,6 +384,16 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
         _rs.reasoning_enabled = bool(_g(args, "reason", False))
         # Multi-host world modeling (Phase 6c) is gated independently and implies --reason.
         _rs.world_modeling_enabled = bool(_g(args, "multi_host", False)) and _rs.reasoning_enabled
+        # Seed the initial objectives BEFORE the activation check (only when --reason). Without this,
+        # `should_activate` sees no objectives on a fingerprint-only scan (no CVEs) and never runs the
+        # loop — the objectives that would trigger it are created inside the loop. `populate` is
+        # idempotent, so the director re-running it is a no-op. Fail-soft; behind --reason only.
+        if _rs.reasoning_enabled:
+            try:
+                from src.reasoning import generators  # noqa: PLC0415
+                generators.populate(_rs)
+            except Exception:  # noqa: BLE001 — seeding must never break a scan
+                pass
     _ctx.state = _rs
     _ctx.completer = _ai_complete
     _ctx.extras["sensor_plan"] = _sensor_plan
@@ -393,13 +413,126 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
         ReconDirector(Scheduler(), _strategy, _budget, REGISTRY,
                       has_ai_key=(_ai_complete is not None), ai_completer=_ai_complete,
                       refresh=lambda st, a: refresh_beliefs(st, a),
-                      persist=_persist).run(_ctx)
+                      persist=_persist,
+                      # AI-driven: let the AI resolve findings the deterministic engine can't verify.
+                      # Requires an AI completer; off by default ⇒ byte-identical deterministic run.
+                      ai_driven=bool(_g(args, "ai_driven", False))).run(_ctx)
         _rs = _ctx.state
         _ran_director = True
     else:
         for _step in REGISTRY:
             if not _step.is_passive and _step.applies(_ctx):
                 _step.run(_ctx)
+
+    # ── Active validation (opt-in via --active-validate; requires --reason) ──
+    # Confirm the engine's hypotheses with NON-DESTRUCTIVE safe_active checks (benign GETs) routed
+    # through the ActionGate: scope-gated, audited, capped at safe_active. INTRUSIVE/EXPLOIT stay
+    # denied (no external executor). This is the operator's explicit per-run authorization for the
+    # in-scope target — off by default, so a normal scan issues zero active-validation requests.
+    if (_rs is not None and _ran_director and _g(args, "active_validate", False)
+            and _g(args, "reason", False)):
+        try:
+            from src.reasoning.active_validation import (  # noqa: PLC0415
+                ActiveValidationRunner, ProbeAdjudicator, SafeActiveExecutor, design_ai_probes,
+                probes_for_state,
+            )
+            # Target the actual web service. Prefer the resolved web port, but fall back to the first
+            # OPEN port when the web heuristic misses (e.g. a non-standard port whose service the
+            # scanner mislabeled), so validation reaches the real service instead of the :443 default.
+            _web = https_port or http_port
+            _vport = _web if _web else (ports_open[0].port if ports_open else web_port)
+            _scheme = "https" if (https_port or _vport in (443, 8443)) else "http"
+            _vtarget = f"{target}:{_vport}"
+            # Built-in framework probes PLUS AI-designed probes: when a completer is present the AI can
+            # direct safe GET checks BEYOND the fixed sensor suite (/actuator, /.git/config, /graphql,
+            # framework-specific endpoints…). Every probe — built-in or AI — is sanitized, SAFE_ACTIVE,
+            # scope-gated, and audited identically. The AI proposes; the deterministic gate decides.
+            _probes = probes_for_state(_rs)
+            _adjudicator = None
+            _cap_gaps: list = []
+            # When the investigation agent will run, skip this secondary AI probe-design path —
+            # it duplicates cost and purpose (agent owns tool choice). Keep for active-validate-only.
+            _agent_next = bool(_g(args, "ai_agent", False) or _g(args, "agent_depth", False))
+            if _ai_complete is not None and not _agent_next:
+                try:
+                    from src.reasoning.observation_translator import design_information_goals  # noqa: PLC0415
+                    _ig = design_information_goals(_ai_complete, _rs)
+                    _probes = _probes + [s.probe for s in _ig.strategies if s.probe]
+                    _cap_gaps = [g.to_dict() for g in _ig.gaps]
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    _probes = _probes + design_ai_probes(_ai_complete, _rs)
+                except Exception:  # noqa: BLE001
+                    pass
+                _adjudicator = ProbeAdjudicator(_ai_complete)
+            elif _ai_complete is not None and _agent_next:
+                # Lightweight prioritization only; no second AI probe-invention pass.
+                _adjudicator = ProbeAdjudicator(_ai_complete)
+            _runner = ActiveValidationRunner(executor=SafeActiveExecutor(scheme=_scheme),
+                                             adjudicator=_adjudicator)
+            _vres = _runner.validate(_rs, probes=_probes, enabled=True, target=_vtarget)
+            art["active_validation"] = [r.to_dict() for r in _vres]
+            art["active_validation_audit"] = [a.to_dict() for a in _runner.audit.records()]
+            if _cap_gaps:
+                art["capability_gaps"] = _cap_gaps          # missing sensors the AI asked for
+            _confirmed = sum(1 for r in _vres if r.succeeded)
+            _emit("active_validation", {"results": art["active_validation"],
+                                        "confirmed": _confirmed, "executed": sum(1 for r in _vres if r.executed),
+                                        "capability_gaps": _cap_gaps},
+                  message=f"Active validation: {_confirmed} hypothesis(es) confirmed via safe checks")
+        except Exception as exc:  # noqa: BLE001 — validation must never break a scan
+            _emit("log", {"text": f"Active validation: {exc}", "level": "warn"})
+
+    # ── AI Investigation Agent (opt-in) — engine baselined; AI drives tools ──
+    # AI selects tools (http_request, confirm_tech, crash_probe, …); ToolRuntime executes.
+    # Off by default → byte-identical to prior scans. Requires an AI completer.
+    _want_agent = bool(_g(args, "ai_agent", False) or _g(args, "agent_depth", False))
+    if _want_agent and _ai_complete is not None:
+        try:
+            from src.reasoning.agent import InvestigationAgent  # noqa: PLC0415
+            from src.reasoning.agent.findings import (  # noqa: PLC0415
+                agent_result_to_art, fold_agent_into_state,
+            )
+            _web = https_port or http_port
+            _aport = _web if _web else (ports_open[0].port if ports_open else web_port)
+            _atls = bool(https_port or _aport in (443, 8443))
+            _ahost = target.split(":")[0] if target else target
+            _depth = bool(_g(args, "agent_depth", False))
+
+            def _agent_emit(etype, data=None, message=""):
+                _emit(etype, data, message=message)
+
+            _agent = InvestigationAgent(
+                _ai_complete,
+                max_steps=int(_g(args, "agent_max_steps", 12) or 12),
+                max_requests=int(_g(args, "agent_max_requests", 40) or 40),
+                allow_crash_probes=bool(_g(args, "allow_crash_probes", False)),
+                depth_mode=_depth,
+                emit=_agent_emit,
+            )
+            _label = "AI investigation agent (depth)…" if _depth else "AI investigation agent…"
+            _emit("progress", {"percent": 94, "status": _label},
+                  message=("AI agent depth mode: chasing CVE leads / chains…"
+                           if _depth else "AI agent: choosing verification tools…"))
+            _ares = _agent.run(
+                target=target, host=_ahost, port=int(_aport or 80), tls=_atls,
+                art=art, state=_rs,
+                scope=list(getattr(_rs, "scope", None) or [target]),
+            )
+            art["ai_agent"] = agent_result_to_art(_ares)
+            art["surface_summary"] = art["ai_agent"].get("surface") or {}
+            art["attack_chains"] = art["ai_agent"].get("chains") or []
+            fold_agent_into_state(_rs, art["ai_agent"])
+            _emit("ai_agent", art["ai_agent"],
+                  message=(
+                      f"AI agent{'(depth)' if _depth else ''}: "
+                      f"{art['ai_agent'].get('confirmed', 0)} confirmed, "
+                      f"{art['ai_agent'].get('high_value_used', 0)} high-value, "
+                      f"{art['ai_agent'].get('steps_used', 0)} steps"
+                  ))
+        except Exception as exc:  # noqa: BLE001 — agent must never break a scan
+            _emit("log", {"text": f"AI investigation agent: {exc}", "level": "warn"})
 
     # ── Fusion pipeline (sensors → gate → AI adjudication → unified analysis) ──
     # The fusion pipeline OWNS the full AI analysis. When fusion produces an
@@ -552,8 +685,28 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
             refresh_beliefs(_rs, art)
         else:
             _rs = safe_build_reasoning_state(target, [target], art)
+            # The rebuild starts from a fresh state whose flags default OFF — but the run's flags
+            # (whether --reason was requested) still hold; preserve them so the persisted/emitted
+            # reasoning honestly reflects that reasoning was enabled even if the loop didn't activate.
+            if _rs is not None:
+                _rs.reasoning_enabled = bool(_g(args, "reason", False))
+                _rs.world_modeling_enabled = bool(_g(args, "multi_host", False)) and _rs.reasoning_enabled
         if _rs is not None:
             art["reasoning"] = _rs.to_dict()
+            _emit("reasoning", art["reasoning"])
+            # Analyst-readable view: regroup dozens of raw objectives into a few INVESTIGATIONS
+            # (Question / Evidence checklist / Conclusion / Confidence). Pure derivation; presentation.
+            try:
+                from src.reasoning.investigations import group_investigations  # noqa: PLC0415
+                from src.reasoning.agent.findings import merge_agent_into_investigations  # noqa: PLC0415
+                _invs = [iv.to_dict() for iv in group_investigations(_rs)]
+                if art.get("ai_agent"):
+                    _invs = merge_agent_into_investigations(_invs, art["ai_agent"])
+                if _invs:
+                    art["investigations"] = _invs
+                    _emit("investigations", {"investigations": _invs})
+            except Exception:  # noqa: BLE001
+                pass
     except Exception:  # noqa: BLE001 — reasoning must never affect a scan
         pass
 
@@ -572,8 +725,49 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
                 art["change_delta"] = delta.to_dict()
                 art["change_seed"] = seed_from_delta(delta).to_dict()
                 art["change_report"] = delta_report(delta)
+                _emit("change", {"delta": art["change_delta"], "seed": art["change_seed"],
+                                 "report": art["change_report"]})
         except Exception:  # noqa: BLE001 — change detection never affects a scan
             pass
+
+    # ── Architecture Summary (ALWAYS — deterministic synthesis, no AI needed) ──
+    # Turn the scattered observations (frontend, hosting, CDN, auth, backend, TLS, DNS, endpoints)
+    # into ONE plain-English picture of what the app IS + where its real surface lives. Useful even
+    # with zero vulns; gives the AI overlay a structured architecture to reason over.
+    try:
+        from src.architecture import summarize_architecture  # noqa: PLC0415
+        _arch = summarize_architecture(art)
+        if _arch is not None:
+            art["architecture"] = _arch.to_dict()
+            _emit("architecture", art["architecture"])
+    except Exception:  # noqa: BLE001 — synthesis is presentation-only, never block a scan
+        pass
+
+    # ── AI Investigation Plan (opt-in: needs an AI key) — the overlay OVER the architecture ──
+    # The AI reasons over the DETERMINISTIC architecture to propose grounded investigation objectives
+    # (prioritisation + hypotheses), inventing no facts/vulns and firing no probes. Fail-soft.
+    if _ai_complete is not None and art.get("architecture"):
+        try:
+            from src.reasoning.ai.agents import InvestigationPlanner  # noqa: PLC0415
+            _plan = InvestigationPlanner(_ai_complete).plan(art["architecture"])
+            if _plan:
+                art["investigation_plan"] = _plan
+                _emit("investigation_plan", {"objectives": _plan})
+        except Exception:  # noqa: BLE001 — the AI overlay never blocks a scan
+            pass
+
+    # ── Deterministic triage (ALWAYS — no --reason, no AI key required) ──
+    # Rank + bucket the matched CVEs into "worth attention" vs "low-signal noise" so even a free scan
+    # leads with what matters instead of a flat CVE dump. Emitted as an event + carried in the report.
+    try:
+        from src.triage import triage  # noqa: PLC0415
+        _tri = triage(art.get("vuln_matches") or [], art.get("service_enum_result"),
+                      art.get("web_fingerprint"))
+        if _tri.attention or _tri.noise:
+            art["triage"] = _tri.to_dict()
+            _emit("triage", art["triage"])
+    except Exception:  # noqa: BLE001 — triage is presentation-only, never block a scan
+        pass
 
     return art
 
@@ -832,6 +1026,42 @@ def build_json_report(art: dict) -> dict:
         report["fusion"] = art["fusion"]
     if art.get("fusion") and art["fusion"].get("detected_vulnerabilities") and not art.get("ai_analysis"):
         report["detected_vulnerabilities"] = art["fusion"]["detected_vulnerabilities"]
+    # Reasoning engine output (Phases 1–8). Already plain dicts in the artifact; pass
+    # them through so the full evidence graph / objectives / world model / provenance
+    # reach the report and GUI instead of being dropped. Only present when --reason ran.
+    # Deterministic triage — computed + emitted during run_scan (attention vs low-signal noise), carried
+    # through here so the saved report leads with what matters. Recompute as a fallback for callers that
+    # build a report from a raw artifacts dict without having run the emit path.
+    if art.get("triage") is not None:
+        report["triage"] = art["triage"]
+    else:
+        try:
+            from src.triage import triage  # noqa: PLC0415
+            _tri = triage(art.get("vuln_matches") or [], art.get("service_enum_result"),
+                          art.get("web_fingerprint"))
+            if _tri.attention or _tri.noise:
+                report["triage"] = _tri.to_dict()
+        except Exception:  # noqa: BLE001 — triage is a presentation nicety, never block the report
+            pass
+    if art.get("architecture") is not None:
+        report["architecture"] = art["architecture"]
+    if art.get("investigation_plan") is not None:
+        report["investigation_plan"] = art["investigation_plan"]
+    if art.get("reasoning") is not None:
+        report["reasoning"] = art["reasoning"]
+    if art.get("investigations") is not None:
+        report["investigations"] = art["investigations"]
+    # Phase 7 change detection (only present with --since-last).
+    for ckey in ("change_delta", "change_seed", "change_report"):
+        if art.get(ckey) is not None:
+            report[ckey] = art[ckey]
+    # Active validation results + gate audit + capability gaps (only present with --active-validate).
+    for akey in ("active_validation", "active_validation_audit", "capability_gaps"):
+        if art.get(akey) is not None:
+            report[akey] = art[akey]
+    for akey in ("ai_agent", "attack_chains", "surface_summary"):
+        if art.get(akey) is not None:
+            report[akey] = art[akey]
     return report
 
 
