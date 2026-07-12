@@ -49,8 +49,13 @@ def test_confirmed_exploitable_reads_as_exploitable():
 
 
 def test_resolved_not_exploitable_earns_the_evidence_checklist():
-    # Only a RESOLVED exploitability hypothesis gets the discriminating-evidence checklist.
+    # Resolved exploitability: per-CVE evidence only (no global SSH checklist on every card).
     s = _state()
+    # Generic refute objectives MUST NOT appear on the CVE card.
+    s.investigation.objectives.add(Objective(name="refute:not_exploitable:ssh_agent_forwarding_enabled"))
+    # CVE-named refute objective MAY appear.
+    s.investigation.objectives.add(
+        Objective(name="refute:not_exploitable:version_check_CVE-2021-31166", satisfied=True))
     hid = s.investigation.hypotheses.add_hypothesis(
         label="exploitability_of:verify:CVE-2021-31166", created_by="rule",
         likelihoods={"exploitable": 0.2, "not_exploitable": 0.8})
@@ -58,7 +63,9 @@ def test_resolved_not_exploitable_earns_the_evidence_checklist():
     ex = next(i for i in group_investigations(s) if i.kind == "exploitability")
     assert ex.conclusion == "NOT EXPLOITABLE"
     names = {e.name for e in ex.evidence}
-    assert "version_check_vulnerable_range" in names and "reachable_endpoint" in names
+    assert "CVE matched (CVE-2021-31166)" in names
+    assert "version_check_CVE-2021-31166" in names
+    assert "ssh_agent_forwarding_enabled" not in names
 
 
 def test_identification_and_novel_investigations():
@@ -86,9 +93,11 @@ def test_grouping_collapses_many_objectives_into_few_cards():
         likelihoods={"exploitable": 0.3, "not_exploitable": 0.7})
     s.investigation.hypotheses.resolve(hid, "confirmed")
     invs = group_investigations(s)
-    # 9 raw objectives → 1 investigation card
+    # 9 raw objectives → 1 investigation card; generic refute checks NOT stapled
     assert len(invs) == 1 and invs[0].kind == "exploitability"
-    assert len(invs[0].evidence) == 9             # verify + 8 checks, all as one checklist
+    names = {e.name for e in invs[0].evidence}
+    assert "CVE matched (CVE-1)" in names
+    assert not any(n.startswith("check_") for n in names)
 
 
 def test_empty_state_yields_no_investigations():

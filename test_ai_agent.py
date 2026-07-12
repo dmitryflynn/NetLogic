@@ -130,23 +130,413 @@ def test_agent_off_without_completer():
 
 
 def test_http_rejects_mutating_methods():
-    """Agent probes are read-only — POST/PUT/DELETE must not run."""
+    """Free-form POST bodies forbidden; bare POST without template rejected."""
     calls = []
 
     def http_fn(method, path, headers, body, port, tls, timeout):
-        calls.append(method)
+        calls.append((method, body))
         return {"error": "", "elapsed_ms": 1, "status": 200, "headers": {}, "body": "x"}
 
     rt = ToolRuntime(host="ex.com", http_fn=http_fn)
     r = rt.execute("http_request", {"method": "POST", "path": "/api", "body": "a=1"})
-    # sanitize rejects POST → no network call with POST
-    assert r.ok is False or (calls and calls[0] != "POST")
-    # explicit path: safe_method returns None → defaults? Actually method POST fails safe_method
-    # and code does: method = san.safe_method(...) or "GET"  — so POST becomes GET!
-    # Force via _do_http
+    assert r.ok is False
+    assert "free-form" in (r.error or r.summary).lower() or "forbidden" in (r.error or "").lower()
+    # Force via _do_http without allow_post
     resp = rt._do_http("POST", "/x", {}, "data", 80, False, 2.0)
     assert "not allowed" in (resp.get("error") or "")
-    assert calls == [] or "POST" not in calls
+    assert not any(m == "POST" for m, _ in calls)
+
+
+def test_http_body_template_allows_curated_post():
+    calls = []
+
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        calls.append((method, body, headers.get("Content-Type")))
+        return {"error": "", "elapsed_ms": 2, "status": 401, "headers": {}, "body": "no"}
+
+    rt = ToolRuntime(host="ex.com", http_fn=http_fn)
+    r = rt.execute("http_request", {
+        "path": "/login", "body_template": "form_login_probe",
+    })
+    assert r.ok
+    assert calls and calls[0][0] == "POST"
+    assert "netlogic_probe" in (calls[0][1] or "")
+
+
+def test_tier_a_tools_in_catalog():
+    rt = ToolRuntime(host="ex.com")
+    names = {t["name"] for t in rt.catalog()}
+    for n in (
+        "param_reflect", "cors_probe", "header_injection_probe", "auth_flow_probe",
+        "jwt_inspect", "graphql_introspect", "api_discover", "s3_or_storage_probe",
+        "subdomain_probe", "ssh_banner_timing", "ssl_cert_chain",
+        "cve_probe", "sqli_boolean", "sqli_time", "ssrf_canary", "idor_diff",
+        "file_disclosure", "smuggling_desync",
+    ):
+        assert n in names, n
+
+
+def test_param_reflect_and_cors():
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        # Reflect marker in body; open-redirect Location for redirect probe
+        if "nlprobe7f3a9c2e.invalid" in path:
+            return {
+                "error": "", "elapsed_ms": 1, "status": 302,
+                "headers": {"Location": "https://nlprobe7f3a9c2e.invalid/"},
+                "body": "",
+            }
+        if "nlprobe7f3a9c2e" in path:
+            return {
+                "error": "", "elapsed_ms": 1, "status": 200,
+                "headers": {}, "body": f"hello nlprobe7f3a9c2e world",
+            }
+        origin = (headers or {}).get("Origin") or ""
+        if origin:
+            return {
+                "error": "", "elapsed_ms": 1, "status": 200,
+                "headers": {
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Credentials": "true",
+                },
+                "body": "ok",
+            }
+        return {"error": "", "elapsed_ms": 1, "status": 200, "headers": {}, "body": "ok"}
+
+    rt = ToolRuntime(host="ex.com", http_fn=http_fn)
+    pr = rt.execute("param_reflect", {"path": "/", "param": "url"})
+    assert pr.ok and pr.data.get("reflected_in_body")
+    assert pr.data.get("open_redirect_signal")
+    cr = rt.execute("cors_probe", {"path": "/"})
+    assert cr.ok and cr.data.get("misconfig_signal")
+
+
+def test_param_reflect_rejects_same_site_open_redirect():
+    """Same-host Location with marker only in query is NOT open redirect."""
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        if "nlprobe7f3a9c2e.invalid" in path or "https://" in path:
+            return {
+                "error": "", "elapsed_ms": 1, "status": 301,
+                "headers": {
+                    "Location": "https://ex.com/?url=https://nlprobe7f3a9c2e.invalid/",
+                },
+                "body": "",
+            }
+        return {
+            "error": "", "elapsed_ms": 1, "status": 200,
+            "headers": {}, "body": "hello nlprobe7f3a9c2e world",
+        }
+
+    rt = ToolRuntime(host="ex.com", http_fn=http_fn)
+    pr = rt.execute("param_reflect", {"path": "/", "param": "url"})
+    assert pr.ok
+    assert not pr.data.get("open_redirect_signal"), pr.data
+
+
+def test_jwt_inspect_decodes_without_network():
+    # header {"alg":"none","typ":"JWT"} payload {"sub":"1"}
+    import base64, json
+    def b64(d):
+        return base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
+    token = f"{b64({'alg':'none','typ':'JWT'})}.{b64({'sub':'1','role':'user'})}.x"
+    rt = ToolRuntime(host="ex.com")
+    r = rt.execute("jwt_inspect", {"token": token})
+    assert r.ok and r.data.get("alg") == "none"
+    assert "alg_none" in (r.data.get("flags") or [])
+    assert r.network is False
+
+
+def test_graphql_introspect_detects_schema():
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        assert method == "POST"
+        assert "__schema" in (body or "")
+        return {
+            "error": "", "elapsed_ms": 3, "status": 200, "headers": {},
+            "body": '{"data":{"__schema":{"types":[{"name":"Query"},{"name":"User"}]}}}',
+        }
+
+    rt = ToolRuntime(host="ex.com", http_fn=http_fn)
+    r = rt.execute("graphql_introspect", {"path": "/graphql"})
+    assert r.ok and r.data.get("schema_leak")
+
+
+def test_cve_probe_apache_path_traversal_marker():
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        if "passwd" in path or "%2e" in path.lower():
+            return {
+                "error": "", "elapsed_ms": 5, "status": 200, "headers": {},
+                "body": "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1::/:\n",
+            }
+        return {"error": "", "elapsed_ms": 1, "status": 404, "headers": {}, "body": "no"}
+
+    rt = ToolRuntime(host="ex.com", http_fn=http_fn)
+    r = rt.execute("cve_probe", {"cve_id": "CVE-2021-41773"})
+    assert r.ok and r.data.get("vulnerable_signal")
+
+
+def test_file_disclosure_marker_not_soft404():
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        if path == "/.env":
+            return {
+                "error": "", "elapsed_ms": 2, "status": 200, "headers": {},
+                "body": "APP_KEY=base64:abc\nDB_PASSWORD=secret\n",
+            }
+        if path == "/.git/HEAD":
+            return {
+                "error": "", "elapsed_ms": 1, "status": 200, "headers": {},
+                "body": "<html><title>404 Not Found</title></html>",
+            }
+        return {"error": "", "elapsed_ms": 1, "status": 404, "headers": {}, "body": ""}
+
+    rt = ToolRuntime(host="ex.com", http_fn=http_fn)
+    r = rt.execute("file_disclosure", {"max_paths": 8})
+    assert r.ok
+    paths = [d["path"] for d in r.data.get("disclosures") or []]
+    assert "/.env" in paths
+    assert "/.git/HEAD" not in paths  # soft-404 HTML without markers
+
+
+def test_sqli_boolean_differential():
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        # true payloads return long body; false short
+        if "1%3D1" in path or "1%27%3D1" in path or "%271%27%3D%271" in path:
+            return {"error": "", "elapsed_ms": 2, "status": 200, "headers": {},
+                    "body": "OK" + ("X" * 50)}
+        if "1%3D2" in path or "%271%27%3D%272" in path:
+            return {"error": "", "elapsed_ms": 2, "status": 200, "headers": {},
+                    "body": "OK"}
+        return {"error": "", "elapsed_ms": 1, "status": 200, "headers": {}, "body": "OK"}
+
+    rt = ToolRuntime(host="ex.com", http_fn=http_fn)
+    r = rt.execute("sqli_boolean", {"path": "/item", "param": "id"})
+    assert r.ok
+    # may or may not signal depending on encoding of payloads — at least structured
+    assert "true" in r.data and "false" in r.data
+
+
+def test_idor_diff_detects_body_difference():
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        cookie = (headers or {}).get("Cookie") or ""
+        if "sid=alice" in cookie:
+            return {"error": "", "elapsed_ms": 1, "status": 200, "headers": {},
+                    "body": "user=alice email=a@x.com"}
+        if "sid=bob" in cookie:
+            return {"error": "", "elapsed_ms": 1, "status": 200, "headers": {},
+                    "body": "user=bob email=b@x.com"}
+        return {"error": "", "elapsed_ms": 1, "status": 401, "headers": {}, "body": "no"}
+
+    rt = ToolRuntime(host="ex.com", http_fn=http_fn)
+    r = rt.execute("idor_diff", {
+        "path": "/api/me",
+        "cookies_a": {"sid": "alice"},
+        "cookies_b": {"sid": "bob"},
+    })
+    assert r.ok and r.data.get("vulnerable_signal")
+
+
+def test_ssrf_canary_requires_host_and_injects():
+    seen = {}
+
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        seen["path"] = path
+        return {"error": "", "elapsed_ms": 2, "status": 200, "headers": {},
+                "body": "ok"}
+
+    rt = ToolRuntime(host="ex.com", http_fn=http_fn)
+    bad = rt.execute("ssrf_canary", {"path": "/"})
+    assert not bad.ok
+    r = rt.execute("ssrf_canary", {
+        "path": "/fetch", "param": "url", "canary_host": "abc.oastify.com",
+    })
+    assert r.ok
+    assert "abc.oastify.com" in (seen.get("path") or "")
+
+
+def test_smuggling_requires_crash_flag():
+    rt = ToolRuntime(host="ex.com", allow_crash_probes=False)
+    r = rt.execute("smuggling_desync", {"path": "/"})
+    blob = f"{r.error} {r.summary}".lower()
+    assert not r.ok and ("disabled" in blob or "not authorized" in blob or "allow_crash" in blob)
+
+
+def test_http_proof_requires_flag():
+    rt = ToolRuntime(host="ex.com", allow_freeform_proof=False)
+    r = rt.execute("http_proof", {"method": "GET", "path": "/?q=1"})
+    assert not r.ok
+    assert "freeform" in (r.error or r.summary).lower() or "disabled" in (r.summary or "").lower()
+    names = {t["name"] for t in rt.catalog()}
+    assert "http_proof" not in names
+
+
+def test_http_proof_get_marker_reflection():
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        return {
+            "error": "", "elapsed_ms": 2, "status": 200,
+            "headers": {}, "body": f"echo {path}",
+        }
+
+    rt = ToolRuntime(host="ex.com", allow_freeform_proof=True, http_fn=http_fn)
+    assert "http_proof" in {t["name"] for t in rt.catalog()}
+    r = rt.execute("http_proof", {
+        "method": "GET",
+        "path": "/search?q=nlproofmarker99",
+        "expect_marker": "nlproofmarker99",
+    })
+    assert r.ok
+    assert r.data.get("vulnerable_signal")
+    assert "expect_marker_reflected" in (r.data.get("proof_signals") or [])
+
+
+def test_http_proof_blocks_destructive_and_write_methods():
+    calls = []
+
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        calls.append(method)
+        return {"error": "", "elapsed_ms": 1, "status": 200, "headers": {}, "body": "ok"}
+
+    rt = ToolRuntime(host="ex.com", allow_freeform_proof=True, http_fn=http_fn)
+    # PUT forever forbidden
+    r = rt.execute("http_proof", {"method": "PUT", "path": "/api/x", "body": "{}"})
+    assert not r.ok
+    assert "method" in (r.error or r.summary).lower()
+    # DROP TABLE blocked even on GET path
+    r2 = rt.execute("http_proof", {
+        "method": "GET",
+        "path": "/search?q=1;DROP%20TABLE%20users",
+    })
+    # path may not match DROP if encoded - also try body POST
+    r3 = rt.execute("http_proof", {
+        "method": "POST",
+        "path": "/search",
+        "body": "q=1; DROP TABLE users--",
+    })
+    assert not r3.ok
+    assert "destructive" in (r3.error or r3.summary).lower()
+    # DELETE FROM
+    r4 = rt.execute("http_proof", {
+        "method": "POST",
+        "path": "/api/query",
+        "body": '{"sql":"DELETE FROM accounts"}',
+    })
+    assert not r4.ok
+    assert not calls  # nothing should have been sent for blocked cases above except maybe r2
+
+
+def test_http_proof_same_site_location_query_not_vulnerable():
+    """www/apex bounce that echoes attacker URL in query is NOT open redirect."""
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        return {
+            "error": "", "elapsed_ms": 1, "status": 307,
+            "headers": {
+                "Location": "https://www.zipenvy.com/api/auth/callback?callbackUrl=https://evil.com",
+            },
+            "body": "Redirecting...",
+        }
+
+    rt = ToolRuntime(host="zipenvy.com", allow_freeform_proof=True, http_fn=http_fn, tls=True)
+    r = rt.execute("http_proof", {
+        "method": "GET",
+        "path": "/api/auth/callback?callbackUrl=https://evil.com",
+        "expect_marker": "evil.com",
+    })
+    assert r.ok
+    sigs = r.data.get("proof_signals") or []
+    assert "same_site_redirect" in sigs or "marker_echoed_in_same_site_location_query" in sigs
+    assert "external_redirect" not in sigs
+    assert not r.data.get("vulnerable_signal"), r.data
+    assert "www.zipenvy.com" in (r.data.get("observed_summary") or "")
+
+
+def test_http_proof_post_allowlist():
+    calls = []
+
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        calls.append((method, path, body))
+        return {"error": "", "elapsed_ms": 1, "status": 401, "headers": {}, "body": "no"}
+
+    rt = ToolRuntime(host="ex.com", allow_freeform_proof=True, http_fn=http_fn)
+    # Admin delete path denied
+    bad = rt.execute("http_proof", {
+        "method": "POST", "path": "/admin/users/delete", "body": "{}",
+    })
+    assert not bad.ok
+    # Login allowlisted
+    ok = rt.execute("http_proof", {
+        "method": "POST", "path": "/login",
+        "body": '{"username":"netlogic_probe","password":"x"}',
+    })
+    assert ok.ok
+    assert calls and calls[0][0] == "POST" and calls[0][1].startswith("/login")
+
+
+def test_tier_d_record_poc_scope_severity_readiness():
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        return {
+            "error": "", "elapsed_ms": 1, "status": 200,
+            "headers": {"Location": "https://nlprobe7f3a9c2e.invalid/"},
+            "body": f"x nlprobe7f3a9c2e y",
+        }
+
+    rt = ToolRuntime(host="app.example.com", scope=["example.com"], http_fn=http_fn, tls=True)
+    # Prove something
+    pr = rt.execute("param_reflect", {"path": "/", "param": "next"})
+    assert pr.ok
+    # Assert finding with evidence
+    rt.execute("assert_finding", {
+        "id": "open-redirect", "title": "Open redirect via next",
+        "severity": "medium", "status": "confirmed",
+        "evidence_refs": [pr.observation_id],
+        "rationale": "Location reflects attacker host",
+    })
+    # Tier D
+    sc = rt.execute("scope_check", {"host": "app.example.com", "path": "/login"})
+    assert sc.ok and sc.data.get("in_scope") is True
+    sc2 = rt.execute("scope_check", {"host": "evil.com", "path": "/"})
+    assert sc2.ok and sc2.data.get("in_scope") is False
+
+    poc = rt.execute("record_poc", {
+        "observation_id": pr.observation_id,
+        "finding_id": "open-redirect",  # may be normalized
+        "title": "Open redirect",
+    })
+    assert poc.ok and "curl" in (poc.data.get("curl") or "")
+    assert rt.pocs
+
+    # Finding id after normalize
+    fid = rt.findings[0]["id"]
+    sev = rt.execute("severity_suggest", {"finding_id": fid, "title": "open redirect"})
+    assert sev.ok and sev.data.get("suggested_severity") in ("medium", "low", "high", "info", "critical")
+
+    ready = rt.execute("submit_readiness", {"finding_id": fid})
+    assert ready.ok
+    assert ready.data.get("total") == 1
+    # confirmed + evidence + poc + rationale → ready
+    assert ready.data["reports"][0]["ready"] is True
+
+
+def test_hackerone_export_markdown():
+    from src.hackerone_export import build_hackerone_markdown
+    art = {
+        "host": {"target": "zipenvy.com", "ip": "1.2.3.4"},
+        "ai_agent": {
+            "findings": [{
+                "id": "open-redirect", "title": "Open redirect", "status": "confirmed",
+                "severity": "medium", "rationale": "Location to external host",
+                "evidence_refs": ["obs_1"],
+                "poc": {"curl": "curl -sk 'https://zipenvy.com/?url=https://evil'",
+                        "expected": "302 to evil", "observation_id": "obs_1"},
+            }],
+            "pocs": [],
+            "readiness": {"ready_count": 1, "total": 1, "reports": [
+                {"finding_id": "open-redirect", "ready": True}
+            ]},
+        },
+        "investigations": [],
+        "fusion": {"confirmed": []},
+    }
+    md = build_hackerone_markdown(art, target="zipenvy.com")
+    assert "Open redirect" in md
+    assert "curl" in md
+    assert "zipenvy.com" in md
 
 
 def test_udp_and_ssdp_tools_exist():

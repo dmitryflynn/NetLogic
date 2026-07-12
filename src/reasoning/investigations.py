@@ -103,8 +103,27 @@ def group_investigations(state) -> list[Investigation]:
             conclusion = "POSSIBLY EXPLOITABLE"
         else:
             conclusion = "UNVERIFIED"
+        desc = _cve_description(state, cve)
+        adjudicated = bool(getattr(exploit_hyp, "ai_adjudicated", False)) if exploit_hyp else False
+        rationale = str(getattr(exploit_hyp, "ai_rationale", "")) if adjudicated else ""
+        # Per-CVE evidence only — never staple the GLOBAL refute:* checklist onto
+        # every card (that made Apache CVEs show "ssh_agent_forwarding_enabled").
+        cve_l = cve.lower()
+        per_cve_refute = [
+            e for e in refute_evidence
+            if cve_l in e.name.lower()
+            or cve_l.replace("-", "") in e.name.lower().replace("-", "")
+        ]
         if verified or conclusion == "POSSIBLY EXPLOITABLE":
-            evidence = [EvidenceItem(f"CVE matched ({cve})", o.satisfied)] + refute_evidence
+            evidence = [EvidenceItem(f"CVE matched ({cve})", o.satisfied)]
+            evidence.extend(per_cve_refute)
+            if status == "refuted":
+                label = "exploitability hypothesis refuted"
+                if rationale:
+                    label = f"{label} — {rationale[:140]}"
+                evidence.append(EvidenceItem(label, True))
+            elif status == "confirmed" and lead == "exploitable":
+                evidence.append(EvidenceItem("exploitability hypothesis confirmed", True))
         else:
             # Honest: this is usually a deliberate ceiling, not "the engine is weak".
             # Coarse banners (IIS/10.0) cannot prove patch state; many RCE/UAF checks
@@ -117,9 +136,6 @@ def group_investigations(state) -> list[Investigation]:
                     False,
                 ),
             ]
-        desc = _cve_description(state, cve)
-        adjudicated = bool(getattr(exploit_hyp, "ai_adjudicated", False)) if exploit_hyp else False
-        rationale = str(getattr(exploit_hyp, "ai_rationale", "")) if adjudicated else ""
         investigations.append(Investigation(
             question=f"Can {cve} be exploited?",
             subject=f"{cve} — {desc}" if desc else cve,

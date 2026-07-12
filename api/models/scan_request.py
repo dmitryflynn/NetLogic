@@ -76,6 +76,15 @@ class ScanRequest(BaseModel):
             "MAY disrupt or crash the target. Requires do_ai_agent. Off by default."
         ),
     )
+    allow_freeform_proof: bool = Field(
+        False,
+        description=(
+            "Tier C: allow freeform http_proof requests (GET/HEAD/OPTIONS; POST only on "
+            "search/login/graphql-like paths). Engine blocks destructive patterns and "
+            "write methods (PUT/PATCH/DELETE). Never mutates target data by design. "
+            "Requires do_ai_agent. Off by default."
+        ),
+    )
     agent_max_steps: int = Field(
         12, ge=1, le=40,
         description="Max AI agent reasoning turns (depth mode default floor is 24).",

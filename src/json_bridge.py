@@ -2,7 +2,7 @@
 NetLogic - JSON Stream Bridge (GUI / API)
 =========================================
 Thin adapter: turns the shared scan engine's events into newline-delimited JSON
-for the Electron frontend / REST API. It does NOT contain its own scan logic —
+for the web dashboard / REST API. It does NOT contain its own scan logic —
 single-host scans delegate to src.engine.run_scan(), the SAME path the CLI uses,
 so every feature added to the engine reaches the GUI automatically.
 
@@ -55,6 +55,7 @@ def run_streaming_scan(target: str, ports: list, timeout: float,
                        do_ai_agent: bool = False,
                        agent_depth: bool = False,
                        allow_crash_probes: bool = False,
+                       allow_freeform_proof: bool = False,
                        agent_max_steps: int = 12,
                        agent_max_requests: int = 40,
                        emit_callback=None,
@@ -62,7 +63,7 @@ def run_streaming_scan(target: str, ports: list, timeout: float,
     """Execute a scan and stream results as JSON events via the shared engine.
 
     emit_callback: optional callable(event_type, data, message) used by the REST
-    API layer; None for normal CLI/Electron usage (stdout).
+    API layer; None for normal CLI usage (stdout).
     Accepts **extra for forward-compatibility with future scan options.
     """
     if emit_callback is not None:
@@ -87,6 +88,7 @@ def run_streaming_scan(target: str, ports: list, timeout: float,
                 ai_agent=do_ai_agent or agent_depth,
                 agent_depth=agent_depth,
                 allow_crash_probes=allow_crash_probes,
+                allow_freeform_proof=allow_freeform_proof,
                 agent_max_steps=agent_max_steps, agent_max_requests=agent_max_requests,
                 no_diff=False, no_traceroute=False, out=".",
             )

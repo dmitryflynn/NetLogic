@@ -76,6 +76,69 @@ def test_version_only_critical_with_exploit_is_discarded():
     assert "CVE-2021-31166" in discarded
 
 
+def test_ai_agent_tool_confirm_pins_over_version_only_discard():
+    """Agent crash_probe/tool proof must promote CVE out of version-only discard.
+
+    This is the money-path fix: AI investigation already verified the lead; fusion
+    must pin it so the AI summary sees Confirmed, not silent discard.
+    """
+    art = {
+        "host_result": {"ip": "31.11.35.143", "target": "bibliotecapleyades.net",
+                        "ports": [{"port": 80, "service": "http"}]},
+        "vuln_matches": [{
+            "port": 80, "service": "http", "product": "iis", "version": "10.0",
+            "detection_confidence": "POTENTIAL",
+            "cves": [{"id": "CVE-2021-31166", "cvss_score": 9.8, "kev": False,
+                      "exploit_available": True, "epss": 0.9966,
+                      "description": "IIS HTTP.sys UAF RCE"}],
+        }],
+        "ai_agent": {
+            "confirmed": 1,
+            "findings": [{
+                "id": "cve-2021-31166",
+                "title": "cve-2021-31166 remote crash/DoS signal",
+                "severity": "critical",
+                "status": "confirmed",
+                "evidence_refs": ["obs_3"],
+                "rationale": "HTTP.sys UAF via crafted Accept-Encoding",
+            }],
+            "observations": [{
+                "ok": True,
+                "observation_id": "obs_3",
+                "tool": "crash_probe",
+                "summary": "crash_probe cve-2021-31166: VULNERABLE SIGNAL",
+                "data": {"cve_id": "cve-2021-31166", "vulnerable_signal": True},
+            }],
+            "chains": [],
+            "steps_used": 3,
+            "requests_used": 5,
+        },
+    }
+    # Signals include agent probe_confirmed
+    sigs = signals_from_artifacts(art)
+    agent_sigs = [s for s in sigs if s.claim.upper() == "CVE-2021-31166" and s.is_probe_confirmed]
+    assert agent_sigs, "agent confirm must emit probe_confirmed Signal"
+
+    fusion = run_fusion(art, skip_synthesis=True)
+    confirmed = {r["subject"].upper() for r in fusion["confirmed"]}
+    discarded = {r["subject"].upper() for r in fusion["discarded"]}
+    assert "CVE-2021-31166" in confirmed
+    assert "CVE-2021-31166" not in discarded
+    row = next(r for r in fusion["confirmed"] if r["subject"].upper() == "CVE-2021-31166")
+    assert row["pinned"] is True
+
+    ctx = __import__("src.fusion.engine_bridge", fromlist=["build_engine_context"]).build_engine_context(art)
+    assert ctx.get("ai_agent") and ctx["ai_agent"]["findings"]
+    # confirmed_vulns is a list of structured dicts (cve/title/evidence/poc)
+    cv_ids = []
+    for item in (ctx.get("confirmed_vulns") or []):
+        if isinstance(item, dict):
+            cv_ids.append(str(item.get("cve") or item.get("title") or "").upper())
+        else:
+            cv_ids.append(str(item).upper())
+    assert "CVE-2021-31166" in cv_ids
+
+
 def test_high_impact_version_match_is_discarded_not_potential():
     fusion = run_fusion(_artifacts())
     potential = {r["subject"] for r in fusion["potential"]}

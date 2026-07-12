@@ -122,11 +122,24 @@ def signals_from_artifacts(art: dict) -> list[Signal]:
             continue
         title = _attr(f, "title", claim)
         detail = _attr(f, "detail", "") or ""
+        evidence_raw = _attr(f, "evidence", "") or ""
+        poc = _attr(f, "poc", None) or {}
+        if not isinstance(poc, dict):
+            poc = {}
         sigs.append(Signal(
             source="probe", kind="vuln", claim=claim, host=host, port=_attr(f, "port"),
             service="http", reliability="high", exploit_available=True, cvss=8.0,
-            evidence=f"probe-confirmed: {title}",
-            observed_data={"probe_detail": detail or title, "method": _attr(f, "method", "GET")},
+            evidence=(evidence_raw or f"probe-confirmed: {title}")[:600],
+            observed_data={
+                "probe_detail": detail or title,
+                "method": _attr(f, "method", "GET"),
+                "evidence": evidence_raw[:400] if evidence_raw else None,
+                "poc": {
+                    "curl": poc.get("curl"),
+                    "expected": poc.get("expected"),
+                    "how_to_reproduce": poc.get("how_to_reproduce"),
+                } if poc.get("curl") else None,
+            },
             exposure=exposure,
         ))
 
@@ -209,6 +222,84 @@ def signals_from_artifacts(art: dict) -> list[Signal]:
         if isinstance(vsig, Signal):
             sigs.append(vsig)
 
+    # 7. AI Investigation Agent confirmations — tool-executed proof (crash_probe,
+    # http_request markers, etc.). These are the same class as probe_confirmed:
+    # the agent already spent tools; the gate must pin them so fusion cannot
+    # re-discard them as "version/banner only" and starve the AI summary of truth.
+    from src.ip_scope import normalize_finding_id  # noqa: PLC0415
+
+    agent = art.get("ai_agent") or {}
+    obs_by_id = {
+        str(o.get("observation_id") or ""): o
+        for o in (agent.get("observations") or [])
+        if isinstance(o, dict) and o.get("observation_id")
+    }
+    web = _web_port(art)
+    seen_agent_claims: set[str] = set()
+    for f in (agent.get("findings") or []):
+        if not isinstance(f, dict) or str(f.get("status") or "").lower() != "confirmed":
+            continue
+        raw_id = str(f.get("id") or f.get("title") or "").strip()
+        if not raw_id:
+            continue
+        # Canonical id (ssdp-exposed ≈ ssdp_exposure; CVE case/variants).
+        claim = normalize_finding_id(raw_id, str(f.get("title") or ""))
+        if claim.startswith("cve-"):
+            claim = claim.upper()
+        # Inventory tech markers are not vulnerability subjects for fusion pin
+        if claim.startswith("tech_"):
+            continue
+        if claim.lower() in seen_agent_claims:
+            continue
+        seen_agent_claims.add(claim.lower())
+
+        refs = f.get("evidence_refs") or []
+        obs_bits = []
+        for rid in refs:
+            o = obs_by_id.get(str(rid))
+            if not o:
+                continue
+            obs_bits.append(
+                f"{o.get('tool')}: {o.get('summary')}"
+                + (f" ({(o.get('data') or {}).get('cve_id')})" if isinstance(o.get("data"), dict) else "")
+            )
+        evidence = (
+            f"AI agent tool-confirmed: {f.get('title') or claim}. "
+            f"{f.get('rationale') or ''} "
+            + (" | ".join(obs_bits) if obs_bits else "")
+        ).strip()[:600]
+
+        # Prefer port from matching vuln_match if present
+        port = web
+        for vm in (art.get("vuln_matches") or []):
+            for c in (_attr(vm, "cves", []) or []):
+                if str(_attr(c, "id", "") or "").upper() == claim.upper():
+                    port = _attr(vm, "port") or port
+                    break
+
+        sigs.append(Signal(
+            source="probe",
+            kind="vuln",
+            claim=claim,
+            host=host,
+            port=port,
+            service="http" if port in (80, 443, 8080, 8443) else "",
+            reliability="high",
+            probe_confirmed=True,
+            version_matched=False,
+            evidence=evidence,
+            cvss=9.8 if claim.upper().startswith("CVE-") else 7.5,
+            exploit_available=True,
+            observed_data={
+                "agent_status": "confirmed",
+                "evidence_refs": list(refs),
+                "tool_summaries": obs_bits[:6],
+                "rationale": str(f.get("rationale") or "")[:300],
+            },
+            exposure=exposure,
+            raw_metadata={"source": "ai_agent"},
+        ))
+
     return sigs
 
 
@@ -269,11 +360,29 @@ def build_engine_context(art: dict) -> dict:
         })
 
     confirmed_vulns = []
+    confirmed_vuln_ids: list[str] = []
     for f in (_attr(vpr, "confirmed", []) or []):
         if _attr(f, "confirmed", True) is not False:
             cve = str(_attr(f, "cve_id", "") or _attr(f, "title", "") or "")
-            if cve:
-                confirmed_vulns.append(cve)
+            if not cve:
+                continue
+            confirmed_vuln_ids.append(cve)
+            poc = _attr(f, "poc", None) or {}
+            if not isinstance(poc, dict):
+                poc = {}
+            confirmed_vulns.append({
+                "cve": cve,
+                "title": _attr(f, "title", cve),
+                "severity": _attr(f, "severity", ""),
+                "evidence": (_attr(f, "evidence", "") or "")[:400],
+                "detail": (_attr(f, "detail", "") or "")[:400],
+                "remediation": (_attr(f, "remediation", "") or "")[:300],
+                "poc": {
+                    "curl": poc.get("curl"),
+                    "expected": poc.get("expected"),
+                    "how_to_reproduce": poc.get("how_to_reproduce"),
+                } if poc.get("curl") else None,
+            })
 
     web_fp = None
     is_default = False
@@ -300,7 +409,123 @@ def build_engine_context(art: dict) -> dict:
     for src_key, targets in reach.items():
         reaches_readable[src_key] = sorted(targets)
 
-    return {
+    # AI agent tool transcript — primary ground truth for synthesis when present.
+    agent = art.get("ai_agent") or {}
+    agent_ctx = None
+    if agent:
+        agent_findings = []
+        agent_pocs = list(agent.get("pocs") or [])
+        poc_by_fid = {}
+        for p in agent_pocs:
+            if isinstance(p, dict) and p.get("finding_id"):
+                poc_by_fid[str(p["finding_id"])] = p
+        for f in (agent.get("findings") or []):
+            if not isinstance(f, dict):
+                continue
+            fid = str(f.get("id") or "")
+            poc = f.get("poc") if isinstance(f.get("poc"), dict) else poc_by_fid.get(fid)
+            agent_findings.append({
+                "id": f.get("id"),
+                "title": f.get("title"),
+                "status": f.get("status"),
+                "severity": f.get("severity"),
+                "rationale": (f.get("rationale") or "")[:400],
+                "evidence_refs": f.get("evidence_refs") or [],
+                "poc": {
+                    "curl": (poc or {}).get("curl"),
+                    "expected": (poc or {}).get("expected"),
+                    "how_to_reproduce": (poc or {}).get("how_to_reproduce")
+                    or (poc or {}).get("notes"),
+                } if poc and (poc.get("curl") or poc.get("expected")) else None,
+            })
+        # Compact tool observations — include repro-critical fields so synthesis
+        # can build PoCs from what was *actually* run (status, Location, signals).
+        agent_obs = []
+        for o in (agent.get("observations") or [])[:60]:
+            if not isinstance(o, dict):
+                continue
+            data = o.get("data") if isinstance(o.get("data"), dict) else {}
+            loc = data.get("location") or ""
+            if not loc and isinstance(data.get("headers"), dict):
+                loc = (data["headers"].get("location")
+                       or data["headers"].get("Location") or "")
+            agent_obs.append({
+                "observation_id": o.get("observation_id"),
+                "tool": o.get("tool"),
+                "ok": o.get("ok"),
+                "summary": (o.get("summary") or "")[:200],
+                "vulnerable_signal": data.get("vulnerable_signal"),
+                "cve_id": data.get("cve_id"),
+                "path": data.get("path"),
+                "method": data.get("method"),
+                "status": data.get("status") or data.get("status_redirect") or data.get("status_reflect"),
+                "location": str(loc)[:200] if loc else None,
+                "location_host": data.get("location_host"),
+                "open_redirect_signal": data.get("open_redirect_signal"),
+                "proof_signals": data.get("proof_signals") or data.get("signals"),
+                "observed_summary": data.get("observed_summary"),
+                "data": {
+                    k: data.get(k)
+                    for k in (
+                        "path", "method", "status", "location", "location_host",
+                        "open_redirect_signal", "proof_signals", "signals",
+                        "vulnerable_signal", "observed_summary", "body_template",
+                        "param", "marker",
+                    )
+                    if data.get(k) is not None
+                },
+            })
+        agent_ctx = {
+            "confirmed_count": agent.get("confirmed") or sum(
+                1 for f in agent_findings if str(f.get("status") or "").lower() == "confirmed"
+            ),
+            "leads": agent.get("leads"),
+            "steps_used": agent.get("steps_used"),
+            "requests_used": agent.get("requests_used"),
+            "stopped_reason": agent.get("stopped_reason"),
+            "findings": agent_findings,
+            "pocs": list(agent.get("pocs") or [])[:20],
+            "chains": (agent.get("chains") or [])[:12],
+            "tool_observations": agent_obs,
+            # Full observations kept compact-adjacent for repro ledger
+            "observations": agent_obs,
+            "note": (
+                "AGENT TOOL PROOF outranks version/banner correlator decisions. "
+                "Any finding with status=confirmed here was verified with live tools "
+                "(e.g. crash_probe, http_request). Treat as Confirmed in the report; "
+                "do NOT put them in False Positives as 'version-only'. "
+                "PoCs MUST quote tool_observations (path/status/Location) — never invent responses."
+            ),
+        }
+        # Also surface agent-confirmed CVE ids next to probe-confirmed list
+        for f in agent_findings:
+            if str(f.get("status") or "").lower() != "confirmed":
+                continue
+            fid = str(f.get("id") or "")
+            if fid.lower().startswith("cve-"):
+                cid = fid.upper().replace("-CONFIRMED", "")
+                if cid not in confirmed_vuln_ids:
+                    confirmed_vuln_ids.append(cid)
+                    confirmed_vulns.append({
+                        "cve": cid,
+                        "title": f.get("title") or cid,
+                        "severity": f.get("severity") or "",
+                        "evidence": (f.get("rationale") or "")[:400],
+                        "poc": f.get("poc"),
+                    })
+
+    # Composite control postures: joint views so synthesis reasons over a
+    # *family* of controls (not one checklist item). Fail-soft if DNS missing.
+    control_postures: dict = {}
+    try:
+        from src.dns_security import email_auth_posture_for_ai  # noqa: PLC0415
+        email_auth = email_auth_posture_for_ai(dns_result)
+        if email_auth:
+            control_postures["email_auth"] = email_auth
+    except Exception:  # noqa: BLE001
+        pass
+
+    ctx = {
         "host": _attr(hr, "ip") or _attr(hr, "target", ""),
         "open_ports": ports,
         "tech_stack": techs,
@@ -314,9 +539,18 @@ def build_engine_context(art: dict) -> dict:
         },
         "exposure": _exposure(art),
         "confirmed_vulns": confirmed_vulns,
+        "ai_agent": agent_ctx,
         "adjacent_hosts": adjacent_hosts,
         "reaches": reaches_readable,
+        "poc_contract": (
+            "Every finding in the Executive Summary / Findings section MUST include a "
+            "concrete **Proof of concept** / **How to reproduce** (curl or equivalent). "
+            "Prefer poc.curl + poc.expected from confirmed_vulns / ai_agent.findings when present."
+        ),
     }
+    if control_postures:
+        ctx["control_postures"] = control_postures
+    return ctx
 
 
 def _row(v: Verdict) -> dict:

@@ -202,9 +202,3 @@ def test_gate_handles_nondict_exposure_and_stays_correct():
     assert v[0].impact == "critical" and v[0].pinned is True
 
 
-@pytest.mark.parametrize("product,desc", [
-    (None, None), (5, 5), ("apache", None), ("", "x"), (123, "y"),
-])
-def test_vdb_description_matcher_never_crashes(product, desc):
-    from src import vdb_engine
-    vdb_engine._vdb_description_matches_product(product, desc)

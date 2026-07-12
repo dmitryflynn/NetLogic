@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from api.models.scan_request import ScanRequest
@@ -112,40 +111,24 @@ def test_json_bridge_forwards_ai_options_to_engine():
     assert args.ai_model == "openai/gpt-4o-mini"
 
 
-def test_remote_agent_forwards_ai_options(monkeypatch):
-    import netlogic_agent
-
-    captured = {}
-
-    def fake_run_streaming_scan(**kwargs):
-        captured.update(kwargs)
-
-    monkeypatch.setattr("src.json_bridge.run_streaming_scan", fake_run_streaming_scan)
-    worker = netlogic_agent.ScanWorker(
-        controller="http://controller",
-        agent_id="agent",
-        token="token",
-        job_id="job",
-        config={
-            "target": "example.com",
-            "ports": "quick",
-            "do_ai": True,
-            "ai_key": "sk-test",
-            "ai_provider": "qwen",
-            "ai_model": "qwen-plus",
-            "ssh_user": "ubuntu",
-            "ssh_port": 2222,
-        },
-        stop_event=SimpleNamespace(is_set=lambda: False),
+def test_web_scan_request_carries_ai_options():
+    """Web API ScanRequest is the contract the dashboard posts for AI-enabled scans."""
+    req = ScanRequest(
+        target="example.com",
+        ports="quick",
+        do_ai=True,
+        ai_key="sk-test",
+        ai_provider="qwen",
+        ai_model="qwen-plus",
+        ssh_user="ubuntu",
+        ssh_port=2222,
     )
-    worker._execute()
-
-    assert captured["do_ai"] is True
-    assert captured["ai_key"] == "sk-test"
-    assert captured["ai_provider"] == "qwen"
-    assert captured["ai_model"] == "qwen-plus"
-    assert captured["ssh_user"] == "ubuntu"
-    assert captured["ssh_port"] == 2222
+    assert req.do_ai is True
+    assert req.ai_key.get_secret_value() == "sk-test"
+    assert req.ai_provider == "qwen"
+    assert req.ai_model == "qwen-plus"
+    assert req.ssh_user == "ubuntu"
+    assert req.ssh_port == 2222
 
 
 # ── Upstream transient-error handling (504 etc.) ───────────────────────────────

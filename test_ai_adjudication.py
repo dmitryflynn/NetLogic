@@ -27,7 +27,8 @@ def _state_with_stuck_cves():
     return s
 
 
-def _completer(verdict, rationale="ubuntu backports the fix"):
+def _completer(verdict, rationale="requires authenticated local shell — not remotely reachable"):
+    """Default rationale is a valid positive ruled_out (local-only), not a weak 'backport' claim."""
     def complete(system, user):
         return json.dumps([{"cve": "CVE-2023-38408", "verdict": verdict,
                             "confidence": 0.8, "rationale": rationale}])
@@ -60,16 +61,28 @@ def test_adjudicator_returns_decisions_but_mutates_nothing():
     assert decisions[0]["hypothesis_label"] == "exploitability_of:verify:CVE-2023-38408"
 
 
+def test_weak_backport_ruled_out_is_demoted_to_needs_active_check():
+    """Policy guard: 'Ubuntu backports' alone cannot close a CVE as NOT EXPLOITABLE."""
+    s = _state_with_stuck_cves()
+    decisions = FindingAdjudicator(
+        _completer("ruled_out", "ubuntu backports the fix without changing the banner")
+    ).decide(s)
+    assert decisions[0]["verdict"] == "needs_active_check"
+    assert "demoted" in decisions[0]["rationale"].lower() or "policy" in decisions[0]["rationale"].lower()
+
+
 def test_ruled_out_makes_the_cve_read_not_exploitable():
     s = _state_with_stuck_cves()
     # baseline: unresolved → UNVERIFIED
     ex = next(i for i in group_investigations(s) if i.kind == "exploitability")
     assert ex.conclusion == "UNVERIFIED"
-    _apply(s, FindingAdjudicator(_completer("ruled_out")).decide(s))
+    _apply(s, FindingAdjudicator(
+        _completer("ruled_out", "local privilege escalation — requires authenticated shell")
+    ).decide(s))
     ex = next(i for i in group_investigations(s) if i.kind == "exploitability")
     assert ex.conclusion == "NOT EXPLOITABLE"
     assert ex.adjudicated_by_ai is True
-    assert "backport" in ex.rationale
+    assert "local" in ex.rationale.lower() or "shell" in ex.rationale.lower()
 
 
 def test_likely_exploitable_reads_as_possibly_never_confirmed():
