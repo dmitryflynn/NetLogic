@@ -375,6 +375,13 @@ def summarize_findings(host_result, vuln_matches=None, *, tls_results=None,
             "spoofability_score": _b(dns_result, "spoofability_score"),
             "email_spoofable": _b(dns_result, "email_spoofable"),
         }
+        try:
+            from src.dns_security import email_auth_posture_for_ai  # noqa: PLC0415
+            email_auth = email_auth_posture_for_ai(dns_result)
+            if email_auth:
+                data.setdefault("control_postures", {})["email_auth"] = email_auth
+        except Exception:  # noqa: BLE001
+            pass
     if takeover_result is not None:
         vuln = _b(takeover_result, "vulnerable", []) or []
         if vuln:
@@ -384,9 +391,24 @@ def summarize_findings(host_result, vuln_matches=None, *, tls_results=None,
             "port": _b(f, "port"), "title": _b(f, "title"), "severity": _b(f, "severity"),
         } for f in (_b(service_probe_result, "findings", []) or [])]
     if vuln_probe_result is not None:
-        data["confirmed_vulns"] = [{
-            "cve": _b(f, "cve_id"), "title": _b(f, "title"), "confirmed": _b(f, "confirmed"),
-        } for f in (_b(vuln_probe_result, "confirmed", []) or [])]
+        data["confirmed_vulns"] = []
+        for f in (_b(vuln_probe_result, "confirmed", []) or []):
+            poc = _b(f, "poc", None) or {}
+            if not isinstance(poc, dict):
+                poc = {}
+            data["confirmed_vulns"].append({
+                "cve": _b(f, "cve_id"),
+                "title": _b(f, "title"),
+                "confirmed": _b(f, "confirmed"),
+                "severity": _b(f, "severity"),
+                "evidence": (_b(f, "evidence") or "")[:400],
+                "detail": (_b(f, "detail") or "")[:400],
+                "poc": {
+                    "curl": poc.get("curl"),
+                    "expected": poc.get("expected"),
+                    "how_to_reproduce": poc.get("how_to_reproduce"),
+                } if poc.get("curl") else None,
+            })
     if osint_result is not None:
         subs = _b(osint_result, "subdomains", []) or []
         if subs:
@@ -514,7 +536,11 @@ _SYSTEM_PROMPT = (
     "  • 'changes_since_last_scan' (if present) is high-signal: new ports/versions/CVEs "
     "are where fresh exposure appears — call them out prominently.\n"
     "  • Use 'topology' (ASN/reverse-DNS/IPv6/hops) to reason about blast radius and "
-    "lateral movement, not just the single host.\n\n"
+    "lateral movement, not just the single host.\n"
+    "  • 'control_postures' (if present) are multi-layer control families (e.g. "
+    "email_auth with SPF/DKIM/DMARC + spoofable). Judge the *bundle*, not one layer. "
+    "If spoofable is false, do not promote single-layer hygiene notes for that family "
+    "into Findings — residual best-practice only under False Positives, or omit.\n\n"
     "═══ OUTPUT CONTRACT (follow EXACTLY) ═══\n"
     "Respond in GitHub-Flavored Markdown ONLY — no preamble, no sign-off, no text "
     "outside the sections below. Use these six `##` sections, in this exact order "
@@ -522,16 +548,28 @@ _SYSTEM_PROMPT = (
     "## Executive Summary\n"
     "2–4 sentences on the real risk posture of THIS host. End with a final line, "
     "exactly: `**Overall risk:** <CRITICAL|HIGH|MEDIUM|LOW>`\n\n"
-    "## Key Findings\n"
-    "A Markdown table, highest priority first (KEV/high-EPSS/probe-confirmed at top). "
-    "Columns EXACTLY:\n"
-    "`| Severity | Finding | Port/Service | CVE(s) | Confidence | EPSS | Evidence |`\n"
-    "Severity ∈ CRITICAL|HIGH|MEDIUM|LOW. Confidence ∈ Confirmed|Likely|Potential "
-    "(Confirmed = probe-verified or authenticated ground truth; Likely = "
-    "version-CONFIRMED match with a credible precondition; Potential = unverified "
-    "lead). EPSS = the number from the data (or `—`). Evidence = the specific scan "
-    "fact (banner/version/precondition/exposed file). One row per finding. If there "
-    "are none, write exactly: `_No credible findings from the current evidence._`\n\n"
+    "## Findings\n"
+    "ONE `###` subsection PER *vulnerability* (not a bare CVE list), highest priority first "
+    "(KEV / high-EPSS / probe-confirmed at the top). Title by the weakness "
+    "(e.g. 'Path traversal in Apache'), not only by CVE id; put CVE ids under What as "
+    "`Related: CVE-…` when applicable.\n"
+    "Header EXACTLY (severity + decision each in backticks):\n"
+    "### <n>. <vulnerability title> `[<SEVERITY>]` `[<Confirmed|Likely|Potential>]`\n"
+    "(Confirmed = probe-verified or authenticated ground truth; Likely = version-CONFIRMED "
+    "match with a credible precondition; Potential = unverified lead.) Under each header, "
+    "these bold labels, every value grounded in THIS host's evidence and concrete:\n"
+    "- `**What:**` one sentence — the weakness and where it lives (`port`, `service`); "
+    "if known, add `Related: CVE-…`.\n"
+    "- `**Technical detail:**` the specific mechanism — why this exact version/config is "
+    "vulnerable, the affected component, and the precondition that makes it reachable here.\n"
+    "- `**Proof of concept / How to reproduce:**` REQUIRED on EVERY finding (no exceptions). "
+    "Operator-runnable: Setup → fenced command → **Observed** (quote real evidence status/"
+    "headers/markers; never invent them) → **Vulnerable if** vs **Safe if**. "
+    "Redirects: only external Location *host* is open-redirect; same-site Location that "
+    "merely echoes a URL in a query string is NOT. Prefer `poc.curl`/`poc.expected`. "
+    "NEVER fabricate exploit output or invent a CVE id.\n"
+    "- `**Remediation:**` the SPECIFIC fix for THIS finding (follow the Remediation rules).\n"
+    "If there are none, write exactly: `_No credible findings from the current evidence._`\n\n"
     "## Attack Chains\n"
     "Zero or more chains. Each chain MUST use this EXACT template (no deviations):\n"
     "### Chain <N> — <short title> `[<SEVERITY>]` `[<CONFIDENCE>]`\n"
@@ -570,16 +608,23 @@ _SYSTEM_PROMPT = (
     "one-line reason (patched, backported, coarse version, auth-gated, edge-not-origin). "
     "If none, write `_None._`\n\n"
     "## Remediation\n"
-    "Bullet list ordered to match Key Findings. Each: `**<fix>**` — <concrete action> "
-    "(and, where useful, the exact follow-up probe to CONFIRM the finding).\n\n"
+    "A prioritized action plan, most urgent first — one bullet per finding, in the same order "
+    "as Findings. Each MUST be SPECIFIC and actionable for THIS host: `**<finding>**` — the "
+    "exact fix: the precise version to upgrade to (e.g. `upgrade OpenSSH to >= 9.6`), the exact "
+    "config directive/value (e.g. `SSLProtocol -all +TLSv1.2 +TLSv1.3`), the exact header to add "
+    "(`Strict-Transport-Security: max-age=63072000; includeSubDomains`), the exact port to "
+    "firewall, or the exact file to remove — include the command where it helps. Do NOT write "
+    "vague advice like \"update the software\", \"apply patches\", or \"harden the "
+    "configuration\": name the specific version/directive/value. ONLY if a specific fix cannot "
+    "be derived from the evidence, say so and state exactly what to check.\n\n"
     "═══ RULES ═══\n"
     "Never present invented ports, services, versions, or CVE IDs as FACT, and never "
-    "fabricate a CVE identifier. Facts (Key Findings, Attack-Chain evidence) must be "
+    "fabricate a CVE identifier. Facts (the Findings section, Attack-Chain evidence) must be "
     "grounded in the provided data. You MAY, however, reason beyond the data in the "
     "'Beyond Known CVEs' section and in chain analysis — provided such reasoning is "
     "clearly labeled a `[Hypothesis]`/prediction and built on an observed fact (e.g. an "
     "EOL version, an exposed interface), not pulled from thin air. Keep the distinction "
-    "sharp: the Key Findings table is for what the evidence supports; hypotheses and "
+    "sharp: the Findings section is for what the evidence supports; hypotheses and "
     "emergent risks live in their own section so they never masquerade as confirmed. "
     "Use `inline code` for ports, versions, CVE IDs, and file paths. Prefer a correct, "
     "well-grounded assessment over an exhaustive speculative one — but do NOT stay "
@@ -591,8 +636,8 @@ _SYSTEM_PROMPT = (
 def _build_messages(findings: dict) -> list[dict]:
     user = (
         "Analyze this authorized NetLogic scan and write the report, following the "
-        "OUTPUT CONTRACT exactly (the six `##` sections, the Key Findings table "
-        "columns, and the Attack Chains template). Ground factual claims in the JSON "
+        "OUTPUT CONTRACT exactly (the six `##` sections, one `###` subsection per finding, "
+        "and the Attack Chains template). Ground factual claims in the JSON "
         "below and cite the specific fact as evidence — but also do the analyst work in "
         "'Beyond Known CVEs': call out non-CVE exposure, end-of-life/undiscovered-class "
         "risk (as labeled hypotheses), and emergent risks from chaining benign facts.\n\n"

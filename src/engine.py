@@ -1,7 +1,7 @@
 """
 NetLogic - Scan Engine (single source of truth)
 ===============================================
-ONE scan implementation, used by both the CLI (netlogic.py) and the GUI/API
+ONE scan implementation, used by the web API (and optional local CLI helpers)
 streaming bridge (json_bridge.py). Previously these were two divergent code paths,
 so features added to the CLI never reached the GUI. Now both call run_scan():
 
@@ -508,6 +508,7 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
                 max_steps=int(_g(args, "agent_max_steps", 12) or 12),
                 max_requests=int(_g(args, "agent_max_requests", 40) or 40),
                 allow_crash_probes=bool(_g(args, "allow_crash_probes", False)),
+                allow_freeform_proof=bool(_g(args, "allow_freeform_proof", False)),
                 depth_mode=_depth,
                 emit=_agent_emit,
             )

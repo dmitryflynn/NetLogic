@@ -12,16 +12,128 @@ _MAX_BODY = 4096
 _MAX_RAW = 2048
 _MAX_TIMEOUT = 15.0
 
-# Agent probes are read-only: no methods that can create/update/delete application data.
+# Agent probes are read-only by default: no methods that create/update/delete app data.
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+# Tier C freeform proof: GET/HEAD/OPTIONS always; POST only on allowlisted paths.
+_PROOF_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "POST"})
 _HEADER_KEY_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 _MAX_COOKIE_NAME = 64
 _MAX_COOKIE_VAL = 512
 _MAX_COOKIES = 24
+_MAX_PROOF_BODY = 2048
+
+# Fail-closed: if any of these appear in path/query/headers/body, refuse to send.
+_DESTRUCTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA|INDEX)\b"),
+    re.compile(r"(?i)\bDELETE\s+FROM\b"),
+    re.compile(r"(?i)\bUPDATE\s+\w[\w.]*\s+SET\b"),
+    re.compile(r"(?i)\b(INSERT\s+INTO|ALTER\s+TABLE|CREATE\s+(TABLE|USER|DATABASE))\b"),
+    re.compile(r"(?i)\b(GRANT|REVOKE)\s+\w"),
+    re.compile(r"(?i)\brm\s+(-[a-zA-Z]*f|-[a-zA-Z]*r|/)|rmdir\b"),
+    re.compile(r"(?i)\b(unlink|shutil\.rmtree|os\.(remove|unlink|rmdir)|pathlib\.Path\.unlink)\b"),
+    re.compile(r"(?i)\b(powershell\s+(-enc|-e\b)|Invoke-Expression|\bIEX\s*\()"),
+    re.compile(r"(?i);\s*(drop|delete|truncate|shutdown)\b"),
+    re.compile(r"(?i)\b(mkfs\.|format\s+[a-z]:|dd\s+if=)"),
+    re.compile(r"(?i)\b(userdel|deluser|passwd\s|chpasswd|net\s+user\s+\w+\s+/delete)\b"),
+    re.compile(r"(?i)(/|%2f)(admin|api|users?|accounts?)(/|%2f).*(delete|destroy|purge|wipe|erase|drop)"),
+    re.compile(r"(?i)[?&](_method|method|http_method)=(DELETE|PUT|PATCH)\b"),
+    re.compile(r"(?i)<\?php\s+(system|exec|shell_exec|passthru|eval)\s*\("),
+    re.compile(r"(?i)\b(eval\s*\(\s*\$_(GET|POST|REQUEST|COOKIE)|Runtime\.getRuntime\(\)\.exec)"),
+    re.compile(r"(?i)\b(wp_delete_user|destroy_user|force_delete|hard_delete)\b"),
+    re.compile(r"(?i)\b(FLUSHALL|FLUSHDB|CONFIG\s+SET|SLAVEOF\s+NO\s+ONE)\b"),
+    re.compile(r"(?i)\b(mongodb\.drop|dropDatabase\s*\(|db\.drop\()"),
+)
+
+# Freeform POST only to read-like / auth-probe surfaces (never admin CRUD / uploads).
+_PROOF_POST_PATH_RE: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)^/(search|query|find|filter|echo|reflect|ping|health|status)(/|$)"),
+    re.compile(r"(?i)^/(api|v\d+|graphql|gql)(/|$)"),
+    re.compile(r"(?i)^/(api/)?(v\d+/)?(search|query|echo|reflect|ping|health|graphql|gql|login|auth|token|session)(/|$)"),
+    re.compile(r"(?i)^/(login|signin|sign-in|auth|oauth)(/|$)"),
+    re.compile(r"(?i)^/(wp-login\.php|user/login|accounts/login|session/new)(/|$)"),
+)
+
+_PROOF_POST_PATH_DENY_RE: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)/(delete|destroy|purge|wipe|erase|remove|drop|upload|import|admin/users)"),
+    re.compile(r"(?i)/(password/reset|forgot-password|change-password)"),
+)
+
+
+def is_destructive_payload(*parts: str | None) -> tuple[bool, str]:
+    """Return (True, reason) if any fragment looks state-destroying / weaponized.
+
+    Used by Tier C freeform proof to fail closed — better to skip a check than
+    risk wiping application data. Checks raw text and URL-decoded variants.
+    """
+    from urllib.parse import unquote_plus  # noqa: PLC0415
+
+    chunks: list[str] = []
+    for p in parts:
+        if p is None:
+            continue
+        s = str(p)
+        if s:
+            chunks.append(s)
+    if not chunks:
+        return False, ""
+    blob = "\n".join(chunks)
+    # Cap scan cost
+    if len(blob) > 16_000:
+        blob = blob[:16_000]
+    # Also scan URL-decoded form so DROP%20TABLE is caught
+    try:
+        decoded = unquote_plus(blob)
+    except Exception:  # noqa: BLE001
+        decoded = blob
+    for candidate in (blob, decoded):
+        for pat in _DESTRUCTIVE_PATTERNS:
+            m = pat.search(candidate)
+            if m:
+                return True, f"destructive pattern blocked: {m.group(0)[:80]!r}"
+    return False, ""
+
+
+def is_proof_post_path_allowed(path: str) -> bool:
+    """True if freeform POST may target this path (allowlist − denylist)."""
+    p = (path or "/").strip() or "/"
+    if not p.startswith("/"):
+        p = "/" + p
+    # Path only for matching (ignore query)
+    path_only = p.split("?", 1)[0]
+    for deny in _PROOF_POST_PATH_DENY_RE:
+        if deny.search(path_only):
+            return False
+    for allow in _PROOF_POST_PATH_RE:
+        if allow.search(path_only):
+            return True
+    return False
+
+
+def safe_proof_method(method: Any) -> str | None:
+    """Methods permitted for http_proof when freeform is enabled."""
+    if not isinstance(method, str):
+        return None
+    m = method.strip().upper()
+    return m if m in _PROOF_METHODS else None
+
+
+def safe_proof_body(body: Any) -> str | None:
+    """Bounded body for freeform proof POST (stricter than generic safe_body)."""
+    if body is None:
+        return None
+    if not isinstance(body, str):
+        return None
+    if len(body) > _MAX_PROOF_BODY:
+        return body[:_MAX_PROOF_BODY]
+    return body
 
 
 def safe_path(path: Any) -> str | None:
-    """Relative URL path only. Rejects absolute URLs, protocol-relative, control chars."""
+    """Relative URL path (+ optional query). Rejects absolute/protocol-relative paths.
+
+    Query strings may contain ``https://…`` (needed for open-redirect probes). The
+    path segment *before* ``?`` must not contain ``://`` or ``@``.
+    """
     if not isinstance(path, str):
         return None
     p = path.strip()
@@ -29,11 +141,15 @@ def safe_path(path: Any) -> str | None:
         p = "/"
     if not p.startswith("/") or p.startswith("//"):
         return None
-    if "://" in p or "@" in p or "\\" in p:
+    path_only, sep, query = p.partition("?")
+    if "://" in path_only or "@" in path_only or "\\" in path_only:
+        return None
+    if "@" in query or "\\" in query:
         return None
     if any(ord(c) < 0x20 or c == " " for c in p):
         return None
-    if len(p) > _MAX_PATH:
+    # Proof redirects need longer queries; keep total bounded
+    if len(p) > max(_MAX_PATH, 512):
         return None
     return p
 

@@ -170,6 +170,7 @@ def build_surface_summary(
         "open_leads": leads[:40],
         "notes": [
             "Baseline only — version/banner CVE hits are LEADS until tool proof.",
-            "You control next tools. Prefer non-destructive proof. crash_probe needs allow_crash_probes.",
+            "You control next tools. Prefer non-destructive proof. "
+            "crash_probe needs allow_crash_probes; http_proof needs allow_freeform_proof.",
         ],
     }

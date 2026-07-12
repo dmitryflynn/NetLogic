@@ -2,16 +2,19 @@
 Deterministic finding triage — lead with findings that have real evidence, not
 banner→CVE pattern matches.
 
-Version/banner pattern-matched CVEs are NEVER "attention" findings: patch level
-cannot be confirmed from a version string (distros backport fixes). Those leads
-are bucketed as noise with an explicit rationale so the report can show them as
-filtered, not as vulnerabilities.
+UI framing: users see *vulnerabilities* (title/impact). CVE IDs are supporting
+identifiers attached to a finding, not the primary product surface.
+
+Version/banner pattern-matched catalog hits are NEVER "attention" findings: patch
+level cannot be confirmed from a version string (distros backport fixes). Those
+leads are bucketed as noise with an explicit rationale so the report can show
+them as filtered, not as vulnerabilities.
 
 What *does* reach Top Findings (attention):
   • Web/SaaS / exposed-file findings (content-validated)
-  • (Probe-confirmed CVEs are promoted via fusion, not this correlator path)
+  • (Probe-confirmed issues are promoted via fusion / agent, not this path)
 
-Pure correlator CVE ranking is retained only to order the filtered-lead list.
+Pure correlator ranking is retained only to order the filtered-lead list.
 """
 from __future__ import annotations
 
@@ -137,12 +140,15 @@ def triage(vuln_matches, service_exploitability=None, web_fingerprint=None) -> T
             reachable = reach.get(port, "unknown")
             # Pattern-matched correlator CVEs: never "attention" findings.
             pr = _priority(cvss, epss, kev, exploit, reachable)
+            desc = str(_get(c, "description", "") or "").strip()
+            title = _vuln_title_from_cve(cid, desc, service)
             item = TriageItem(
                 cve=cid, port=port, service=service, cvss=cvss,
                 cvss_vector=str(_get(c, "vector", "")), cwe=str(_get(c, "cwe", "")),
                 epss=epss, kev=kev, exploit_available=exploit, reachable=reachable,
                 priority=pr, bucket="noise",
-                rationale=_rationale(cvss, epss, kev, exploit, reachable))
+                rationale=_rationale(cvss, epss, kev, exploit, reachable),
+                kind="cve", title=title)
             prev = best.get(cid)
             if prev is None or _ORDER[pr] < _ORDER[prev.priority]:
                 best[cid] = item
@@ -195,3 +201,23 @@ def _get(obj, name, default=None):
     if isinstance(obj, dict):
         return obj.get(name, default)
     return getattr(obj, name, default)
+
+
+def _vuln_title_from_cve(cve_id: str, description: str, service: str = "") -> str:
+    """Human vulnerability title; CVE id is related metadata, not the headline."""
+    desc = (description or "").strip()
+    # First sentence / clause, capped
+    if desc:
+        for sep in (". ", "; ", " — ", " - "):
+            if sep in desc:
+                desc = desc.split(sep, 1)[0]
+                break
+        desc = desc.strip().rstrip(".")
+        if len(desc) > 90:
+            desc = desc[:87].rstrip() + "…"
+        if desc:
+            return desc
+    svc = (service or "").strip()
+    if svc:
+        return f"Known issue in {svc}"
+    return f"Known catalog issue ({cve_id})" if cve_id else "Known catalog issue"
