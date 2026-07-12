@@ -175,13 +175,15 @@ def signals_from_artifacts(art: dict) -> list[Signal]:
 
         for cve in extract_cves(nuclei_raw):
             cid = cve["cve_id"]
+            # Nuclei template hits are active HTTP/network matches, not pure
+            # banner→NVD pattern correlation — treat as real sensor evidence.
             sigs.append(Signal(
                 source="nuclei", kind="vuln", claim=cid, host=host,
                 port=cve.get("port") or wport, service="http",
                 reliability="high", evidence=f"nuclei CVE: {cid} — {cve.get('name', '')}",
                 cvss=_SEV_TO_CVSS.get(str(cve["severity"]).upper(), 0.0),
                 kev=False, epss=0.0, exploit_available=False,
-                version_matched=True,
+                version_matched=False,
                 observed_data={"matched_at": cve.get("matched_at", ""),
                                "description": cve.get("description", ""),
                                "detail": cve.get("name", "")},

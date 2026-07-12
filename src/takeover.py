@@ -524,7 +524,7 @@ def discover_and_check(target: str, max_workers: int = 20) -> TakeoverResult:
     Discover subdomains via CT logs then check all for takeover.
     Convenience wrapper used by the main scanner.
     """
-    from src.osint import fetch_ct_subdomains, SubdomainEntry
+    from src.osint import fetch_ct_subdomains
     subs = fetch_ct_subdomains(target)
     sub_names = [s.subdomain for s in subs if s.subdomain != target]
     if not sub_names:

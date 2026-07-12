@@ -15,8 +15,6 @@ import json
 import os
 import subprocess
 import tempfile
-import time
-from typing import Optional
 
 
 NUCLEI_BIN: str | None = None

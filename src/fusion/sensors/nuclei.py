@@ -348,7 +348,8 @@ class Nuclei:
                     cvss=tmpl.cvss,
                     kev=tmpl.kev,
                     epss=tmpl.epss,
-                    version_matched=True,
+                    # Active HTTP matcher evidence — not banner→NVD pattern correlation
+                    version_matched=False,
                     observed_data={
                         "response_status": resp.status,
                         "response_headers": dict(resp.headers),

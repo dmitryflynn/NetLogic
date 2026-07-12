@@ -4,10 +4,7 @@ Safe, read-only active probes that attempt to confirm specific known vulnerabili
 All probes are non-destructive and do not modify target state.
 """
 
-import hashlib
-import random
 import socket
-import struct
 import base64
 import ssl
 import urllib.request

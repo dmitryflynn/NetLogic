@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 from src.deep.sandbox import (
-    SandboxResult,
     gen_poc_connect,
     gen_poc_http,
     run_poc,

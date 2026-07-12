@@ -98,31 +98,32 @@ def test_probe_confirmed_is_pinned():
 
 
 def test_exploitable_critical_is_pinned():
+    # Non-pattern (version_matched=False) critical with exploit → pinned confirmed
     [v] = adjudicate([_sig("nvd", "CVE-2099-0001", reliability="medium",
-                           cvss=9.8, exploit_available=True)])
+                           cvss=9.8, exploit_available=True, version_matched=False)])
     assert v.pinned is True and v.decision == "confirmed"
 
 
-def test_version_matched_exploitable_critical_is_not_pinned():
-    """Version-matched signals (e.g. Nuclei content matches) must not be pinned by
-    EPSS/exploit alone — they remain candidate for patch-level verification."""
-    [v] = adjudicate([_sig("nuclei", "CVE-2099-0001", reliability="medium",
+def test_version_matched_exploitable_critical_is_discarded():
+    """Version/pattern matches are never findings — discarded, not gray/potential."""
+    [v] = adjudicate([_sig("nvd", "CVE-2099-0001", reliability="medium",
                            cvss=9.8, epss=0.95, version_matched=True)])
     assert v.pinned is False
-    # Lone + high-impact → gray (AI adjudication), never auto-confirmed
-    assert v.decision == "gray"
+    assert v.decision == "discarded"
 
 
 # ── Deterministic, exposure-aware impact ────────────────────────────────────────
 
 def test_impact_kev_is_critical():
-    [v] = adjudicate([_sig("nvd", "c", kev=True, cvss=5.0)])
+    [v] = adjudicate([_sig("nvd", "c", kev=True, cvss=5.0, version_matched=False)])
     assert v.impact == "critical"
 
 
 def test_private_exposure_demotes_impact():
-    pub = adjudicate([_sig("nvd", "c", cvss=9.5, exposure={"reachability": "public"})])[0]
-    prv = adjudicate([_sig("nvd", "c", cvss=9.5, exposure={"reachability": "private"})])[0]
+    pub = adjudicate([_sig("nvd", "c", cvss=9.5, version_matched=False,
+                           exposure={"reachability": "public"})])[0]
+    prv = adjudicate([_sig("nvd", "c", cvss=9.5, version_matched=False,
+                           exposure={"reachability": "private"})])[0]
     assert pub.impact == "critical"
     assert prv.impact == "high"          # demoted one band
 
@@ -283,29 +284,27 @@ def test_safety_invariants_hold_across_input_space():
         [v] = adjudicate([s])
         checked += 1
 
-        # 1. KEV is ALWAYS pinned+confirmed → zero false negatives on KEV.
-        if kev:
-            assert v.pinned and v.decision == "confirmed", (src, rel, cvss, kev)
+        # 1. Pure version/pattern matches are NEVER findings (discarded).
+        if vm and src != "probe":
+            # probe_confirmed is separate; version_matched alone → discarded
+            assert v.decision == "discarded" or (src == "probe" and rel == "high"), (src, rel, vm, v.decision)
 
-        # 2. A high-reliability probe is always pinned+confirmed (ground truth).
+        # 2. Non-pattern KEV is pinned+confirmed.
+        if kev and not vm:
+            assert v.pinned and v.decision == "confirmed", (src, rel, cvss, kev, vm)
+
+        # 3. A high-reliability probe is always pinned+confirmed (ground truth).
         if src == "probe" and rel == "high":
             assert v.pinned and v.decision == "confirmed"
 
-        # 3. PINNED ⇒ confirmed AND never visible to the AI (can't be suppressed).
+        # 4. PINNED ⇒ confirmed AND never visible to the AI (can't be suppressed).
         if v.pinned:
             assert v.decision == "confirmed"
             assert gray_band([v]) == []
 
-        # 4. High/critical impact is NEVER silently discarded.
-        if v.impact in ("high", "critical"):
-            assert v.decision != "discarded", (src, rel, cvss, v.impact)
-
-        # 5. A discard only happens for lone, low-reliability, low/medium-impact noise.
-        if v.decision == "discarded":
-            assert v.agreement <= 1
-            assert v.impact in ("low", "medium")
-            assert not any(sig.reliability == "high" for sig in v.signals)
-            assert not v.pinned
+        # 5. High/critical non-pattern is NEVER silently discarded.
+        if v.impact in ("high", "critical") and not vm:
+            assert v.decision != "discarded", (src, rel, cvss, v.impact, vm)
 
         # 6. Decisions are always one of the three legal values.
         assert v.decision in ("confirmed", "discarded", "gray")

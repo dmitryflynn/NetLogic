@@ -469,8 +469,13 @@ def _job_summary(job: ScanJob) -> dict:
 def _job_detail(job: ScanJob) -> dict:
     detail = _job_summary(job)
     detail["config"] = job.config.public_dump()
-    if job.status in ("completed", "failed", "cancelled"):
-        detail["events"] = list(job.events)[:500]
+    # Always include event history (capped) so the Event log survives after the scan
+    # finishes — and is available mid-run if SSE reconnects. UI uses this for the
+    # post-scan "Event log" panel.
+    # Cap for API payload size; deque may hold up to EVENT_CAP. Prefer newest events
+    # so late agent turns remain visible when history is long.
+    ev = list(job.events)
+    detail["events"] = ev[-2000:] if len(ev) > 2000 else ev
     return detail
 
 

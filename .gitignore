@@ -45,6 +45,9 @@ release/
 netlogic_*.json
 netlogic_*.html
 scan_results/
+scan_out/
+test_reasoning_output/
+*.pyc
 
 # ─── OS / editor noise ───────────────────────────────────────────────────────
 .DS_Store

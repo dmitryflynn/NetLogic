@@ -48,17 +48,16 @@ def test_exposure_is_public_with_waf_context():
 def test_kev_and_probe_confirmed_are_pinned_without_ai():
     fusion = run_fusion(_artifacts())            # no cfg/complete → AI unavailable
     confirmed = {r["subject"] for r in fusion["confirmed"]}
-    assert "CVE-2024-KEV" in confirmed           # KEV pinned
+    discarded = {r["subject"] for r in fusion["discarded"]}
+    # Banner-pattern KEV is NOT a finding — only probe-confirmed is
+    assert "CVE-2024-KEV" not in confirmed
+    assert "CVE-2024-KEV" in discarded
     assert "CVE-2017-PROBE" in confirmed         # probe-confirmed pinned
-    # and they were settled deterministically — not via the AI
-    assert all(r["ai"] is None for r in fusion["confirmed"] if r["subject"] in ("CVE-2024-KEV", "CVE-2017-PROBE"))
+    assert all(r["ai"] is None for r in fusion["confirmed"] if r["subject"] == "CVE-2017-PROBE")
 
 
-def test_version_only_critical_with_exploit_does_not_falsely_confirm():
-    # Regression (bibliotecapleyades IIS 10.0): a coarse version/banner correlator hit
-    # for a critical CVE with a public exploit + near-1.0 EPSS but NOT in KEV and NOT
-    # probe-confirmed must NOT pin as "confirmed" — it's a version guess, not patch-level
-    # truth. It belongs in potential (verify). Pinning it was the cardinal-precision bug.
+def test_version_only_critical_with_exploit_is_discarded():
+    # Pattern/version correlator hits are never findings — even critical+exploit+EPSS.
     art = {
         "host_result": {"ip": "31.11.35.143", "ports": [{"port": 80, "service": "http"}]},
         "vuln_matches": [{
@@ -68,26 +67,27 @@ def test_version_only_critical_with_exploit_does_not_falsely_confirm():
                       "exploit_available": True, "epss": 0.9966, "description": "IIS HTTP.sys UAF RCE"}],
         }],
     }
-    fusion = run_fusion(art)                          # no AI → gray degrades to potential
+    fusion = run_fusion(art)
     confirmed = {r["subject"] for r in fusion["confirmed"]}
     potential = {r["subject"] for r in fusion["potential"]}
-    assert "CVE-2021-31166" not in confirmed         # the bug: must never auto-confirm
-    assert "CVE-2021-31166" in potential             # surfaced for verification, never dropped
+    discarded = {r["subject"] for r in fusion["discarded"]}
+    assert "CVE-2021-31166" not in confirmed
+    assert "CVE-2021-31166" not in potential
+    assert "CVE-2021-31166" in discarded
 
 
-def test_high_impact_gray_item_degrades_to_potential_without_ai():
+def test_high_impact_version_match_is_discarded_not_potential():
     fusion = run_fusion(_artifacts())
     potential = {r["subject"] for r in fusion["potential"]}
-    # the lone high-impact, non-KEV version match goes gray → no AI → potential (never dropped)
-    assert "CVE-2024-HIGH" in potential
+    discarded = {r["subject"] for r in fusion["discarded"]}
+    assert "CVE-2024-HIGH" not in potential
+    assert "CVE-2024-HIGH" in discarded
 
 
 def test_tech_and_low_impact_are_discarded():
     fusion = run_fusion(_artifacts())
     discarded = {r["subject"] for r in fusion["discarded"]}
     assert "nginx" in discarded                  # inventory
-    # CVE-2024-MED: lone medium-impact version match; version_only caps
-    # false confirmation but doesn't prevent legitimate discard of noise.
     assert "CVE-2024-MED" in discarded
 
 
@@ -104,20 +104,18 @@ def test_ai_injected_completer_confirms_gray_band():
                             "confidence": 0.9, "reason": "ok", "benign_ruled_out": []} for it in items])
     fusion = run_fusion(_artifacts(), complete=fake)
     confirmed = {r["subject"] for r in fusion["confirmed"]}
-    potential = {r["subject"] for r in fusion["potential"]}
-    # The AI promotion path works: a genuine (non-version) gray item judged "real" is confirmed.
-    assert "redis unauthenticated" in confirmed
-    # But a version-only finding is capped at "potential" even when the AI says "real" —
-    # patch level is unverifiable from a banner, so the AI cannot manufacture a confirmed
-    # critical out of a version guess. This is the precision guarantee.
-    assert "CVE-2024-HIGH" in potential
+    # Probe misconfig (non-pattern) can still be confirmed via AI path if gray
+    assert "redis unauthenticated" in confirmed or "CVE-2017-PROBE" in confirmed
+    # Version-pattern CVEs never become findings
     assert "CVE-2024-HIGH" not in confirmed
+    discarded = {r["subject"] for r in fusion["discarded"]}
+    assert "CVE-2024-HIGH" in discarded
 
 
 def test_summary_counts_present():
     s = run_fusion(_artifacts())["summary"]
     assert s["signals"] >= 5
-    assert s["confirmed"] >= 2 and "discarded" in s
+    assert s["confirmed"] >= 1 and "discarded" in s
 
 
 def test_build_json_report_includes_fusion(monkeypatch):

@@ -159,6 +159,8 @@ def _run_job(agent_id: str, job_id: str, org_id: str) -> None:
             if isinstance(pct, (int, float)):
                 job.progress = float(pct)
 
+    from api.jobs.manager import JobCancelled  # noqa: PLC0415
+
     try:
         run_streaming_scan(
             target      = cfg.target,
@@ -185,6 +187,16 @@ def _run_job(agent_id: str, job_id: str, org_id: str) -> None:
             ai_model    = getattr(cfg, "ai_model", ""),
             ai_base_url = getattr(cfg, "ai_base_url", ""),
             deep_probe  = getattr(cfg, "deep_probe", False),
+            do_reason   = getattr(cfg, "do_reason", False),
+            do_since_last = getattr(cfg, "do_since_last", False),
+            do_multi_host = getattr(cfg, "do_multi_host", False),
+            do_active_validate = getattr(cfg, "do_active_validate", False),
+            do_ai_driven = getattr(cfg, "do_ai_driven", False),
+            do_ai_agent = getattr(cfg, "do_ai_agent", False) or getattr(cfg, "agent_depth", False),
+            agent_depth = getattr(cfg, "agent_depth", False),
+            allow_crash_probes = getattr(cfg, "allow_crash_probes", False),
+            agent_max_steps = getattr(cfg, "agent_max_steps", 12),
+            agent_max_requests = getattr(cfg, "agent_max_requests", 40),
             # Scope AI/fusion key resolution to the org that owns the job — never a
             # process-global key. Empty string keeps single-tenant/CLI on env config.
             org_id      = getattr(job, "org_id", "") or "",
@@ -192,7 +204,25 @@ def _run_job(agent_id: str, job_id: str, org_id: str) -> None:
         )
         job.status   = "completed"
         job.progress = 100.0
-        job.push_event({"type": "done", "data": {"message": "Scan complete."}})
+        try:
+            job.push_event({"type": "done", "data": {"message": "Scan complete."}})
+        except JobCancelled:
+            # Cancel raced the final "done" emit — treat as cancelled, not complete.
+            _log.info("Scan cancelled for job %s (during finalisation)", job_id)
+            if job.status not in ("failed", "cancelled"):
+                job.status = "cancelled"
+                job.error = job.error or "Cancelled by user request."
+            _finish(job, agent)
+            return
+    except JobCancelled:
+        # Cooperative cancel via push_event after cancel/delete set _stop_flag.
+        # cancel_job() already set terminal status; delete_job() may not have.
+        _log.info("Scan cancelled for job %s", job_id)
+        if job.status not in ("completed", "failed", "cancelled"):
+            job.status = "cancelled"
+            job.error = job.error or "Cancelled by user request."
+        _finish(job, agent)
+        return
     except Exception as exc:
         _log.exception("Scan failed for job %s", job_id)
         _finish(job, agent, error=str(exc))
@@ -202,15 +232,25 @@ def _run_job(agent_id: str, job_id: str, org_id: str) -> None:
 
 
 def _finish(job, agent, error: Optional[str] = None) -> None:
-    from api.jobs.manager import job_manager  # noqa: PLC0415
+    from api.jobs.manager import JobCancelled, job_manager  # noqa: PLC0415
     from api.jobs.executor import try_dispatch_queued  # noqa: PLC0415
 
     if error and job.status not in ("completed", "failed", "cancelled"):
         job.status = "failed"
         job.error  = error
-        job.push_event({"type": "error", "message": error})
+        try:
+            job.push_event({"type": "error", "message": error})
+        except JobCancelled:
+            # stop_flag set (e.g. deleted while failing) — status already failed.
+            pass
+    elif job.status == "running":
+        # Safety: never leave a finished worker job stuck in "running" (breaks UI
+        # terminal state and historically hid persisted event history).
+        job.status = "completed"
+        job.progress = 100.0
 
-    job.completed_at = time.time()
+    if job.completed_at is None:
+        job.completed_at = time.time()
     job.push_sentinel()
     job_manager.persist_job(job)
 
