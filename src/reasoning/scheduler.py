@@ -46,7 +46,6 @@ class Scheduler:
     def score(self, step: SensorStep, ctx: StepContext) -> ScoredAction:
         """Score a single step using the policy. (Kept for backward compatibility.)"""
         # Delegate to policy, convert RankedAction to ScoredAction
-        from src.reasoning.decision_policy import RankedAction  # noqa: PLC0415
         ranked_list = self.policy.rank_actions([step], ctx)
         if ranked_list:
             r = ranked_list[0]

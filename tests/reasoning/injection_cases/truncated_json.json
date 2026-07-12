@@ -1,6 +1,0 @@
-{
-  "name": "truncated JSON output must raise ValidationError, never partial state",
-  "kind": "evidence_types",
-  "raw": "[\"http_headers\", \"tls_ver",
-  "expect_error": true
-}

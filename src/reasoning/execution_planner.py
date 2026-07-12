@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
 
 from src.reasoning.intent import EvidenceType
 from src.reasoning.investigation_graph import (
@@ -11,8 +10,6 @@ from src.reasoning.investigation_graph import (
 )
 from src.reasoning.primitive_registry import PrimitiveRegistry
 from src.reasoning.probe_plan import (
-    Condition,
-    ConditionOp,
     ProbePlan,
     ProbePlanGraph,
     ProbeSpec,

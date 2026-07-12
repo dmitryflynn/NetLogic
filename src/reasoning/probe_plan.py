@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field as dc_field
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 
 class ConditionOp(Enum):

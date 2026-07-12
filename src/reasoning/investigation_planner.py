@@ -17,7 +17,7 @@ deterministic and replayable. The planner reads `facts`; it never probes or acts
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from src.reasoning.actions import Action, Predicate, RiskTier, satisfied
 from src.reasoning.objective import Objective

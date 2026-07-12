@@ -18,8 +18,8 @@ import logging
 from typing import Optional
 
 from src.fusion.signals import Signal
-from src.reasoning.confidence import Belief, ConfidenceEngine, _node_id_for
-from src.reasoning.evidence_graph import EvidenceGraph, node_id
+from src.reasoning.confidence import Belief, ConfidenceEngine
+from src.reasoning.evidence_graph import EvidenceGraph
 from src.reasoning.explanation import Explanation
 from src.reasoning.state import ReasoningState
 
@@ -28,6 +28,15 @@ log = logging.getLogger("netlogic.reasoning.builder")
 # Confidence thresholds that map a continuous posterior to a reportable decision band.
 _CONFIRM_AT = 0.85
 _DISCARD_BELOW = 0.20
+
+
+def _hattr(obj, key, default=None):
+    """Read `key` from a dict OR a dataclass/object — host_result arrives as either."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
 
 
 def _decision_for(belief: Belief) -> str:
@@ -49,9 +58,10 @@ def build_reasoning_state(target: str, scope: list[str], artifacts: dict,
     graph: EvidenceGraph = state.world.graph
 
     # ── Host / IP node from the host result ───────────────────────────────────────
-    host = (artifacts.get("host_result") or {})
-    ip = host.get("ip") if isinstance(host, dict) else None
-    hostname = (host.get("hostname") or host.get("target")) if isinstance(host, dict) else None
+    # host_result may be a dict (API path) OR a HostResult dataclass (engine path); read both.
+    host = artifacts.get("host_result")
+    ip = _hattr(host, "ip")
+    hostname = _hattr(host, "hostname") or _hattr(host, "target")
     host_node = None
     if hostname:
         host_node = graph.upsert_node("host", hostname, label=str(hostname))
@@ -62,9 +72,22 @@ def build_reasoning_state(target: str, scope: list[str], artifacts: dict,
         if host_node is not None:
             graph.add_edge("resolves_to", host_node.id, ip_node.id, evidence=str(ip))
 
+    # ── Service node per OPEN PORT, independent of CVE signals ─────────────────────
+    # Without this, a scan that correlates no CVEs (a web app with no version match, an offline NVD,
+    # an ambiguous fingerprint) produces an empty graph, so the reasoning loop has nothing to
+    # investigate and never activates. Every open port is an anchor worth identifying/fingerprinting.
+    key_host = str(ip or hostname or target)
+    for p in (_hattr(host, "ports", []) or []):
+        port = _hattr(p, "port")
+        if port is None:
+            continue
+        svc_name = _hattr(p, "service", "") or ""
+        svc = graph.upsert_node("service", key_host, port, label=f"{key_host}:{port}")
+        graph.observe(svc, kind="service", evidence=svc_name or f"open port {port}",
+                      source="scan", data={"port": port, "service": svc_name})
+
     # ── Builder owns nodes + observations: one per signal ─────────────────────────
     for s in signals:
-        nid = _node_id_for(s)
         kind = {"vuln": "cve", "tech": "technology", "misconfig": "misconfiguration",
                 "exposure": "exposure", "service": "service"}.get(s.kind, s.kind or "claim")
         node = graph.upsert_node(kind, s.claim, label=s.claim)
