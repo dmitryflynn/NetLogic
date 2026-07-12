@@ -22,21 +22,17 @@ venv/
 env/
 .env.local
 
-# ─── Node / Electron ─────────────────────────────────────────────────────────
+# ─── Node (dashboard) ────────────────────────────────────────────────────────
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .npm/
 
-# ─── Distribution / build output ─────────────────────────────────────────────
-python_dist/
+# ─── Build / local output ────────────────────────────────────────────────────
 out/
+out_*/
 release/
-*.exe
-*.msi
-*.dmg
-*.AppImage
 
 # ─── NVD cache ───────────────────────────────────────────────────────────────
 ~/.netlogic/

@@ -114,9 +114,6 @@ jobs_org_limiter = RateLimiter(max_calls=10, window_seconds=60)
 # POST /v1/agents/{id}/tasks — 20 per minute per agent_id
 agent_tasks_limiter = RateLimiter(max_calls=20, window_seconds=60)
 
-# GET /v1/vdb/* — 30 per minute per org_id
-vdb_query_limiter = RateLimiter(max_calls=30, window_seconds=60)
-
 # POST /v1/license/activate — 3 per hour per IP
 license_activate_limiter = RateLimiter(max_calls=3, window_seconds=3600)
 
