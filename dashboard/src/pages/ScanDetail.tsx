@@ -71,12 +71,12 @@ export default function ScanDetail() {
   // Deep-scan sections (topology, exploitability, web fp, AI, TLS, changes).
   const sections     = useMemo(() => extractSections(activeEvents), [activeEvents])
 
-  // Total non-CVE findings count from AI + fusion
+  // Findings count from operator-facing surfaces (AI + triage + agent)
   const findingsTotal = useMemo(() => {
     const beyondCves = (sections.ai?.beyond_cves as string[] | undefined)?.length ?? 0
-    const fusedConfirmed = sections.fusion?.summary?.confirmed ?? 0
-    const fusedPotential = sections.fusion?.summary?.potential ?? 0
-    return beyondCves + fusedConfirmed + fusedPotential
+    const triageAttn = sections.triage?.attention?.length ?? 0
+    const agentConf = sections.aiAgent?.confirmed ?? 0
+    return beyondCves + triageAttn + agentConf
   }, [sections])
 
   // Inline explore for Beyond CVEs
@@ -179,14 +179,13 @@ export default function ScanDetail() {
             </div>
           )}
 
-          {/* Demo-flow ordering: on a COMPLETED scan lead with Architecture Summary → Top Findings
-              (ScanSections), then ports/CVEs as supporting EVIDENCE. During LIVE streaming keep the raw
-              evidence first — that's what actually arrives first; the synthesis appears at the end. */}
+          {/* Completed scans lead with vulnerabilities/analysis; ports are supporting evidence.
+              Live streaming keeps raw evidence first (it arrives first). */}
           {(() => {
             const evidence = (
               <>
-                {/* Open Ports — supporting context only. Pattern-matched CVEs are NOT
-                    listed here (not findings); filtered leads live under Top Findings. */}
+                {/* Open Ports — supporting context only. Catalog version-matches are not
+                    listed as findings; filtered leads live under Vulnerabilities. */}
                 {displayPorts.length > 0 && (
                   <section>
                     <p className="section-title mb-3">Open Ports ({displayPorts.length})</p>
@@ -250,6 +249,7 @@ export default function ScanDetail() {
                 {job.config.do_ai_agent && <Flag label="AI Agent" />}
                 {job.config.agent_depth && <Flag label="Depth" />}
                 {job.config.allow_crash_probes && <Flag label="Crash probes" />}
+                {job.config.allow_freeform_proof && <Flag label="Freeform proof" />}
               </dl>
             </div>
 
@@ -263,16 +263,16 @@ export default function ScanDetail() {
                   <Row k="Components" v={<span className="text-text-bright">{sections.architecture!.components!.length}</span>} />
                 )}
                 <Row k="Ports" v={<span className="text-low">{displayPorts.length}</span>} />
-                {findingsTotal > 0 && <Row k="Findings" v={<span className="text-high">{findingsTotal}</span>} />}
+                {findingsTotal > 0 && <Row k="Vulnerabilities" v={<span className="text-high">{findingsTotal}</span>} />}
                 {displayVulns.length > 0 && (
-                  <Row k="Pattern leads" v={
-                    <span className="text-text-dim" title="Banner/version catalog matches — filtered, not findings">
+                  <Row k="Catalog leads" v={
+                    <span className="text-text-dim" title="Banner/version catalog matches — filtered, not confirmed vulnerabilities. Related CVE IDs may appear under each lead.">
                       {displayVulns.length} filtered
                     </span>
                   } />
                 )}
-                {(sections.fusion?.summary?.confirmed ?? 0) > 0 && (
-                  <Row k="Confirmed" v={<span className="text-critical">{sections.fusion!.summary.confirmed}</span>} />
+                {(sections.aiAgent?.confirmed ?? 0) > 0 && (
+                  <Row k="Confirmed" v={<span className="text-critical">{sections.aiAgent!.confirmed}</span>} />
                 )}
               </dl>
             </div>
