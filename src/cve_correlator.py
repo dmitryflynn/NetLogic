@@ -19,7 +19,6 @@ from typing import Optional
 from src.nvd_lookup import (
     lookup_cves_for_service,
     NVDCve,
-    cache_stats,
     PRODUCT_KEYWORD_MAP,
 )
 
@@ -266,6 +265,31 @@ BANNER_PATTERNS = [
 
 
 
+# A CDN/WAF challenge or block page is NOT the origin service — fingerprinting it (and
+# CVE-matching a token grabbed from it) manufactures false criticals. Detect the common ones
+# and refuse to fingerprint. Markers are vendor-specific and near-zero false-positive.
+_WAF_CHALLENGE = re.compile(
+    r"(?i)(x-vercel-mitigated|vercel security checkpoint|"
+    r"cf-mitigated|attention required.*cloudflare|__cf_chl|cf-chl|"
+    r"just a moment|akamai.*reference\s*#|incapsula|imperva|"
+    r"x-datadome|please enable (js|javascript) and cookies)")
+
+
+def _is_challenge_banner(raw: str) -> bool:
+    return bool(_WAF_CHALLENGE.search(raw or ""))
+
+
+def _plausible_version(v: Optional[str]) -> Optional[str]:
+    """Reject 'versions' that are actually tokens/timestamps — a real software version has no
+    10-digit component (e.g. Vercel's challenge token '2.1783577134.60' is not F5 16.x)."""
+    if not v:
+        return v
+    for part in str(v).split("."):
+        if part.isdigit() and (len(part) >= 6 or int(part) > 65535):
+            return None
+    return v
+
+
 def extract_product_version(banner_obj) -> tuple[Optional[str], Optional[str]]:
     """
     Extract (product, version) from a ServiceBanner or string.
@@ -274,11 +298,14 @@ def extract_product_version(banner_obj) -> tuple[Optional[str], Optional[str]]:
     # Structured banner (from scanner.py ServiceBanner dataclass)
     if hasattr(banner_obj, 'product') and banner_obj.product:
         product = banner_obj.product.lower().strip()
-        version = getattr(banner_obj, 'version', None)
+        version = _plausible_version(getattr(banner_obj, 'version', None))
 
         # Skip generic HTTP product info (e.g., "http 1.1") and instead
         # fall back to service+port inference.
         if product.startswith('http'):
+            return None, None
+        # If a structured banner is itself a WAF challenge, don't trust its product.
+        if _is_challenge_banner(getattr(banner_obj, 'raw', '') or ''):
             return None, None
 
         return product, version
@@ -292,17 +319,23 @@ def extract_product_version(banner_obj) -> tuple[Optional[str], Optional[str]]:
     if not raw:
         return None, None
 
+    # A WAF/CDN challenge or block page is not the origin service — never fingerprint it.
+    if _is_challenge_banner(raw):
+        return None, None
+
     raw_lower = raw.lower()
 
     for pattern, product_name in BANNER_PATTERNS:
         m = re.search(pattern, raw, re.IGNORECASE)
         if m:
-            version = m.group(1) if m.lastindex and m.lastindex >= 1 else None
+            version = _plausible_version(m.group(1) if m.lastindex and m.lastindex >= 1 else None)
             # If no product_name in pattern, try to infer from raw
             if product_name is None:
-                # Try to match known products in the raw string (skip generic placeholders)
+                # A bare version number is NOT a product. Only accept a substring product match
+                # when the keyword is specific (len > 3) — a 2-char token like "f5" trivially
+                # appears inside base64/hex blobs and manufactured false F5-RCE findings.
                 for key, mapped in PRODUCT_KEYWORD_MAP.items():
-                    if mapped is None:
+                    if mapped is None or len(key) <= 3:
                         continue
                     if key in raw_lower:
                         return key, version
@@ -321,7 +354,7 @@ def extract_product_version(banner_obj) -> tuple[Optional[str], Optional[str]]:
             after = raw[raw_lower.find(key) + len(key):]
             after = re.sub(r'(?i)\bHTTP/\d(?:\.\d)?', ' ', after)
             vm = re.search(r'[\s/v_-]([\d]+\.[\d]+(?:\.[\d]+)?)', after)
-            version = vm.group(1) if vm else None
+            version = _plausible_version(vm.group(1) if vm else None)
             return key, version
 
     return None, None
