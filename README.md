@@ -1,13 +1,12 @@
 # NetLogic
 
-**Cloud-Native Attack Surface Mapper & Vulnerability Correlator**
+**Cloud-Native Attack Surface Mapper & Vulnerability Correlator** — v3.0
 
-NetLogic is a professional-grade network security platform combining active port scanning, service fingerprinting, CVE correlation, SSL/TLS analysis, HTTP security auditing, DNS/email security assessment, subdomain takeover detection, passive OSINT, and active vulnerability probing — all accessible from a web dashboard, a remote agent network, a desktop app, or directly via CLI.
+NetLogic is a network security platform combining active port scanning, CVE correlation (NVD API + SQLite VDB + offline signatures), SSL/TLS analysis, HTTP security auditing, DNS/email security assessment, subdomain takeover detection, passive OSINT, active vulnerability probing, an AI-driven reasoning engine, cross-host attack chain discovery, and deep probe agent architecture — all accessible from a web dashboard (React SPA), remote agent network, desktop app (Electron), or directly via CLI. The core scan engine is pure Python 3.9+ stdlib with zero third-party dependencies.
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green)](https://github.com/dmitryflynn/netlogic/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE.txt)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](https://github.com/dmitryflynn/netlogic)
-[![CVE Source: NVD](https://img.shields.io/badge/CVEs-NVD%20Live%20API-orange)](https://nvd.nist.gov/)
 
 ---
 
@@ -15,19 +14,36 @@ NetLogic is a professional-grade network security platform combining active port
 
 | Module | Description |
 |---|---|
-| **Port Scanner** | TCP connect scan with 43–58 ports, 22 service probes, banner grabbing |
-| **CVE Correlator** | NVD API v2.0 + SQLite VDB + 192 offline signatures; EPSS enrichment |
+| **Port Scanner** | TCP connect scan with 43/58 ports, 22 service probes, banner grabbing |
+| **CVE Correlator** | NVD API v2.0 + offline SQLite VDB + 192 embedded signatures; EPSS enrichment via FIRST.org |
 | **TLS Analyzer** | Protocol versions, weak ciphers, POODLE/BEAST/CRIME/DROWN, cert expiry |
 | **HTTP Header Audit** | HSTS, CSP, X-Frame-Options, CORS, cookie flags; 0–100 score |
-| **Stack Fingerprint** | CMS, framework, cloud provider, CDN, WAF detection |
+| **Stack Fingerprint** | CMS, framework, cloud provider, CDN, WAF detection from banner/header/body |
 | **DNS Security** | SPF, DKIM, DMARC, DNSSEC, zone transfer, spoofability score |
-| **Passive OSINT** | CT logs, DoH DNS, ASN lookup — no direct target contact |
-| **Service Prober** | Unauthenticated Redis/Mongo/ES/Docker/K8s/etcd, 33 admin paths |
-| **Takeover Detector** | CT subdomain discovery + 25 provider fingerprints |
-| **Nuclei Scanner** | 13k+ community-maintained templates (CVE, tech, exposure, misconfig) — MIT license |
-| **Fusion Pipeline** | Multi-sensor signal gate → AI adjudication → attack graph → unified markdown report |
-| **Web Fingerprint** | Favicon hash, JS secrets, version markers, exposed files, default lander detection |
-| **AI Analysis** | OpenAI / Anthropic / OpenRouter / Ollama — per-scan config, token-streaming SSE |
+| **Passive OSINT** | Certificate Transparency logs, DoH DNS, ASN lookup — no direct target contact |
+| **Service Prober** | Unauthenticated Redis/Mongo/ES/Docker/K8s/etcd probes, 33 admin paths |
+| **Takeover Detector** | CT log subdomain discovery + 25 cloud provider CNAME fingerprints |
+| **Nuclei Integration** | Wrapper for 13k+ community templates (CVE, tech, exposure, misconfig) — MIT license |
+| **Fusion Pipeline** | Multi-sensor signal gate → deterministic agreement → AI adjudication → attack graph → 6-section report |
+| **Web Fingerprint** | Favicon hash (Shodan-compatible mmh3), JS secrets, version markers, exposed files, default lander detection |
+| **AI Analysis** | OpenAI / Anthropic / OpenRouter / Ollama / Gemini / Groq / Kimi / Qwen — token-streaming SSE |
+| **Reasoning Engine** | Adaptive observe→reason→act loop with EvidenceGraph, hypothesis engine, confidence decay, provenance, scheduler, playbooks, change detection, active validation |
+| **Deep Probe** | Per-service agent architecture: ScoutAgent (recon), ProbeAgent (targeted CVE checks), Coordinator, Sandbox |
+| **Verifier Engine** | AI-driven CVE re-verification: designs raw-HTTP probe plans from CVE context, executes via stdlib sockets |
+| **Multi-Host Orchestration** | Full scan pipeline per host → cross-host context and reachability matrix → attack chain discovery |
+| **AI Sensor Directors** | LLM decides which sensors to prioritise based on open ports, tech stack, and CVEs |
+| **Authenticated SSH** | Credentialed `ssh` subprocess reads real installed package versions (60+ product mappings) |
+| **VDB (Offline CVE DB)** | SQLite database with incremental NVD sync; product-aware version matching with CONFIRMED/POTENTIAL status |
+| **Service Enum** | Protocol-level attribute extraction (SSH KEX, SMBv1, RDP NLA, SNMP community, HTTP auth state) |
+| **Topology Mapper** | Reverse DNS, IPv6, traceroute, ASN/org/country via ip-api.com |
+| **Reachability Prober** | Post-compromise lateral movement matrix from subnet adjacency |
+| **Network Prober** | Active subnet sweep (/24 private neighbours) with two-phase discovery (live sweep → full port scan) |
+| **Scan Diff** | Change-over-time: diffs current scan against most recent prior JSON report per target |
+| **License Management** | Commercial license system with key activation (stub for Stripe/Paddle/Lemon Squeezy) |
+| **Per-Org AI Config** | Each org stores its own LLM credentials encrypted at rest via Fernet |
+| **OIDC / Clerk** | Human logins via Clerk-issued session JWTs verified against public JWKS with auto-provisioning |
+| **PostgreSQL** | Full multi-tenant persistence with auto-applied migrations (scan jobs, org settings, reasoning state, audit) |
+| **Fusion Benchmark** | Offline benchmark against recorded HTTP cassettes; precision/recall/critical-recall/FP-reduction metrics |
 
 ---
 
@@ -35,229 +51,711 @@ NetLogic is a professional-grade network security platform combining active port
 
 | Mode | Description |
 |---|---|
-| **SaaS / Web** | FastAPI controller + React dashboard. Scans run on registered remote agents — the server never touches your network. |
-| **Remote Agent** | `netlogic_agent.py` polls the controller, runs scans on its local network, and streams results back in real time. |
-| **Desktop App** | Electron GUI bundles the Python engine locally. Built for Windows via NSIS installer; no server needed. |
-| **CLI** | `netlogic <target>` — zero third-party dependencies, pure Python 3.9+ stdlib. |
+| **CLI** | `netlogic <target>` — zero third-party dependencies, pure Python 3.9+ stdlib. Entry point via `api.cli:main` → `netlogic.py:main()`. |
+| **GUI / Local** | `netlogic --gui` — starts FastAPI + React SPA with auto-generated secrets and in-process scan agent. No external agent needed. |
+| **SaaS / Web** | FastAPI controller + React dashboard. Scans delegated to registered remote agents. Built-in local agent starts automatically. |
+| **Remote Agent** | `netlogic_agent.py` polls controller via agent protocol (heartbeat/task/events/complete), runs stdlib engine on local network. |
+| **Desktop** | Electron shell (`electron/main.js`) bundles the Python backend. Built for Windows via NSIS. |
 
 ---
 
 ## Quick Start
 
-### Web Dashboard (SaaS mode)
-
 ```bash
-# 1. Install API dependencies
-pip install -r requirements-api.txt
-
-# 2. Start the controller (auto-opens browser at http://localhost:8000)
-uvicorn api.main:app --host 0.0.0.0 --port 8000
-
-# 3. Create an API key for your organisation
-curl -X POST http://localhost:8000/auth/keys \
-     -H "X-Admin-Key: $NETLOGIC_ADMIN_KEY" \
-     -H "Content-Type: application/json" \
-     -d '{"org_id": "acme"}'
-
-# 4. Exchange it for a JWT
-curl -X POST http://localhost:8000/auth/token \
-     -H "Content-Type: application/json" \
-     -d '{"api_key": "<key-from-step-3>"}'
-```
-
-Set `NETLOGIC_NO_BROWSER=1` to suppress the auto-open in headless / CI environments.
-
-### With Docker
-
-```bash
-docker compose up --build
-# Dashboard at http://localhost:8000
-```
-
-The compose file also provisions a PostgreSQL for persistent multi-tenant auth. Set `NETLOGIC_DATABASE_URL=` (empty) to run purely in-memory.
-
-### Remote Agent
-
-```bash
-# First run — registers with the controller and saves credentials
-python netlogic_agent.py \
-    --controller http://your-controller:8000 \
-    --api-key <api-key>
-
-# Subsequent runs (credentials loaded from ~/.netlogic/agent.json)
-python netlogic_agent.py --controller http://your-controller:8000
-```
-
-Credentials are stored at `~/.netlogic/agent.json` with `0o600` permissions (owner read/write only).
-
-### CLI (local, no server)
-
-```bash
+# CLI — install and run (stdlib only)
 pip install -e .
 netlogic scanme.nmap.org --full
-```
 
-Or without installation:
-
-```bash
+# Or without installation
 python netlogic.py scanme.nmap.org --full
+
+# Web dashboard (local mode) — install API deps, then
+pip install -r requirements-api.txt
+netlogic --gui
+# → Dashboard at http://localhost:8000, auto-generated secrets in ~/.netlogic/secrets.json
+
+# SaaS mode
+pip install -r requirements-api.txt
+uvicorn api.main:app --host 0.0.0.0 --port 8000
+
+# Docker
+docker compose up --build
 ```
 
 ---
 
-## CLI Usage
+## CLI Reference
 
-```bash
-# Quick scan — 43 ports, CVE correlation
-netlogic scanme.nmap.org
+```
+netlogic [target] [flags]
+```
 
-# Full scan with HTML report
-netlogic example.com --full --report html --out ./reports
+The entry point is `api.cli:main` (defined in `pyproject.toml`), which delegates to `netlogic.py:main()`. All scan logic is in `src/`.
 
-# AI analysis with streaming output
-netlogic example.com --ai --ai-provider openrouter --ai-key $KEY --ai-model anthropic/claude-sonnet-4
+### Target specification
+| Format | Example | Mode |
+|---|---|---|
+| Hostname | `example.com` | Single-host scan |
+| IPv4 | `10.0.0.5` | Single-host scan |
+| CIDR | `192.168.1.0/24` | CIDR sweep (scanner only, no fusion) |
+| Comma-separated | `target1,target2` | Multi-host orchestration (cross-host context) |
 
-# Active probing: unauthenticated services, default creds, CVE confirmation
-netlogic 10.0.0.5 --probe
+### Scan scope
 
-# Deep TLS + header audit
+```
+# Basic scan — 43 common ports + CVE correlation
+netlogic example.com
+
+# Full scan — all modules enabled
+netlogic example.com --full
+
+# Deep TLS + HTTP header audit
 netlogic example.com --tls --headers
 
-# CIDR block sweep
-netlogic 192.168.1.0/24 --cidr --report json --out ./reports
+# Subdomain takeover detection
+netlogic example.com --takeover
 
-# Only CRITICAL + HIGH CVEs
+# Passive OSINT only
+netlogic example.com --osint
+
+# Technology stack + WAF fingerprinting
+netlogic example.com --stack
+
+# DNS/email security (SPF, DKIM, DMARC, DNSSEC)
+netlogic example.com --dns
+
+# Active service probing (unauthenticated access, default creds, CVE-specific checks)
+netlogic 10.0.0.5 --probe
+
+# Everything — all flags combined
+netlogic example.com --full --probe
+```
+
+### Port selection
+
+```
+# Quick — 43 common ports (default)
+netlogic example.com --ports quick
+
+# Full — 58 extended ports
+netlogic example.com --ports full
+
+# Custom list
+netlogic example.com --ports custom=22,80,443,8080,9200
+```
+
+### AI analysis
+
+```
+# OpenRouter (default)
+netlogic example.com --ai --ai-key $KEY
+
+# OpenAI
+netlogic example.com --ai --ai-provider openai --ai-key $KEY --ai-model gpt-4o-mini
+
+# Anthropic
+netlogic example.com --ai --ai-provider anthropic --ai-key $KEY
+
+# Gemini
+netlogic example.com --ai --ai-provider gemini --ai-key $KEY --ai-model gemini-2.0-flash
+
+# Local Ollama
+netlogic example.com --ai --ai-provider ollama
+
+# Custom OpenAI-compatible endpoint
+netlogic example.com --ai --ai-provider custom --ai-base-url https://... --ai-model model-name
+```
+
+### AI providers supported
+
+| Provider | Default model | API style |
+|---|---|---|
+| `openrouter` | `anthropic/claude-sonnet-4` | OpenAI |
+| `openai` | `gpt-4o-mini` | OpenAI |
+| `anthropic` | `claude-3-5-sonnet-20241022` | Anthropic Messages |
+| `kimi` (Moonshot) | `kimi-k2.6` | OpenAI |
+| `qwen` (Alibaba) | `qwen-plus` | OpenAI |
+| `groq` | `llama-3.3-70b-versatile` | OpenAI |
+| `gemini` (Google) | `gemini-2.0-flash` | OpenAI |
+| `ollama` | `llama3` | OpenAI |
+| `custom` | user-specified | OpenAI |
+
+### Reasoning engine
+
+```
+# Adaptive observe→reason→act loop (deterministic by default; AI-augmented with --ai)
+netlogic example.com --reason
+
+# Multi-host world modeling — discovers in-scope neighbours, reasons per host
+netlogic example.com --reason --multi-host
+
+# Change detection — diffs against prior saved report
+netlogic example.com --since-last
+
+# Active validation — confirms hypotheses with safe non-destructive GETs
+netlogic example.com --reason --active-validate
+
+# Deep probe — per-service agent architecture with context isolation
+netlogic example.com --deep-probe
+```
+
+### Authenticated scanning
+
+```
+# SSH key-based — reads real installed package versions
+netlogic example.com --ssh-user admin --ssh-key ~/.ssh/id_rsa
+
+# SSH password (requires sshpass)
+netlogic example.com --ssh-user admin --ssh-pass SECRET
+
+# Custom SSH port
+netlogic example.com --ssh-user admin --ssh-key ~/.ssh/id_rsa --ssh-port 2222
+```
+
+### Vulnerability database management
+
+```
+# Show offline CVE DB status (freshness, count)
+netlogic --vdb-status
+
+# Full sync from NVD
+netlogic --vdb-sync
+
+# Partial sync (first N products)
+netlogic --vdb-sync 50
+```
+
+### Benchmark
+
+```
+# Fusion pipeline benchmark against recorded cassettes (oracle mode — perfect AI upper bound)
+netlogic --benchmark
+
+# With real AI model
+netlogic --benchmark --benchmark-ai
+
+# Export report
+netlogic --benchmark --benchmark-export report.md
+
+# Verbose per-subject output
+netlogic --benchmark --benchmark-verbose
+```
+
+### Output
+
+```
+# Report format
+netlogic example.com --report terminal     # terminal output (default)
+netlogic example.com --report json         # JSON file
+netlogic example.com --report html         # HTML report
+netlogic example.com --report all          # terminal + JSON + HTML
+
+# Output directory
+netlogic example.com --out ./reports
+
+# CVSS threshold
 netlogic example.com --min-cvss 7.0
 
-# Extended port range (58 ports)
-netlogic 10.0.0.5 --ports full
+# Colour
+netlogic example.com --no-color
+```
 
-# Custom port list
-netlogic 10.0.0.5 --ports custom=22,80,443,8080,9200
+### NVD cache management
 
-# NVD API key for 10× faster rate limits
-netlogic example.com --nvd-key YOUR_KEY
+```
+netlogic --clear-cache
+netlogic --cache-stats
+netlogic --preload-cache
+netlogic example.com --nvd-key YOUR_NVD_KEY
+```
 
-# AI analysis with OpenAI, Anthropic, Kimi, or Qwen
-netlogic example.com --ai --ai-provider openai --ai-key YOUR_KEY --ai-model gpt-4o-mini
-netlogic example.com --ai --ai-provider anthropic --ai-key YOUR_KEY
-netlogic example.com --ai --ai-provider kimi --ai-key YOUR_KEY
-netlogic example.com --ai --ai-provider qwen --ai-key YOUR_KEY --ai-model qwen-plus
-netlogic example.com --ai --ai-provider gemini --ai-key YOUR_KEY --ai-model gemini-2.0-flash
+### Misc
+
+```
+netlogic --version            # Show version and exit
+netlogic --gui                # Start web dashboard
 ```
 
 ---
 
 ## Fusion Pipeline
 
-NetLogic's core innovation is a **sensors → gate → AI adjudication → synthesis** pipeline that replaces a monolithic AI call with a precision funnel:
+The fusion pipeline is a **sensors → gate → AI adjudication → synthesis** funnel that replaces monolithic AI calls with a precision gate. It lives in `src/fusion/` (12 files).
 
-```
-Raw scan artifacts (ports, banners, probes, TLS, DNS, …)
-    │
-    ▼
-┌──────────────────────────────────────────────────────────────┐
-│  SENSORS  (evidence-producing)                                │
-│  • NVD/OSV correlation  • Nuclei (13k+ templates)           │
-│  • TLS analyzer         • Web fingerprint                   │
-│  • Service prober       • Exposure context                  │
-│  • Probe-confirmed      • CISA KEV / EPSS                   │
-└──────────────────────────────┬───────────────────────────────┘
-    │ signals (typed, with provenance + reliability)
-    ▼
-┌──────────────────────────────────────────────────────────────┐
-│  GATE  (deterministic agreement)                              │
-│  • Confirmed: 2+ independent sources or pinned (KEV/probe)   │
-│  • Discarded: lone low-reliability, low-impact signal        │
-│  • Gray band: everything else → costs an AI token            │
-│  Invariant: pinned CRITICALs can NEVER be discarded          │
-└──────────────────────────────┬───────────────────────────────┘
-    │ gray-band verdicts only
-    ▼
-┌──────────────────────────────────────────────────────────────┐
-│  AI ADJUDICATION  (label-stripped, disconfirmation-forced)   │
-│  • Model sees only raw evidence — no sensor names            │
-│  • Must rule out benign explanations before calling real     │
-│  • Can never discard a high/critical gray item               │
-│  • Also DISCOVERS new issues from host context               │
-└──────────────────────────────┬───────────────────────────────┘
-    │ all verdicts (confirmed + potential + discarded)
-    ▼
-┌──────────────────────────────────────────────────────────────┐
-│  SYNTHESIS  (attack graph + full report)                     │
-│  • Deterministic reachability graph over confirmed findings  │
-│  • LLM narrates attack chains ONLY along real edges          │
-│  • 6-section unified analysis: Executive Summary, Key       │
-│    Findings, Attack Chains, Beyond Known CVEs, False         │
-│    Positives, Remediation                                    │
-│  • Output streamed token-by-token via SSE (no 99% hang)      │
-└──────────────────────────────────────────────────────────────┘
-    │ ai_analysis markdown + beyond_cves list
-    ▼
-  Dashboard / CLI / Export
-```
+### Signal schema (`src/fusion/signals.py`)
 
-**Key properties:**
-- **AI cost proportional to ambiguity**, not asset count — the gate settles the certain cases deterministically
-- **Zero false-negative on criticals** enforced in code (not prompt): pinned KEV/probe-confirmed findings survive any AI verdict
-- **Fail-soft**: AI outage degrades gray band to "potential" (reported, needs verification) — scan never breaks
-- **Tech-stack binding**: LLM forbidden from suggesting CMS-specific remediation unless framework confirmed in evidence
-- **Default lander detection**: bare hosting-provider pages don't trigger hallucinated application advice
+Evidence-bearing data contract. Every sensor emits `Signal` objects:
+- `source`: `probe`/`banner`/`nuclei`/`wappalyzer`/`nvd`/`osv`/`tls`/`dns`
+- `kind`: `vuln`/`tech`/`exposure`/`misconfig`/`service`
+- `claim`: normalised subject (e.g. `"CVE-2021-44228"`, `"nginx"`)
+- `host`, `port`, `service`, `evidence` (capped 600 chars)
+- `confidence` (0..1), `reliability` (`high`/`medium`/`low`)
+- `kev`, `epss` (0..1), `cvss` (0..10), `exploit_available`, `version_matched`, `probe_confirmed`
+- `exposure` dict (reachability, WAF, vantage)
+- `observed_data` (raw bytes sent to AI — NOT sensor names or severities to prevent label bias)
+- `ai_view()` strips sensor metadata, returns only observed facts
 
----
+### Gate (`src/fusion/gate.py`)
 
-## Streamed AI Analysis
+Deterministic agreement — given `list[Signal]`, groups by subject and returns `list[Verdict]`:
 
-When an AI provider is configured, the synthesis LLM response is streamed token-by-token. The backend emits progressive `"ai"` SSE events every ~80 characters, so the dashboard markdown panel populates incrementally instead of freezing at 99% while waiting for the full LLM response.
+| Condition | Verdict |
+|---|---|
+| KEV-listed OR probe-confirmed OR critical+exploit/high-EPSS | **Confirmed** (pinned — un-droppable) |
+| ≥2 independent sources agree, ≥1 high-reliability | **Confirmed** (unless all are version-matched → gray) |
+| Solo low-reliability, low/medium impact, no corroboration | **Discarded** |
+| Everything else | **Gray** (costs an AI token) |
 
-Supported providers: `openai`, `anthropic`, `openrouter`, `kimi`, `qwen`, `groq`, `gemini`, `ollama`, `custom` (any OpenAI-compatible endpoint).
+### AI Adjudication (`src/fusion/adjudicator.py`)
 
----
+Only touches the gray band. Safety constraints enforced in code (not prompt):
+- High/critical gray items can NEVER be discarded — at worst demoted to `potential`
+- Version-only matches capped at `potential` (distros backport without version bumps)
+- AI also discovers new findings from full host context
+- Fail-soft: AI outage leaves gray band as `potential` — no silent data loss
 
-## Nuclei Integration
+### Synthesis (`src/fusion/synthesis.py`)
 
-NetLogic ships an optional integration with [Nuclei](https://github.com/projectdiscovery/nuclei) (MIT license — safe for commercial SaaS), running 13k+ community-maintained templates across tags:
+`build_attack_graph(verdicts)` → deterministic reachability graph from CONFIRMED findings.
+`full_synthesize(...)` → 6-section AI report:
+1. Executive Summary
+2. Key Findings (table)
+3. Attack Chains (graph-based, LLM narrates real edges)
+4. Beyond Known CVEs
+5. False Positives & Noise
+6. Remediation
 
-| Tag | Templates | Purpose |
+### Sensors
+
+| Sensor | File | What it produces |
 |---|---|---|
-| `cve` | ~4,259 | Known CVE checks |
-| `tech` | ~947 | Technology fingerprinting |
-| `exposure` | ~1,449 | Leaked configs, open buckets, debug endpoints |
-| `config` | — | Misconfiguration detection |
-| `misconfig` | ~979 | Security misconfiguration checks |
+| Engine bridge | `engine_bridge.py` | Converts scan artifacts → Signals from NVD, probes, stack, Nuclei, verifier |
+| Wappalyzer | `sensors/wappalyzer.py` | Zero-dependency Wappalyzer-compatible fingerprinting of HTTP responses |
+| Nuclei | `sensors/nuclei.py` | Runs YAML templates against responses (subset of Nuclei syntax) |
+| Cassette | `cassette.py` | Record/replay from HTTP cassettes (offline benchmark data) |
 
-Install Nuclei via your package manager:
-```bash
-# Windows (scoop)
-scoop install nuclei
+### Cross-host (`src/fusion/cross_host.py`)
 
-# macOS (homebrew)
-brew install nuclei
+Post-adjudication grouping of verdicts across hosts by shared service+version for multi-hop attack chain narration in synthesis.
 
-# Linux (go)
-go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+### Pipeline Flow
+
+```
+Engine artifacts / Cassette data
+    ↓
+engine_bridge.py / cassette.py     → Signal list
+    ↓
+gate.py::adjudicate()              → Verdict list (confirmed/discarded/gray)
+    ↓
+adjudicator.py::run_adjudication() → AI on gray band only
+    ↓
+synthesis.py::full_synthesize()    → 6-section report + attack graph
 ```
 
-Nuclei results feed into the Fusion pipeline as typed signals alongside banner correlations, probes, and TLS data — the gate treats them as one independent corroboration source.
+---
+
+## Reasoning Engine
+
+Located in `src/reasoning/` (~58 files). Multi-phase, safety-gated, observe→reason→act loop. Enabled with `--reason`.
+
+### Core loop (`src/reasoning/director.py` — `ReconDirector.run()`)
+
+1. **Phase 2 Sensor Sweep**: `StrategyManager` selects persona → `Scheduler` picks action → `SensorStep` executes → `EvidenceGraph` folds observations → `ConfidenceEngine` refreshes beliefs
+2. **Phase 3 AI Cycle**: Deterministic generators populate objectives/hypotheses → AI agents propose typed `Proposal` envelopes → `AICoordinator` normalises/ranks/verifies → accepted proposals seed state → `Compiler` → `ExecutionPlanner` → `ExecutionKernel` runs probes → `InferenceEngine` resolves
+3. **Phase 6c Multi-host**: Cross-host discovery via `CrossHostGraph`, spawns child `HostReasoner` instances
+4. **Phase 8 Planning Pass**: `GoalPlanner` produces investigation plans
+5. **Continuous**: `ReasoningValidator` integrity audit → `ProvenanceBuilder` records edges → state persisted
+
+### State hierarchy (`src/reasoning/state.py`)
+
+| Layer | Class | What it tracks |
+|---|---|---|
+| WorldModel | `WorldModel` | EvidenceGraph, observations, beliefs, hosts, technology, reachability |
+| InvestigationState | `InvestigationState` | Objectives (DAG), hypotheses, contradictions, dead-ends, current persona |
+| ExecutionState | `ExecutionState` | Budget, probe_history, provenance, investigation_plans, AI transcript |
+| LearnedPatterns | `LearnedPatterns` | Cross-scan heuristics + playbooks |
+
+### Key components
+
+| Component | File | Description |
+|---|---|---|
+| EvidenceGraph | `evidence_graph.py` | Deduplicated temporal entity graph (content-addressed observations via SHA-256) |
+| Hypothesis engine | `hypothesis.py` | Competing candidates with likelihoods, entropy, information gain, posterior resolution |
+| ConfidenceEngine | `confidence.py` | Noisy-OR over distinct sources; version-only capped at 0.60; KEV/probe pinned at 0.97 |
+| ProvenanceBuilder | `provenance.py` | Observation→Inference→Hypothesis edges, content-hash addressed |
+| Scheduler | `scheduler.py` | Information-gain action selection with explore_reserve (10%) |
+| StrategyManager | `strategy.py` | Meta-reasoning: persona selection, explore/exploit mode, plateau detection |
+| ActionGate | `action_gate.py` | Defense-in-depth: risk tiers (READ_ONLY < SAFE_ACTIVE < INTRUSIVE < EXPLOIT), core max is SAFE_ACTIVE |
+| InferenceEngine | `inference.py` | Deterministic rules from `rules/*.json`, never writes confidence |
+| NovelInferenceEngine | `novel_inference.py` | Rules for cache_poisoning, request_smuggling, auth_bypass etc. |
+| ExecutionKernel | `execution_kernel.py` | Validates + executes + traces probes (scope → read-only → budget → dedup → depth) |
+| Playbook system | `playbooks.py` | YAML playbooks with trigger conditions and intent templates |
+| Change detection | `change_detection.py` | Phase 7: diffs immutable observations (not state), produces ScanDelta of DeltaEvents |
+| Active validation | `active_validation.py` | Phase 8b: non-destructive SAFE_ACTIVE probes through ActionGate |
+
+### AI subsystem (`src/reasoning/ai/`)
+
+Pipeline: Generate → Normalize → Rank → (MetaReasoner prune) → Verify → Store
+
+| File | Component |
+|---|---|
+| `coordinator.py` | `AICoordinator` — staged pipeline orchestration |
+| `proposals.py` | Typed `Proposal` envelope with kind-specific payload, provenance, economics |
+| `normalize.py` | `ProposalNormalizer` — total validation gate |
+| `rank.py` | `ProposalRanker` — score = raw_score × prob_correct × reputation_weight |
+| `meta_reasoner.py` | Deterministic pruning (loop detection, uncertainty reduction) |
+| `verifier.py` | 4-stage: Syntax → Semantic → Evidence → Safety |
+| `store.py` | `ProposalStore` — lifecycle ledger |
+| `transcript.py` | `InvestigationTranscript` — causal chain recording |
+| `evaluation.py` | Cassette-based deterministic evaluation harness |
+| `reputation.py` | `AgentReputation` — tracks accept/reject rate per agent |
+| `agents/hypothesis_generator.py` | C1 — proposes competing explanations + novel-vuln hypotheses |
+| `agents/counterfactual.py` | C11 — proposes refutation objectives |
+| `agents/investigation_designer.py` | C2 — designs evidence-gathering plans |
+
+---
+
+## Deep Probe Architecture
+
+Located in `src/deep/` (7 files). Used with `--deep-probe`. Per-service agent architecture for context-isolated probe execution.
+
+| Component | File | Description |
+|---|---|---|
+| `DeepCoordinator` | `coordinator.py` | Orchestrates full deep pipeline: AI sensor plan → ScoutAgent → per-service ProbeAgent → service enum → Nuclei → verifier → takeover → subnet probe → topology → auth → diff → reachability |
+| `ScoutAgent` | `scout_agent.py` | Passive recon: TLS, headers, stack, DNS, OSINT |
+| `ProbeAgent` | `probe_agent.py` | Targets one service with isolated CVE/tech context — runs probes + verifier |
+| `ExploitChain` | `chain.py` | BFS attack path planning over fusion-confirmed verdicts, PoC generation |
+| `Sandbox` | `sandbox.py` | Restricted subprocess for PoC validation (temp dir, timeout, clean-up) |
+| `Mission` / `AgentReport` | `models.py` | Data models for agent directives and results |
+
+`DeepCoordinator.run()` flow:
+1. Build AI sensor plan (`_build_sensor_plan` via `sensor_director`)
+2. Dispatch `ScoutAgent` for passive recon
+3. Group findings by service → per-service `ProbeAgent` instances (each with isolated CVE/tech context)
+4. Run service enumeration, Nuclei (AI-selected tags), verifier engine, takeover, AI-directed subnet probe, topology, authenticated SSH, scan diff, reachability probing
+
+---
+
+## Verifier Engine
+
+Located in `src/verifier/` (3 files). AI-driven CVE confirmation with targeted probes.
+
+| Component | File | Description |
+|---|---|---|
+| `run_verifier()` | `engine.py` | Orchestrates: generate plans → execute → construct probe-confirmed Signals |
+| `generate_plans_for_cves()` | `planner.py` | Per-CVE (CVSS ≥ 7.0): checks ~20 built-in plans → AI generates raw-HTTP plan (method, path, headers, body, expected status/body) |
+| `run_test()` | `runner.py` | Raw TCP/TLS socket execution, manual HTTP/1.0 parsing, expected body pattern matching |
+
+Phase 2 re-verification (`reverify_with_context`) provides full host context to refine failed tests.
+
+---
+
+## AI Sensor Directors
+
+Located in `src/directors/` (4 files). LLM-driven scan parameter selection.
+
+| Director | File | What it decides |
+|---|---|---|
+| `SensorDirector` | `sensor_director.py` | Which sensors to enable/disable and at what priority, based on open ports + tech stack + CVEs |
+| `ReprobeDirector` | `reprobe.py` | Whether potential findings can be resolved with targeted HTTP probes |
+| `NucleiSelector` | `nuclei_selector.py` | Which Nuclei template tags to include/exclude (reduces irrelevant runs) |
+| `SubnetDirector` | `subnet_director.py` | Which adjacent hosts to probe, which ports, at what depth (skip/quick/standard/deep) |
+
+---
+
+## Multi-Host Orchestration
+
+Located in `src/orchestrator.py`. Triggered by comma-separated targets. Runs `run_scan()` per host, aggregates results, builds cross-host context from combined fusion verdicts. Cross-host groups detect shared services/versions across hosts for multi-hop attack chain narration.
 
 ---
 
 ## CVE Coverage
 
-### Primary: SQLite VDB (offline, fast)
-- Pre-populated SQLite database with CPE→CVE mappings for 100+ products
-- Lookups are local — no network call, no rate limits
-- Synced from NVD + OSV with incremental updates
+### Offline: SQLite VDB (`src/vdb_engine.py`)
+- Pre-populated SQLite with CPE→CVE mappings for ~70 enterprise products
+- Product-aware matching with CONFIRMED/POTENTIAL status
+- KEV and Metasploit flags per vulnerability
+- Incremental sync from NVD (`--vdb-sync`)
+- Status via `--vdb-status`
 
-### Secondary: NVD API v2.0 (live fallback)
-- Live lookup for any product/version not in the VDB
-- 192 offline signatures for air-gapped / NVD-unreachable environments
-- NVD API key for 10× faster rate limits
+### Live: NVD API v2.0 (`src/nvd_lookup.py`)
+- Live lookup for uncovered products/versions
+- 192 offline signatures for air-gapped environments
+- On-disk cache with atomic writes
+- NVD API key for higher rate limits (`--nvd-key`)
 
 ### Enrichment
-- **CISA KEV** — CVEs actively exploited in the wild, flagged as urgent
-- **EPSS** — Exploit Prediction Scoring System (0–1), reprioritizes by real-world exploitation likelihood
-- **Metasploit / public exploit** tracking — 88 CVEs with confirmed PoCs
+- **EPSS** (`src/epss.py`): FIRST.org API in batches of 100 CVE IDs, 24h disk cache at `~/.netlogic/epss_cache.json`, fail-soft to 0.0
+- **CISA KEV**: CVEs actively exploited in the wild
+- **Public exploit tracking**: Metasploit and PoC markers
+
+---
+
+## Nuclei Integration
+
+`src/external/nuclei_runner.py` wraps the Nuclei binary (MIT license). Optional — degrades gracefully when binary not found. Results feed into fusion pipeline as typed signals (severity labels stripped to prevent LLM bias).
+
+```
+# Install Nuclei
+scoop install nuclei    # Windows
+brew install nuclei     # macOS
+go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest  # Linux
+```
+
+---
+
+## Fusion Benchmark
+
+`src/fusion/benchmark.py` — offline measurement against labeled HTTP cassettes (`benchmark/*.json` and `src/fusion/data/`). Metrics:
+
+| Metric | Gate threshold |
+|---|---|
+| FP reduction | ≥ 80% |
+| Critical recall | = 100% |
+
+Two modes:
+- **Oracle** (`--benchmark`): perfect-AI upper bound — measures deterministic machinery alone
+- **Real model** (`--benchmark --benchmark-ai`): measured with configured LLM
+
+---
+
+## Architecture
+
+```
+netlogic/
+├── netlogic.py                  ← CLI entry point (argparse, all scan modes)
+├── netlogic_agent.py            ← Remote agent runner (stdlib-only, agent protocol)
+│
+├── src/                         ← Scan engine (zero third-party deps)
+│   ├── scanner.py               ← TCP scanner, 22 service probes, banner grabbing
+│   ├── engine.py                ← Orchestrator: SensorStep pipeline, all scan modules + fusion
+│   ├── orchestrator.py          ← Multi-host: per-host scan → cross-host context
+│   ├── ai_analyst.py            ← LLM integration (9 providers, stdlib-only transport)
+│   ├── cve_correlator.py        ← CVE matching: NVD + offline sigs
+│   ├── nvd_lookup.py            ← NVD API v2.0 client, disk cache, CISA KEV
+│   ├── epss.py                  ← EPSS enrichment (FIRST.org, 24h cache)
+│   ├── vdb_engine.py            ← SQLite local vulnerability database
+│   ├── vdb_syncer.py            ← Incremental VDB sync from NVD
+│   ├── service_prober.py        ← Unauthenticated service access, default creds, admin paths
+│   ├── vuln_prober.py           ← CVE-specific safe active probes
+│   ├── osint.py                 ← DoH, CT logs, ASN lookup
+│   ├── tls_analyzer.py          ← SSL/TLS deep analysis
+│   ├── header_audit.py          ← HTTP security header audit
+│   ├── stack_fingerprint.py     ← CMS, framework, cloud, CDN, WAF detector
+│   ├── web_fingerprint.py       ← Favicon mmh3, JS secrets, version files, exposed paths, lander detection
+│   ├── dns_security.py          ← SPF, DKIM, DMARC, DNSSEC, zone transfer
+│   ├── takeover.py              ← Subdomain takeover (25 provider fingerprints)
+│   ├── authenticated.py         ← SSH subprocess: dpkg/rpm/apk parsing, 60+ product mappings
+│   ├── topology.py              ← PTR, IPv6, traceroute, ASN/org/country
+│   ├── reachability_prober.py   ← Lateral movement matrix from subnet adjacency
+│   ├── network_prober.py        ← /24 subnet sweep: live-host → full port scan
+│   ├── service_enum.py          ← Protocol attribute extraction (SSH KEX, SMBv1, RDP NLA, SNMP)
+│   ├── ssl_utils.py             ← Configurable SSL context management, TLS probe
+│   ├── scan_diff.py             ← Change-over-time: diffs against prior JSON report
+│   ├── json_bridge.py           ← Streaming JSON events for agent/Electron
+│   ├── reporter.py              ← Terminal, JSON, HTML output renderers
+│   │
+│   ├── fusion/                  ← Precision funnel (12 files)
+│   │   ├── signals.py           ← Signal schema
+│   │   ├── gate.py              ← Deterministic agreement
+│   │   ├── adjudicator.py       ← AI adjudication (gray band only)
+│   │   ├── synthesis.py         ← Attack graph + 6-section report
+│   │   ├── ai.py                ← CompleteFn/StreamCompleteFn adapter
+│   │   ├── engine_bridge.py     ← Artifacts → Signals → verdicts
+│   │   ├── benchmark.py         ← Offline benchmark (oracle + real model)
+│   │   ├── cassette.py          ← HTTP cassette record/replay
+│   │   ├── corpus.py            ← Cassette→case conversion + CLI
+│   │   ├── cross_host.py        ← Cross-host verdict correlation
+│   │   ├── sensors/nuclei.py    ← Nuclei YAML → Signal conversion
+│   │   └── sensors/wappalyzer.py← Wappalyzer fingerprint → Signal
+│   │
+│   ├── directors/               ← AI sensor directors (4 files)
+│   │   ├── sensor_director.py   ← LLM selects which sensors to enable
+│   │   ├── reprobe.py           ← LLM designs re-probe plans
+│   │   ├── nuclei_selector.py   ← LLM selects Nuclei template tags
+│   │   └── subnet_director.py   ← LLM directs subnet probing
+│   │
+│   ├── verifier/                ← AI CVE verification (3 files)
+│   │   ├── engine.py            ← Verifier orchestration
+│   │   ├── planner.py           ← Built-in + AI-generated probe plans
+│   │   └── runner.py            ← Raw TCP/TLS probe execution
+│   │
+│   ├── deep/                    ← Deep probe agents (7 files)
+│   │   ├── coordinator.py       ← Full deep pipeline orchestrator
+│   │   ├── scout_agent.py       ← Passive recon agent
+│   │   ├── probe_agent.py       ← Per-service probe agent
+│   │   ├── chain.py             ← Exploit chain planning + PoC generation
+│   │   ├── sandbox.py           ← Restricted PoC execution
+│   │   ├── base_agent.py        ← Abstract base
+│   │   └── models.py            ← Mission/AgentReport data models
+│   │
+│   ├── reasoning/               ← Adaptive reasoning engine (~58 files)
+│   │   ├── director.py          ← ReconDirector (main loop)
+│   │   ├── state.py             ← WorldModel/InvestigationState/ExecutionState
+│   │   ├── hypothesis.py        ← Hypothesis engine (competing candidates)
+│   │   ├── evidence_graph.py    ← Temporal entity graph (content-addressed obs)
+│   │   ├── confidence.py        ← Noisy-OR belief computation
+│   │   ├── provenance.py        ← Observation→Inference→Hypothesis edges
+│   │   ├── scheduler.py         ← Information-gain action selection
+│   │   ├── strategy.py          ← Meta-reasoning: personas, explore/exploit
+│   │   ├── strategies.py        ← Concrete strategy implementations
+│   │   ├── action_gate.py       ← Risk-tiered probe authorisation
+│   │   ├── change_detection.py  ← Phase 7: observation-level diff
+│   │   ├── active_validation.py ← Phase 8b: SAFE_ACTIVE probes
+│   │   ├── cross_host.py        ← Cross-host world modeling
+│   │   ├── objective.py         ← Objective DAG management
+│   │   ├── intent.py            ← Intent model + EvidenceType enum (29 types)
+│   │   ├── candidate.py         ← Action candidate with lazy factory
+│   │   ├── actions.py           ← Action model with RiskTier + Predicate
+│   │   ├── compiler.py          ← Intent → InvestigationGraph
+│   │   ├── execution_planner.py ← InvestigationGraph → ProbePlanGraph
+│   │   ├── execution_kernel.py  ← Probe execution with validators
+│   │   ├── probe_executor.py    ← Read-only probe backends
+│   │   ├── primitive_registry.py← Probe primitive catalogue
+│   │   ├── generators.py        ← Deterministic objective/hypothesis population
+│   │   ├── playbooks.py         ← YAML playbook system
+│   │   ├── planning_pass.py     ← GoalPlanner integration
+│   │   ├── budget.py            ← Probe budget management
+│   │   ├── inference.py         ← Deterministic rule-based inference
+│   │   ├── novel_inference.py   ← Novel-vuln hypothesis rules
+│   │   ├── investigation_planner.py  ← Goal-directed investigation planning
+│   │   ├── investigation_memory.py   ← Strategy attempt memory
+│   │   ├── observation_translator.py ← Raw data → structured observations
+│   │   ├── observation.py       ← Immutable, content-addressed observation
+│   │   ├── reflect.py           ← PlannerFeedback generation
+│   │   ├── reasoning_validator.py ← Continuous integrity audit
+│   │   ├── builder.py           ← State population from artifacts
+│   │   ├── trace.py             ← Execution tracing
+│   │   ├── explanation.py       ← Explanation records
+│   │   ├── ai/                  ← AI cognitive layer (subsystem)
+│   │   ├── packs/               ← Technology pack calibration
+│   │   ├── playbooks/           ← YAML playbook templates
+│   │   └── rules/               ← JSON inference rules
+│   │
+│   └── external/nuclei_runner.py ← Nuclei binary wrapper
+│
+├── api/                         ← FastAPI controller
+│   ├── main.py                  ← App factory, lifespan, middleware stack
+│   ├── cli.py                   ← Typer -> netlogic.py bridge
+│   ├── db.py                    ← PostgreSQL connection + migration runner
+│   ├── crypto.py                ← Fernet seal/unseal (AES-128-CBC + HMAC-SHA256)
+│   ├── auth/
+│   │   ├── api_keys.py          ← Dual-store (memory/PG), SHA-256 hashed
+│   │   ├── jwt_handler.py       ← Stdlib-only HS256 JWT
+│   │   ├── oidc.py              ← Clerk/IdP OIDC (RS256 + JWKS)
+│   │   ├── license.py           ← LicenseManager (stub → real payment API)
+│   │   ├── rate_limit.py        ← Sliding-window, IP banning
+│   │   ├── provisioning.py      ← Clerk auto-provisioning
+│   │   └── dependencies.py      ← require_org FastAPI dependency
+│   ├── agents/
+│   │   ├── registry.py          ← Agent lifecycle (concurrency-aware, JSON persistence)
+│   │   └── local_agent.py       ← Built-in in-process agent
+│   ├── jobs/
+│   │   ├── manager.py           ← ScanJob lifecycle, capped event deque (10k), SSE, Postgres
+│   │   └── executor.py          ← Dispatch (capability/selector, least-loaded, reclaimer)
+│   ├── middleware/audit.py      ← X-Request-ID + structured audit + SIEM shipping
+│   ├── models/
+│   │   ├── scan_request.py      ← Pydantic ScanRequest (ipaddress validation)
+│   │   └── agent.py             ← AgentRegistration constraints
+│   ├── routes/
+│   │   ├── auth.py              ← /v1/auth/*
+│   │   ├── jobs.py              ← /v1/jobs/*
+│   │   ├── agents.py            ← /v1/agents/*
+│   │   ├── health.py            ← /health + /v1/health
+│   │   ├── license.py           ← /v1/license/*
+│   │   ├── vdb.py               ← /v1/vdb/*
+│   │   └── settings.py          ← /v1/settings/*
+│   └── storage/
+│       ├── json_store.py         ← 10 MB cap, 500 file cap, atomic writes
+│       ├── pg_store.py           ← Postgres JSONB upsert
+│       └── reasoning_store.py    ← Dual-store for reasoning state
+│
+├── dashboard/                   ← React SPA (Vite + TypeScript + Tailwind + Clerk)
+│   └── src/
+│       └── pages/               ← Dashboard, NewScan, ScanDetail, Agents, Targets,
+│                                   TargetTimeline, Settings, License, Login, SignUp, Legal
+│
+├── electron/                    ← Desktop app shell (Electron)
+│   ├── main.js                  ← BrowserWindow, sandbox, contextIsolation
+│   └── preload.js               ← IPC bridge
+│
+├── docs/                        ← Design documentation
+│   ├── DEPLOY_SAAS.md, saas-auth.md
+│   ├── REASONING_ENGINE_DESIGN.md
+│   ├── LEGAL_COMPLIANCE.md
+│   ├── ENTERPRISE_READINESS.md
+│   └── DESIGN_PARTNER_PACK.md
+│
+├── db/migrations/               ← PostgreSQL schema migrations
+├── benchmark/                   ← HTTP cassette recordings for fusion benchmark
+└── scripts/                     ← Dev utilities (run_api_dev.py)
+```
+
+---
+
+## API Reference
+
+All routes under `/v1/` prefix. Authentication:
+- **Machine**: API key → `POST /v1/auth/token` → HS256 JWT (default 1h expiry)
+- **Human**: Clerk OIDC session JWT → `require_org` dependency verifies against JWKS
+
+### Auth
+
+```
+POST   /v1/auth/token          Exchange API key for JWT          [10/min/IP]
+POST   /v1/auth/keys           Create API key (X-Admin-Key)       [admin]
+GET    /v1/auth/keys           List keys (masked)                 [admin]
+DELETE /v1/auth/keys           Revoke key (body, not URL)         [admin]
+```
+
+### Jobs
+
+```
+POST   /v1/jobs                Create scan job                    [30/min/org]
+GET    /v1/jobs                List recent jobs
+GET    /v1/jobs/history/{target}  Scan history for target
+GET    /v1/jobs/{id}           Job detail
+GET    /v1/jobs/{id}/stream    SSE event stream                   [60/min/org]
+GET    /v1/jobs/{id}/export    Export (format=json|md|raw)
+POST   /v1/jobs/{id}/explore-beyond  AI deep-dive on finding
+POST   /v1/jobs/{id}/cancel    Cancel job
+DELETE /v1/jobs/{id}           Remove job
+```
+
+### Agents
+
+```
+POST   /v1/agents/register               Register agent         [5/hr/IP]
+POST   /v1/agents/{id}/heartbeat         Keep-alive             [3/min]
+GET    /v1/agents/{id}/tasks             Poll pending jobs
+POST   /v1/agents/{id}/tasks/{job_id}/events   Submit events    [60/min, 500/batch]
+POST   /v1/agents/{id}/tasks/{job_id}/complete  Mark done/failed
+GET    /v1/agents                        List agents (org-scoped)
+GET    /v1/agents/{id}                   Agent detail
+DELETE /v1/agents/{id}                   Deregister
+POST   /v1/agents/{id}/activate         Enable agent
+POST   /v1/agents/{id}/deactivate       Disable agent
+```
+
+### License / VDB / Settings
+
+```
+GET    /v1/license              License status
+POST   /v1/license/activate     Activate key                    [3/hr/IP]
+GET    /v1/vdb/status           VDB stats + freshness
+POST   /v1/vdb/sync             Refresh from NVD (background)
+GET    /v1/settings/ai          Get org AI config (key masked)
+POST   /v1/settings/ai          Update org AI config (encrypted)
+POST   /v1/settings/ai/test     Test AI connection
+```
+
+### System
+
+```
+GET    /health                  Service status + uptime
+GET    /docs                    OpenAPI docs
+GET    /redoc                   ReDoc docs
+```
 
 ---
 
@@ -267,301 +765,82 @@ Nuclei results feed into the Fusion pipeline as typed signals alongside banner c
 
 | Variable | Default | Description |
 |---|---|---|
-| `NETLOGIC_JWT_SECRET` | `changeme-in-production` | HS256 signing secret — **must be overridden** (32+ chars) |
+| `NETLOGIC_ENV` | _(unset)_ | `production`/`prod` = secret validation at startup |
+| `NETLOGIC_JWT_SECRET` | `changeme-in-production` | HS256 signing secret, ≥32 chars |
 | `NETLOGIC_JWT_EXPIRY` | `3600` | JWT lifetime in seconds |
-| `NETLOGIC_ADMIN_KEY` | `admin-changeme` | Admin credential for key management — **override in production** |
+| `NETLOGIC_ADMIN_KEY` | `admin-changeme` | Admin credential, ≥32 chars in production |
 | `NETLOGIC_API_KEYS` | _(empty)_ | Seed keys: `key1:org1,key2:org2,...` |
-| `NETLOGIC_CORS_ORIGINS` | `*` | Comma-separated allowed origins, or `*` |
-| `NETLOGIC_PORT` | `8000` | Port reported to the browser auto-open |
-| `NETLOGIC_NO_BROWSER` | _(unset)_ | Set to `1` to disable browser auto-open |
-| `NETLOGIC_OIDC_ISSUER` | _(unset)_ | Clerk Frontend API URL → enables human login via OIDC |
-| `NETLOGIC_DATABASE_URL` | _(unset)_ | PostgreSQL URL for persistent multi-tenant auth |
-| `NETLOGIC_SECRETS_KEY` | _(unset)_ | Fernet key for encrypting org API keys at rest (required with DB) |
-| `NETLOGIC_AGENT_TOKEN_MAX_AGE` | `604800` | Agent token lifetime in seconds (7 days) |
+| `NETLOGIC_CORS_ORIGINS` | _(empty)_ | Allowed origins (CORS disabled if empty) |
+| `NETLOGIC_PORT` | `8000` | Bind port |
+| `NETLOGIC_HOST` | `0.0.0.0` | Bind address |
+| `NETLOGIC_NO_BROWSER` | _(unset)_ | `1` disables auto-open |
+| `NETLOGIC_OIDC_ISSUER` | _(unset)_ | Clerk Frontend API URL → OIDC login |
+| `NETLOGIC_OIDC_AUDIENCE` | _(unset)_ | OIDC audience |
+| `NETLOGIC_OIDC_DEFAULT_ORG` | _(unset)_ | Fallback org_id for OIDC users |
+| `NETLOGIC_DATABASE_URL` | _(unset)_ | PostgreSQL connection string |
+| `NETLOGIC_SECRETS_KEY` | _(unset)_ | Fernet key for credentials at rest |
+| `NETLOGIC_AGENT_TOKEN_MAX_AGE` | `604800` | Agent token lifetime (7 days) |
 | `NETLOGIC_AGENT_PENDING_CAP` | `50` | Max queued tasks per agent |
-| `NETLOGIC_MAX_AGENTS_PER_ORG` | `100` | Max registered agents per organisation |
-| `NETLOGIC_AI_PROVIDER` | `openrouter` | AI provider: `openrouter`, `openai`, `anthropic`, `kimi`, `qwen`, `groq`, `gemini`, `ollama`, or `custom` |
-| `NETLOGIC_AI_API_KEY` | _(empty)_ | Default AI API key. Provider-specific vars also work: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `KIMI_API_KEY`, `MOONSHOT_API_KEY`, `DASHSCOPE_API_KEY` |
-| `NETLOGIC_AI_MODEL` | provider default | Optional model id. For OpenRouter, use the exact provider/model id |
-| `NETLOGIC_AI_BASE_URL` | provider default | Custom OpenAI-compatible base URL |
+| `NETLOGIC_MAX_AGENTS_PER_ORG` | `100` | Max registered agents |
+| `NETLOGIC_AI_PROVIDER` | `openrouter` | Default AI provider |
+| `NETLOGIC_AI_API_KEY` | _(empty)_ | Default AI key |
+| `NETLOGIC_AI_MODEL` | provider default | Default model |
+| `NETLOGIC_AI_BASE_URL` | provider default | Custom base URL |
+| `NETLOGIC_NVD_KEY` | _(empty)_ | NVD API key |
+| `NETLOGIC_VALID_LICENSES` | _(empty)_ | Dev/test license overrides |
+| `NETLOGIC_LICENSE_KEY` | _(empty)_ | Instance license key |
+| `NETLOGIC_SCANS_DIR` | _(default)_ | Scan storage directory |
+| `NETLOGIC_SIEM_ENDPOINT` | _(empty)_ | Audit log shipping URL |
+| `NETLOGIC_WAPPALYZER_DATA` | _(built-in)_ | Wappalyzer fingerprints path |
 
 ### Agent
 
 | Variable | Default | Description |
 |---|---|---|
 | `NETLOGIC_CONTROLLER` | `http://localhost:8000` | Controller base URL |
-| `NETLOGIC_API_KEY` | _(unset)_ | API key for first-time registration |
-
----
-
-## API Reference
-
-### Authentication
-
-All endpoints (except `POST /auth/token`) require `Authorization: Bearer <jwt>`.
-
-```
-POST   /auth/token           Exchange API key → JWT
-POST   /auth/keys            Create API key for an org (X-Admin-Key required)
-GET    /auth/keys            List API keys, masked (admin only)
-DELETE /auth/keys/{key}      Revoke an API key (admin only)
-```
-
-### Jobs
-
-```
-POST   /jobs                 Submit a scan job → {job_id, status: "queued"}
-GET    /jobs                 List recent jobs for your org
-GET    /jobs/{id}            Job status + result counts
-GET    /jobs/{id}/stream     Live SSE stream of scan events (including streaming AI tokens)
-POST   /jobs/{id}/cancel     Cancel a queued/running job
-DELETE /jobs/{id}            Remove a job record
-```
-
-**POST /jobs body:**
-
-```json
-{
-  "target": "example.com",
-  "ports": "quick",
-  "do_tls": false,
-  "do_headers": false,
-  "do_stack": false,
-  "do_dns": false,
-  "do_osint": false,
-  "do_probe": false,
-  "do_takeover": false,
-  "do_full": false,
-  "cidr": false,
-  "timeout": 2.0,
-  "threads": 100,
-  "min_cvss": 4.0,
-  "agent_id": null,
-  "do_ai": false,
-  "ai_provider": "openrouter",
-  "ai_key": null,
-  "ai_model": null
-}
-```
-
-`ports`: `"quick"` (43 ports) | `"full"` (58 ports) | `"custom=22,80,443"`  
-`agent_id`: route the job to a specific agent; omit to auto-assign.  
-`do_ai` / `ai_*`: per-scan AI analysis override (takes precedence over server defaults).
-
-### Agents (controller-side management)
-
-```
-GET    /agents               List all agents with live status
-GET    /agents/{id}          Agent detail
-DELETE /agents/{id}          Deregister an agent
-```
-
-### Agent protocol (used by `netlogic_agent.py`)
-
-```
-POST   /agents/register                        Register → {agent_id, token}
-POST   /agents/{id}/heartbeat                  Keep-alive (every 25 s)
-GET    /agents/{id}/tasks                      Poll for pending jobs
-POST   /agents/{id}/tasks/{job_id}/events      Stream scan events (max 500/batch)
-POST   /agents/{id}/tasks/{job_id}/complete    Mark job done or failed
-```
-
-Agent endpoints authenticate with the one-time registration token (`Bearer <token>`), not a JWT.
-
-### System
-
-```
-GET    /health               Service status + uptime
-GET    /docs                 Interactive OpenAPI docs
-```
-
----
-
-## Architecture
-
-```
-netlogic/
-│
-├── netlogic.py                  ← CLI entry point
-├── netlogic_agent.py            ← Remote agent runner (stdlib-only)
-│
-├── src/                         ← Scan engine (zero third-party deps)
-│   ├── scanner.py               ← TCP scanner, 22 service probes, banner grabbing
-│   ├── engine.py                ← Orchestrator: runs all modules + fusion pipeline
-│   ├── cve_correlator.py        ← CVE correlation: NVD + 192 offline sigs
-│   ├── nvd_lookup.py            ← NIST NVD API v2.0 client, disk cache, CISA KEV
-│   ├── epss.py                  ← EPSS enrichment (FIRST.org API, 24h cache)
-│   ├── vdb_engine.py            ← SQLite-based local vulnerability database
-│   ├── vdb_syncer.py            ← Incremental VDB sync from NVD + OSV
-│   ├── service_prober.py        ← Unauthenticated access, default creds, admin paths
-│   ├── vuln_prober.py           ← CVE-specific safe active probes
-│   ├── osint.py                 ← DNS/DoH, CT logs, ASN lookup
-│   ├── tls_analyzer.py          ← SSL/TLS deep analysis
-│   ├── header_audit.py          ← HTTP security header audit
-│   ├── stack_fingerprint.py     ← CMS, framework, cloud, CDN, WAF detection
-│   ├── web_fingerprint.py       ← Body hashing, favicon mmh3, version markers
-│   ├── dns_security.py          ← SPF, DKIM, DMARC, DNSSEC, zone transfer
-│   ├── takeover.py              ← Subdomain takeover (25 providers)
-│   ├── json_bridge.py           ← Streaming JSON events for Electron / agent
-│   ├── scan_diff.py             ← Per-target change tracking across scans
-│   ├── reporter.py              ← Terminal, JSON, HTML output
-│   │
-│   ├── fusion/                  ← Precision funnel (sensors → gate → AI → synthesis)
-│   │   ├── signals.py           ← Signal schema (evidence+provenance)
-│   │   ├── gate.py              ← Deterministic agreement gate
-│   │   ├── adjudicator.py       ← AI adjudication (gray band only)
-│   │   ├── synthesis.py         ← Attack graph + 6-section report generation
-│   │   ├── ai.py                ← Model adapter: buffered + streaming completers
-│   │   ├── engine_bridge.py     ← Converts scan artifacts → signals → verdicts
-│   │   ├── benchmark.py         ← Off-pipeline benchmark harness
-│   │   ├── cassette.py          ← Record/replay for offline testing
-│   │   ├── corpus.py            ← Test corpus
-│   │   ├── sensors/             ← Evidence-producing sensor adapters
-│   │   │   ├── nuclei.py        ← Nuclei JSONL → Signal conversion
-│   │   │   └── wappalyzer.py    ← Wappalyzer tech-detection → Signal conversion
-│   │   └── data/                ← Test fixtures
-│   │
-│   └── external/                ← Third-party tool wrappers
-│       └── nuclei_runner.py     ← Nuclei binary wrapper (MIT license)
-│
-├── api/                         ← FastAPI controller
-│   ├── main.py                  ← App factory, static SPA serving, middleware
-│   ├── cli.py                   ← Typer CLI entry point for `netlogic` command
-│   ├── auth/
-│   │   ├── jwt_handler.py       ← HS256 JWT (stdlib-only, alg enforcement)
-│   │   ├── api_keys.py          ← In-memory API key store
-│   │   ├── oidc.py              ← Clerk OIDC / JWKS verification
-│   │   ├── rate_limit.py        ← Sliding-window rate limiter (per-IP / per-agent)
-│   │   └── dependencies.py      ← require_org FastAPI dependency
-│   ├── agents/
-│   │   └── registry.py          ← Agent registry (token expiry, pending cap)
-│   ├── jobs/
-│   │   ├── manager.py           ← In-memory + JSON-file + Postgres job store
-│   │   └── executor.py          ← SaaS dispatcher (never runs scans locally)
-│   ├── middleware/
-│   │   └── audit.py             ← X-Request-ID correlation + audit log
-│   ├── models/
-│   │   ├── scan_request.py      ← Pydantic ScanRequest (ipaddress validation)
-│   │   └── agent.py             ← AgentRegistration with size constraints
-│   ├── routes/
-│   │   ├── auth.py              ← /auth/*
-│   │   ├── jobs.py              ← /jobs/*
-│   │   ├── agents.py            ← /agents/*
-│   │   └── health.py            ← /health
-│   └── storage/
-│       └── json_store.py        ← Scan persistence (10 MB cap, 500 file cap)
-│
-├── dashboard/                   ← React SPA (Vite + TypeScript + Tailwind)
-│   └── src/
-│       ├── api/                 ← REST + SSE client hooks
-│       ├── components/          ← StatusBadge, PortTable, VulnCard, ScanFeed, Markdown
-│       ├── pages/               ← Dashboard, NewScan, ScanDetail, Agents, Login
-│       └── store/               ← Zustand auth store
-│
-└── electron/                    ← Desktop app (Node + Electron)
-    ├── main.js                  ← BrowserWindow (sandbox, contextIsolation, no nodeIntegration)
-    └── preload.js               ← Sandboxed IPC bridge
-```
-
-### SaaS Dispatch Flow
-
-```
-Browser / curl
-    │  POST /jobs  (JWT)
-    ▼
-FastAPI Controller
-    │  creates ScanJob{status: queued}
-    │  try_dispatch_queued() — dispatch lock prevents races
-    │       ↓ if agent online & idle
-    │  assign_task(agent_id, job_id)
-    ▼
-netlogic_agent.py  (runs on your network)
-    │  GET /agents/{id}/tasks  → receives job config
-    │  runs src/json_bridge.run_streaming_scan()
-    │  POST /agents/{id}/tasks/{job_id}/events  (batched, ≤ 500/req)
-    │  POST /agents/{id}/tasks/{job_id}/complete
-    ▼
-Browser SSE (GET /jobs/{id}/stream)
-    └─ live events replayed to dashboard
-       Fusion pipeline results streamed as typed events:
-       • "fusion" — adjudicated findings (confirmed / potential / discarded)
-       • "ai" — streaming markdown tokens (progressive, ~80 char batches)
-       • "ai" (final) — complete markdown + beyond_cves array
-```
+| `NETLOGIC_API_KEY` | _(unset)_ | API key for registration |
 
 ---
 
 ## Security Architecture
 
+### Middleware stack (order applied)
+1. **AuditMiddleware** — `X-Request-ID` correlation, structured JSON audit log, SIEM shipping
+2. **RequestSizeLimitMiddleware** — 10 MB body limit (DoS protection)
+3. **LicenseMiddleware** — blocks all `/v1/` routes when unlicensed (returns 402)
+4. **SecurityHeadersMiddleware** — HSTS (1y), CSP (differentiated HTML vs API), X-Frame-Options, X-Content-Type-Options, Permissions-Policy, Referrer-Policy
+5. **OriginCheckMiddleware** — POST/PUT/DELETE Origin validation (CSRF defence-in-depth)
+6. **CORSMiddleware** — restrictive: no wildcard, specific origins only
+
 ### Authentication
-- **API keys** — long-lived org credentials, stored in-memory (seed via `NETLOGIC_API_KEYS`), or persisted in PostgreSQL
-- **JWT** — HS256, stdlib-only; `alg` field enforced before signature verification (prevents `alg=none` attack); startup warning if secret is weak or < 32 chars
-- **Clerk OIDC** — human logins via Clerk-issued session JWTs, verified against public JWKS (no Clerk secret key needed server-side)
-- **Agent tokens** — SHA-256 hashed in registry, expire after `NETLOGIC_AGENT_TOKEN_MAX_AGE`; stored at `~/.netlogic/agent.json` with `0o600` permissions
+- **API keys**: SHA-256 hashed at rest; plaintext only on `create()` and in request body during `verify()`
+- **JWT**: HS256 with stdlib (`hashlib`+`hmac`+`base64`), `alg` field pinned before verification (prevents alg=none), ephemeral random fallback for dev
+- **OIDC**: Clerk/Auth0/WorkOS — RS256 + JWKS, auto-provisions users + orgs on first login
+- **Agent tokens**: SHA-256 hashed in registry, constant-time comparison, 7-day expiry
 
-### Rate Limiting (sliding window, in-memory)
+### Rate limiting
+Sliding-window in-memory. Per-endpoint, per-scope (IP, org_id, agent_id). IP banning after 5 failed token exchanges in 10 minutes (1h ban).
 
-| Endpoint | Limit |
-|---|---|
-| `POST /auth/token` | 10 / minute / IP |
-| `POST /agents/register` | 5 / hour / IP |
-| `POST /agents/{id}/heartbeat` | 3 / minute / agent |
-| `POST /agents/{id}/tasks/{id}/events` | 60 / minute / agent, max 500 events/batch |
-| `POST /jobs` | 30 / minute / org |
-
-### Multi-tenancy
-Every job, agent, and API key is scoped to an `org_id`. Cross-org lookups return 404 (not 403) to prevent enumeration.
-
-### HTTP Security Headers
-Applied by `SecurityHeadersMiddleware` to every response:
-- `X-Content-Type-Options: nosniff`
-- `X-Frame-Options: DENY`
-- `X-XSS-Protection: 1; mode=block`
-- `Referrer-Policy: strict-origin-when-cross-origin`
-- `Permissions-Policy: geolocation=(), microphone=(), camera=()`
-- `Content-Security-Policy: default-src 'none'` (API JSON responses)
-
-### Content Security Policy (dashboard)
-Set via `<meta http-equiv="Content-Security-Policy">` in `index.html`:
-- `script-src 'self'` — no inline scripts, no CDN script injection
-- `style-src 'self' 'unsafe-inline'` — Tailwind requires inline styles
-- `connect-src 'self'` — SSE and API calls to same origin only
-- `frame-ancestors 'none'` — clickjacking prevention
-
-### Audit Logging
-`AuditMiddleware` emits structured JSON lines to the `netlogic.audit` logger for:
-- `token_exchange_ok` / `token_exchange_failed` / `token_rate_limited`
-- `agent_registered` / `agent_deregistered`
-- `job_created` / `job_cancelled`
-
-Every request receives a unique `X-Request-ID` header for correlation.
-
-### Secret Sealing
-When PostgreSQL persistence is enabled, org-specific LLM API keys are encrypted at rest using Fernet (symmetric) before storage. The server returns HTTP 503 if a key is submitted without `NETLOGIC_SECRETS_KEY` configured.
-
-### Input Validation
-- Targets validated with Python's `ipaddress` module (IP / CIDR) then RFC 1123 label regex — no ReDoS-prone patterns
-- Agent `hostname` max 255 chars; tags max 20 pairs × 64 chars; capabilities max 32 items
-- Scan JSON files capped at 10 MB each; max 500 files loaded on startup
+### Data protection
+- LLM API keys: Fernet-encrypted at rest (AES-128-CBC + HMAC-SHA256). Production-fail-closed: requires `NETLOGIC_SECRETS_KEY`
+- Multi-tenancy: all data scoped to `org_id`; cross-org lookup returns 404 (not 403)
+- Path traversal: all storage paths validated, separators and `..` rejected
 
 ---
 
 ## CI / Testing
 
 ```bash
-# Install dev dependencies
 pip install -r requirements-dev.txt
-
-# Run all tests
 python -m pytest
-
-# Security gates
-bandit -r src/ api/
-pip-audit -r requirements-api.txt
 ```
 
-- **1000+ pytest cases** covering every scan module, fusion pipeline, API routes, auth, rate limiting, multi-tenancy, SSRF/CIDR boundaries, and production-readiness
-- CI pipeline in `.github/workflows/ci.yml` runs tests, Bandit SAST, and `pip-audit` dependency CVE checks
+CI pipeline (`.github/workflows/ci.yml`) — 5 jobs:
+1. **test** — 1,000+ pytest cases
+2. **postgres-integration** — DB migrations + durable jobs + per-org keys
+3. **fusion-benchmark** — FP reduction ≥ 80% + critical recall = 100%
+4. **security** — Bandit (HIGH) + `pip-audit`
+5. **build-dashboard** — `npm ci` + `npm run build`
 
 ---
 
@@ -575,4 +854,4 @@ pip-audit -r requirements-api.txt
 
 ## License
 
-MIT © 2026 Dmitry Flynn — See [LICENSE](https://github.com/dmitryflynn/netlogic/blob/main/LICENSE)
+MIT © 2026 Dmitry Flynn — See [LICENSE.txt](LICENSE.txt)

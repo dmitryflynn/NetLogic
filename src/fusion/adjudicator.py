@@ -185,19 +185,17 @@ def apply_ai_verdicts(gray: list[Verdict], ai_by_id: dict[int, AIVerdict]) -> No
         if a is None:
             v.decision = "potential"   # the AI didn't (or couldn't) judge it → verify
             continue
-        # Version-only: every signal is a banner/version match, none probe-confirmed or
-        # KEV. Patch level is unverifiable from a banner (distros backport security fixes
-        # without bumping the version), so the AI cannot promote these to "confirmed" no
-        # matter how confidently it says "real" — cap at "potential" pending active probe.
-        version_only = (not v.pinned and v.signals
+        # Version/pattern-only: never a finding. AI cannot confirm or deny patch
+        # level from a banner — discard rather than leave as "potential" noise.
+        version_only = (v.signals
                         and all(s.version_matched for s in v.signals)
-                        and not any(s.is_probe_confirmed or s.kev for s in v.signals))
+                        and not any(s.is_probe_confirmed for s in v.signals))
+        if version_only:
+            v.decision = "discarded"
+            v.ai_safety_override = True
+            continue
         if a.verdict == "real":
-            if version_only:
-                v.decision = "potential"
-                v.ai_safety_override = True
-            else:
-                v.decision = "confirmed"
+            v.decision = "confirmed"
         elif a.verdict == "false_positive":
             if v.impact in ("high", "critical"):
                 v.decision = "potential"

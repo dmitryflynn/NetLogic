@@ -172,6 +172,11 @@ class ScanJob:
         #    Record the event first (so consumers still see it), then unwind.
         cancelled = self._stop_flag.is_set()
 
+        # Stamp a server timestamp so the UI event log can show wall-clock order
+        # after reload (live SSE and persisted job.events both benefit).
+        if "ts" not in event:
+            event = {**event, "ts": time.time()}
+
         # 1. Update progress if applicable
         if event.get("type") == "progress":
             data = event.get("data")
@@ -225,7 +230,10 @@ class ScanJob:
                 asyncio.get_running_loop()
             except RuntimeError:
                 # No running loop on this thread → we are the scan worker. Unwind.
-                raise JobCancelled(self.job_id)
+                # `from None` drops the RuntimeError chain so logs don't look like
+                # "no running event loop" is the root failure (it is only the
+                # loop-thread probe).
+                raise JobCancelled(self.job_id) from None
 
     def push_sentinel(self) -> None:
         """Signal all SSE consumers that the stream is finished."""

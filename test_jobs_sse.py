@@ -80,13 +80,53 @@ class TestPushEventCursor(unittest.TestCase):
         # On a plain thread (no running loop) cooperative cancellation still works.
         job = self._job()
         job._stop_flag.set()
-        with self.assertRaises(JobCancelled):
+        with self.assertRaises(JobCancelled) as cm:
             job.push_event({"type": "progress", "data": {"percent": 1}})
+        # Loop-thread probe RuntimeError must not chain into the cancel exception
+        # (that made cancel look like "no running event loop" failures in logs).
+        self.assertIsNone(cm.exception.__cause__)
 
     def test_progress_updates_from_event(self):
         job = self._job()
         job.push_event({"type": "progress", "data": {"percent": 42.5}})
         self.assertEqual(job.progress, 42.5)
+
+
+class TestJsonBridgeCancelPropagates(unittest.TestCase):
+    """JobCancelled from emit_callback must not be converted into an error event."""
+
+    def test_job_cancelled_propagates_without_error_emit(self):
+        from src import json_bridge
+
+        emitted = []
+
+        def callback(event_type, data=None, message=None):
+            if event_type == "progress":
+                raise JobCancelled("job-1")
+            emitted.append((event_type, message))
+
+        def fake_run_scan(target, ports, args, emit=None):
+            emit("progress", {"percent": 1}, None)
+
+        import src.engine as engine
+        orig = engine.run_scan
+        engine.run_scan = fake_run_scan
+        try:
+            with self.assertRaises(JobCancelled):
+                json_bridge.run_streaming_scan(
+                    target="example.com",
+                    ports=[80],
+                    timeout=1.0,
+                    threads=1,
+                    do_osint=False,
+                    cidr=False,
+                    emit_callback=callback,
+                )
+        finally:
+            engine.run_scan = orig
+
+        # Must not have re-entered the callback with type="error".
+        self.assertEqual(emitted, [])
 
 
 # ───────────────────────── SSE generator (_drain + _sse_generator) ────────────

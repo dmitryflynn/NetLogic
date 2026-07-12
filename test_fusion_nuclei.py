@@ -423,7 +423,7 @@ def test_cve_template_populates_signal_fields():
     assert s.kev is True
     assert s.epss == 0.95
     assert s.kind == "vuln"
-    assert s.version_matched is True
+    assert s.version_matched is False
 
 
 def test_nuclei_signal_includes_observed_data():

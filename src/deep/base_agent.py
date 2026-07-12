@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import signal
 from typing import Optional
 
 from src.deep.models import Mission, AgentReport

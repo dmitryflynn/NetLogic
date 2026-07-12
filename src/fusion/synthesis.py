@@ -27,7 +27,6 @@ narration uses the configured model via src.fusion.ai.make_completer().
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
