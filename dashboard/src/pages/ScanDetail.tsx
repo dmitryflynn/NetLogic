@@ -82,6 +82,10 @@ export default function ScanDetail() {
   // Inline explore for Beyond CVEs
   const [exploring, setExploring] = useState<string | null>(null)
   const [exploreMd, setExploreMd] = useState<Record<string, string>>({})
+
+  // Tabs: Summary (Executive | Technical) vs Data. Live scans open on Data (the live stream).
+  const [tab, setTab] = useState<'summary' | 'data'>(live ? 'data' : 'summary')
+  const [subTab, setSubTab] = useState<'executive' | 'technical'>('executive')
   async function onExplore(finding: string) {
     if (!id) return
     if (exploreMd[finding]) return  // already loaded
@@ -153,6 +157,14 @@ export default function ScanDetail() {
         </div>
       </div>
 
+      {/* Tab bar — Summary vs Data */}
+      {job.status !== 'queued' && (
+        <div className="shrink-0 px-6 border-b border-border bg-panel flex items-center gap-1">
+          <TabBtn active={tab === 'summary'} onClick={() => setTab('summary')}>Summary</TabBtn>
+          <TabBtn active={tab === 'data'} onClick={() => setTab('data')}>Data</TabBtn>
+        </div>
+      )}
+
       <div className="flex flex-1 overflow-hidden">
         {/* Main content */}
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
@@ -179,41 +191,47 @@ export default function ScanDetail() {
             </div>
           )}
 
-          {/* Completed scans lead with vulnerabilities/analysis; ports are supporting evidence.
-              Live streaming keeps raw evidence first (it arrives first). */}
-          {(() => {
-            const evidence = (
-              <>
-                {/* Open Ports — supporting context only. Catalog version-matches are not
-                    listed as findings; filtered leads live under Vulnerabilities. */}
-                {displayPorts.length > 0 && (
-                  <section>
-                    <p className="section-title mb-3">Open Ports ({displayPorts.length})</p>
-                    <PortTable ports={displayPorts} />
-                  </section>
-                )}
-              </>
-            )
-            const analysis = (
-              <ScanSections s={sections} onExplore={onExplore} exploreMd={exploreMd} exploring={exploring} />
-            )
-            return live ? <>{evidence}{analysis}</> : <>{analysis}{evidence}</>
-          })()}
+          {/* ── Tab content ── */}
+          {tab === 'summary' ? (
+            <>
+              {/* Executive vs Technical sub-tabs */}
+              <div className="flex items-center gap-1 border-b border-border/60">
+                <SubTabBtn active={subTab === 'executive'} onClick={() => setSubTab('executive')}>
+                  Executive Summary
+                </SubTabBtn>
+                <SubTabBtn active={subTab === 'technical'} onClick={() => setSubTab('technical')}>
+                  Technical Summary
+                </SubTabBtn>
+              </div>
+              <ScanSections s={sections} view={subTab} onExplore={onExplore} exploreMd={exploreMd} exploring={exploring} />
+            </>
+          ) : (
+            <>
+              {/* Open Ports — supporting evidence. Catalog version-matches are not findings. */}
+              {displayPorts.length > 0 && (
+                <section>
+                  <p className="section-title mb-3">Open Ports ({displayPorts.length})</p>
+                  <PortTable ports={displayPorts} />
+                </section>
+              )}
+              <ScanSections s={sections} view="data" onExplore={onExplore} exploreMd={exploreMd} exploring={exploring} />
 
-          {/* Event stream — live while scanning; persists after completion from job.events */}
-          {activeEvents.length > 0 && (
-            <ScanFeed
-              events={activeEvents}
-              live={!!live && streaming}
-              defaultOpen={live || job.status === 'failed'}
-            />
-          )}
+              {/* Event stream — live while scanning; persists after completion from job.events */}
+              {activeEvents.length > 0 && (
+                <ScanFeed
+                  events={activeEvents}
+                  live={!!live && streaming}
+                  defaultOpen={live || job.status === 'failed'}
+                />
+              )}
 
-          {displayPorts.length === 0 && displayVulns.length === 0 &&
-           !live && job.status === 'completed' && activeEvents.length === 0 && (
-            <p className="text-text-dim text-[12px] text-center mt-8">
-              No open ports or vulnerabilities found.
-            </p>
+              {displayPorts.length === 0 && displayVulns.length === 0 &&
+               !live && job.status === 'completed' && activeEvents.length === 0 && (
+                <p className="text-text-dim text-[12px] text-center mt-8">
+                  No open ports or vulnerabilities found.
+                </p>
+              )}
+            </>
           )}
         </div>
 
@@ -298,5 +316,37 @@ function Flag({ label }: { label: string }) {
     <span className="inline-block text-[10px] bg-accent/10 text-accent border border-accent/20 rounded px-1.5 py-0.5 mr-1 mb-1">
       {label}
     </span>
+  )
+}
+
+// Top-level tab (Summary / Data) — underline-style, sits directly under the header.
+function TabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-2 text-[13px] border-b-2 -mb-px transition-colors ${
+        active
+          ? 'border-accent text-text-bright font-medium'
+          : 'border-transparent text-text-dim hover:text-text'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
+// Executive / Technical sub-tab within the Summary tab.
+function SubTabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-1.5 text-[12px] border-b-2 -mb-px transition-colors ${
+        active
+          ? 'border-accent text-accent font-medium'
+          : 'border-transparent text-text-dim hover:text-text'
+      }`}
+    >
+      {children}
+    </button>
   )
 }
