@@ -31,6 +31,7 @@ const DEFAULT: ScanRequest = {
   agent_depth:    false,
   allow_crash_probes: false,
   allow_freeform_proof: false,
+  allow_exploit_requests: false,
   agent_max_steps: 12,
   agent_max_requests: 40,
   ssh_user:    '',
@@ -285,6 +286,7 @@ export default function NewScan() {
                   // turning it off should also disarm opt-in intrusive tools
                   allow_crash_probes: on ? prev.allow_crash_probes : false,
                   allow_freeform_proof: on ? prev.allow_freeform_proof : false,
+                  allow_exploit_requests: on ? prev.allow_exploit_requests : false,
                 }))
               }}
               className="accent-accent mt-0.5"
@@ -368,6 +370,7 @@ export default function NewScan() {
                 ['agent_depth', 'Agent depth mode (CVE leads, chains, no early stop)'],
                 ['allow_crash_probes', 'Allow crash/DoS probes (MAY disrupt target)'],
                 ['allow_freeform_proof', 'Freeform proof payloads (Tier C, non-destructive)'],
+                ['allow_exploit_requests', 'Freeform EXPLOIT requests (Tier E — any method; AUTHORIZED targets only)'],
               ] as [keyof ScanRequest, string][]
             ).map(([key, label]) => (
               <label

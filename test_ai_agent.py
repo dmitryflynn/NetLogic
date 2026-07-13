@@ -421,6 +421,50 @@ def test_http_proof_blocks_destructive_and_write_methods():
     assert not calls  # nothing should have been sent for blocked cases above except maybe r2
 
 
+def test_exploit_request_requires_flag():
+    rt = ToolRuntime(host="ex.com", allow_exploit_requests=False)
+    assert "exploit_request" not in {t["name"] for t in rt.catalog()}
+    r = rt.execute("exploit_request", {"method": "DELETE", "path": "/api/x"})
+    assert not r.ok
+    assert "not authorized" in (r.error or "").lower() or "disabled" in (r.summary or "").lower()
+
+
+def test_exploit_request_allows_any_method_scope_gated_and_audited():
+    sent = []
+
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        sent.append((method, path, body))
+        return {"error": "", "elapsed_ms": 1, "status": 204, "headers": {}, "body": ""}
+
+    rt = ToolRuntime(host="ex.com", allow_exploit_requests=True, http_fn=http_fn)
+    assert "exploit_request" in {t["name"] for t in rt.catalog()}
+    r = rt.execute("exploit_request", {"method": "DELETE", "path": "/api/objects/42",
+                                       "headers": {"X-Exploit": "1"}, "body": ""})
+    assert r.ok and sent == [("DELETE", "/api/objects/42", "")]      # write method actually sent
+    assert "delete_accepted" in (r.data.get("proof_signals") or [])   # 2xx write = signal
+    assert r.data.get("vulnerable_signal")
+    assert rt.observations and rt.observations[-1]["tool"] == "exploit_request"  # audited
+
+
+def test_exploit_request_blocks_destructive_and_crlf_injection():
+    sent = []
+
+    def http_fn(method, path, headers, body, port, tls, timeout):
+        sent.append(method)
+        return {"error": "", "elapsed_ms": 1, "status": 200, "headers": {}, "body": "ok"}
+
+    rt = ToolRuntime(host="ex.com", allow_exploit_requests=True, http_fn=http_fn)
+    # Mass-destructive pattern in body → blocked (filter kept per design)
+    bad = rt.execute("exploit_request", {"method": "POST", "path": "/api/run",
+                                         "body": "{\"sql\":\"DROP TABLE users\"}"})
+    assert not bad.ok and "destructive" in (bad.error or "").lower()
+    # CR/LF header injection (request splitting / scope-escape) → refused
+    crlf = rt.execute("exploit_request", {"method": "GET", "path": "/",
+                                          "headers": {"X-Evil": "a\r\nHost: attacker.com"}})
+    assert not crlf.ok and "sanitize" in (crlf.error or "").lower()
+    assert not sent  # neither ever reached the wire
+
+
 def test_http_proof_same_site_location_query_not_vulnerable():
     """www/apex bounce that echoes attacker URL in query is NOT open redirect."""
     def http_fn(method, path, headers, body, port, tls, timeout):

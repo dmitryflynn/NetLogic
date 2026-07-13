@@ -196,6 +196,7 @@ def _run_job(agent_id: str, job_id: str, org_id: str) -> None:
             agent_depth = getattr(cfg, "agent_depth", False),
             allow_crash_probes = getattr(cfg, "allow_crash_probes", False),
             allow_freeform_proof = getattr(cfg, "allow_freeform_proof", False),
+            allow_exploit_requests = getattr(cfg, "allow_exploit_requests", False),
             agent_max_steps = getattr(cfg, "agent_max_steps", 12),
             agent_max_requests = getattr(cfg, "agent_max_requests", 40),
             # Scope AI/fusion key resolution to the org that owns the job — never a

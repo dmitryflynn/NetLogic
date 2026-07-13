@@ -128,6 +128,58 @@ def safe_proof_body(body: Any) -> str | None:
     return body
 
 
+# ── Freeform EXPLOIT requests (opt-in `allow_exploit_requests`, owned/in-scope targets only) ──
+# Wider latitude than proof: ANY standard method + arbitrary path/headers/body. Two rails are kept:
+#   1. is_destructive_payload() still fail-closes on mass-destructive patterns (applied by the tool).
+#   2. Headers/path MUST NOT contain CR/LF/NUL — that would be request splitting/smuggling, which is
+#      the one way a "single request to the in-scope host" could escape scope or hit other users.
+_EXPLOIT_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
+_MAX_EXPLOIT_BODY = 65_536
+
+
+def safe_exploit_method(method: Any) -> str | None:
+    """Any standard HTTP method (incl. PUT/PATCH/DELETE) for freeform exploit requests."""
+    if not isinstance(method, str):
+        return None
+    m = method.strip().upper()
+    return m if m in _EXPLOIT_METHODS else None
+
+
+def safe_exploit_headers(headers: Any) -> dict[str, str] | None:
+    """Arbitrary request headers (including Host/Content-Type/etc.) for freeform exploit requests.
+    Returns the header map, or None if any name/value contains CR/LF/NUL (request-splitting /
+    smuggling attempt — refused, since it could break the scope guarantee)."""
+    if headers is None:
+        return {}
+    if not isinstance(headers, dict):
+        return None
+    out: dict[str, str] = {}
+    for k, v in list(headers.items())[:_MAX_HEADERS * 2]:
+        ks, vs = str(k), str(v)
+        if not ks:
+            return None
+        if any(c in ks or c in vs for c in ("\r", "\n", "\x00")):
+            return None                      # header/request injection — refuse the whole request
+        out[ks[:_MAX_HEADER_KEY]] = vs[:_MAX_HEADER_VAL]
+    return out
+
+
+def safe_exploit_body(body: Any) -> str | None:
+    """Arbitrary request body (bounded). dict/list are JSON-encoded; NUL bytes refused."""
+    if body is None:
+        return None
+    if isinstance(body, (dict, list)):
+        import json  # noqa: PLC0415
+        try:
+            body = json.dumps(body)
+        except Exception:  # noqa: BLE001
+            return None
+    s = str(body)
+    if "\x00" in s:
+        return None
+    return s[:_MAX_EXPLOIT_BODY]
+
+
 def safe_path(path: Any) -> str | None:
     """Relative URL path (+ optional query). Rejects absolute/protocol-relative paths.
 
