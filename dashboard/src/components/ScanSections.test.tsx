@@ -388,3 +388,41 @@ describe('ScanSections — smoke', () => {
     expect(container).toBeInTheDocument()
   })
 })
+
+describe('ScanSections — tab views', () => {
+  const s = {
+    triage: { attention: [{ cve: 'CVE-2021-1', cvss: 9, priority: 'P1', bucket: 'attention', rationale: 'risky' }],
+              noise: [], counts: { attention: 1, noise: 0, kev: 0, total: 1 } },
+    investigations: [{ question: 'Can CVE-2021-1 be exploited?', conclusion: 'EXPLOITABLE',
+                       confidence: 0.9, gathered: 1, total_evidence: 1, evidence: [] }],
+    tls: { results: [{ port: 443, grade: 'A', protocols_supported: ['TLSv1.3'], protocols_deprecated: [], cert: {} }] },
+    ai: { markdown: '## Executive Summary\nOverall this host is risky.\n\n## Findings\n### 1. Thing `[HIGH]` `[Confirmed]`\n- **What:** detail here',
+          provider: 'ollama', model: 'gemma' },
+  } as unknown as ScanSectionsT
+
+  it('executive view: Vulnerabilities + Executive Summary only', () => {
+    render(<ScanSections s={s} view="executive" />)
+    expect(screen.getByText('Vulnerabilities')).toBeInTheDocument()
+    expect(screen.getByText(/Overall this host is risky/)).toBeInTheDocument()
+    expect(screen.queryByText('TLS / Certificate')).not.toBeInTheDocument()
+    expect(screen.queryByText('Vulnerability detail')).not.toBeInTheDocument()
+    expect(screen.queryByText(/detail here/)).not.toBeInTheDocument()      // technical content hidden
+  })
+
+  it('technical view: detailed AI sections + Vulnerability detail, not the exec/data panels', () => {
+    render(<ScanSections s={s} view="technical" />)
+    expect(screen.getByText(/Technical Analysis/)).toBeInTheDocument()
+    expect(screen.getByText(/detail here/)).toBeInTheDocument()
+    expect(screen.getByText('Vulnerability detail')).toBeInTheDocument()
+    expect(screen.queryByText('Vulnerabilities')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Overall this host is risky/)).not.toBeInTheDocument()
+  })
+
+  it('data view: evidence (TLS) only, no AI summary', () => {
+    render(<ScanSections s={s} view="data" />)
+    expect(screen.getByText('TLS / Certificate')).toBeInTheDocument()
+    expect(screen.queryByText('Vulnerabilities')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Overall this host is risky/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Technical Analysis/)).not.toBeInTheDocument()
+  })
+})

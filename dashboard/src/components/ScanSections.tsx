@@ -45,11 +45,28 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
   )
 }
 
-export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
+/** Split the AI-analyst markdown into its Executive-Summary section vs. the detailed technical
+ *  sections (Findings/PoC/Attack Chains/Beyond CVEs/Remediation) for the Summary tabs. */
+function splitAiMarkdown(md: string): { exec: string; technical: string } {
+  const lines = (md || '').split('\n')
+  const exec: string[] = []
+  const tech: string[] = []
+  let cur: 'exec' | 'tech' = 'exec'      // content before the first ## goes with the exec summary
+  for (const line of lines) {
+    const h = /^##\s+(.*)$/.exec(line)
+    if (h) cur = h[1].trim().toLowerCase().startsWith('executive summary') ? 'exec' : 'tech'
+    ;(cur === 'exec' ? exec : tech).push(line)
+  }
+  return { exec: exec.join('\n').trim(), technical: tech.join('\n').trim() }
+}
+
+export default function ScanSections({ s, onExplore, exploreMd, exploring, view }: {
   s: ScanSections
   onExplore?: (finding: string) => void
   exploreMd?: Record<string, string>
   exploring?: string | null
+  /** Tab gating: which group of panels to render. Undefined = render all (legacy / tests). */
+  view?: 'executive' | 'technical' | 'data'
 }) {
   const arr = (x: unknown) => (Array.isArray(x) ? (x as Record<string, unknown>[]) : [])
   const str = (x: unknown) => (x == null ? '' : String(x))
@@ -75,11 +92,13 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
   const hasTriage = ((s.triage?.attention?.length ?? 0) + (s.triage?.noise?.length ?? 0)) > 0
   const hasInvestigations = (s.investigations?.length ?? 0) > 0
   const collapseAdvanced = hasTriage || hasInvestigations
+  // Tab gating: undefined view renders everything (unit tests / legacy callers).
+  const inView = (v: 'executive' | 'technical' | 'data') => !view || view === v
 
   return (
     <>
       {/* ── Vulnerabilities first (verdict); catalog version-leads stay filtered ── */}
-      {hasTriage && (
+      {inView('executive') && hasTriage && (
         <Panel title="Vulnerabilities"
                subtitle={(s.triage!.attention?.length ?? 0) > 0
                  ? `${s.triage!.attention!.length} worth attention · ${s.triage!.noise?.length ?? 0} catalog leads filtered`
@@ -138,7 +157,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
       )}
 
       {/* ── Architecture Summary — structure-first: consume it in 5s, narrative is optional below ── */}
-      {(s.architecture?.components?.length ?? 0) > 0 && (() => {
+      {inView('executive') && (s.architecture?.components?.length ?? 0) > 0 && (() => {
         const arch = s.architecture!
         const ROLE_LABEL: Record<string, string> = {
           frontend: 'Frontend', hosting: 'Hosting', cdn: 'CDN', waf: 'WAF', server: 'Server',
@@ -193,7 +212,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
       })()}
 
       {/* ── AI Investigation Plan — advanced / collapsed when report already has a verdict ── */}
-      {(s.investigationPlan?.length ?? 0) > 0 && (
+      {inView('executive') && (s.investigationPlan?.length ?? 0) > 0 && (
         <Panel title="Investigation Plan" subtitle="priorities only — not findings"
                collapsible defaultOpen={!collapseAdvanced}>
           <p className="text-text-dim text-[11px] mb-2">
@@ -222,29 +241,38 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
         </Panel>
       )}
 
-      {/* ── AI Analysis ── */}
-      {s.ai && (s.ai.markdown || s.ai.error) && (
-        <Panel title={`AI Analyst${s.ai.model ? ` · ${s.ai.provider}/${s.ai.model}` : ''}`}>
-          {s.ai.error
-            ? <p className="text-high">⚠ {s.ai.error}</p>
-            : <Markdown text={s.ai.markdown ?? ''} onExplore={onExplore} exploring={exploring} />}
-          {/* Inline explore elaborations (Beyond CVEs deep-dives) */}
-          {exploreMd && Object.entries(exploreMd).length > 0 && (
+      {/* ── AI Analysis — Executive Summary (exec view) vs full technical breakdown (technical view) ── */}
+      {!inView('data') && s.ai && (s.ai.markdown || s.ai.error) && (() => {
+        if (s.ai.error) {
+          return <Panel title="AI Analyst"><p className="text-high">⚠ {s.ai.error}</p></Panel>
+        }
+        const { exec, technical } = splitAiMarkdown(s.ai.markdown ?? '')
+        // executive view → Executive Summary section; technical view → the detailed sections;
+        // no view (tests/legacy) → the whole report.
+        const md = view === 'executive' ? exec : view === 'technical' ? technical : (s.ai.markdown ?? '')
+        if (!md) return null
+        const title = view === 'technical' ? 'Technical Analysis' : 'Executive Summary'
+        const showExplore = view !== 'executive'   // Beyond-CVEs deep dives live in the technical view
+        return (
+        <Panel title={`${title}${s.ai.model ? ` · ${s.ai.provider}/${s.ai.model}` : ''}`}>
+          <Markdown text={md} onExplore={showExplore ? onExplore : undefined} exploring={exploring} />
+          {showExplore && exploreMd && Object.entries(exploreMd).length > 0 && (
             <div ref={deepDiveRef} className="mt-3 border-t border-border pt-3 space-y-3">
-              {Object.entries(exploreMd).map(([finding, md]) => (
+              {Object.entries(exploreMd).map(([finding, dm]) => (
                 <div key={finding} className="border border-accent/20 rounded p-3 bg-elevated/50">
                   <p className="text-[11px] text-text-dim mb-1">⟐ Deep dive: {finding}</p>
-                  <Markdown text={md} exploring={exploring} />
+                  <Markdown text={dm} exploring={exploring} />
                 </div>
               ))}
             </div>
           )}
-          {exploring && <p className="text-[11px] text-text-dim mt-2 italic">⟐ Exploring…</p>}
+          {showExplore && exploring && <p className="text-[11px] text-text-dim mt-2 italic">⟐ Exploring…</p>}
         </Panel>
-      )}
+        )
+      })()}
 
       {/* ── Findings detail (investigations) — open when it's the main technical list ── */}
-      {(s.investigations?.length ?? 0) > 0 && (() => {
+      {inView('technical') && (s.investigations?.length ?? 0) > 0 && (() => {
         const adjudicated = s.investigations!.filter((iv) => iv.adjudicated_by_ai).length
         // Prefer investigations that reached a real verdict; UNVERIFIED pattern leads last
         const sorted = [...s.investigations!].sort((a, b) => {
@@ -319,7 +347,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
       })()}
 
       {/* ── Reasoning Engine (the "how" — collapsed so the conclusions above stay primary) ── */}
-      {s.reasoning?.reasoning_enabled && (
+      {inView('data') && s.reasoning?.reasoning_enabled && (
         <Panel title="Reasoning Engine" collapsible defaultOpen={false}
                subtitle="how it got there — objectives, hypotheses, evidence graph, plans">
           {(() => {
@@ -546,7 +574,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
       )}
 
       {/* ── AI Investigation Agent (tool-driven) ── */}
-      {s.aiAgent && ((s.aiAgent.findings?.length ?? 0) > 0 || (s.aiAgent.turns?.length ?? 0) > 0 || (s.aiAgent.chains?.length ?? 0) > 0) && (
+      {inView('technical') && s.aiAgent && ((s.aiAgent.findings?.length ?? 0) > 0 || (s.aiAgent.turns?.length ?? 0) > 0 || (s.aiAgent.chains?.length ?? 0) > 0) && (
         <Panel title="AI Investigation Agent" collapsible defaultOpen={(s.aiAgent.confirmed ?? 0) > 0 || !!s.aiAgent.depth_mode}
                subtitle={`${s.aiAgent.depth_mode ? 'depth · ' : ''}${s.aiAgent.confirmed ?? 0} confirmed · ${s.aiAgent.high_value_used ?? 0} high-value · ${s.aiAgent.steps_used ?? 0} steps`}>
           <p className="text-[11px] text-text-dim mb-2">
@@ -608,7 +636,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
       )}
 
       {/* ── Active Validation (safe_active, gated + audited) ── */}
-      {((s.activeValidation?.results?.length ?? 0) > 0 || (s.activeValidation?.capability_gaps?.length ?? 0) > 0) && (
+      {inView('data') && ((s.activeValidation?.results?.length ?? 0) > 0 || (s.activeValidation?.capability_gaps?.length ?? 0) > 0) && (
         <Panel title="Active Validation" collapsible defaultOpen={false}>
           {(() => {
             const av = s.activeValidation!
@@ -694,7 +722,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
       )}
 
       {/* ── Investigation Changes (Phase 7 — since last scan) ── */}
-      {s.change?.delta && (
+      {inView('data') && s.change?.delta && (
         ((s.change.delta.added?.length ?? 0) + (s.change.delta.removed?.length ?? 0) +
          (s.change.delta.changed?.length ?? 0)) > 0
       ) && (
@@ -719,7 +747,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
 
       {/* ── Change since last scan ── (has_changes is a Python @property dropped by
             asdict, so detect changes from the arrays directly) ── */}
-      {s.scanDiff && (
+      {inView('data') && s.scanDiff && (
         (s.scanDiff.ports_added as unknown[] | undefined)?.length ||
         (s.scanDiff.ports_removed as unknown[] | undefined)?.length ||
         (s.scanDiff.version_changes as unknown[] | undefined)?.length ||
@@ -745,7 +773,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
       )}
 
       {/* ── Service exploitability ── */}
-      {s.exploitability && arr(s.exploitability.attributes).length > 0 && (
+      {inView('data') && s.exploitability && arr(s.exploitability.attributes).length > 0 && (
         <Panel title="Service Exploitability (Preconditions)" collapsible defaultOpen={false}>
           {arr(s.exploitability.attributes).map((a, i) => (
             <div key={i} className="border-b border-border/40 pb-2 last:border-0">
@@ -766,7 +794,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
       )}
 
       {/* ── Authenticated (ground truth) ── */}
-      {s.authenticated && Boolean(s.authenticated.success) && (
+      {inView('data') && s.authenticated && Boolean(s.authenticated.success) && (
         <Panel title="Authenticated Scan — Installed Versions (Ground Truth)">
           <KV k="OS" v={str(s.authenticated.os_name)} />
           <KV k="Kernel" v={str(s.authenticated.kernel)} />
@@ -782,7 +810,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
       )}
 
       {/* ── Web fingerprint ── */}
-      {s.webFingerprint && (
+      {inView('data') && s.webFingerprint && (
         <Panel title="Web Application Fingerprint" collapsible defaultOpen={false}>
           <KV k="Title" v={str(s.webFingerprint.title)} />
           <KV k="Generator" v={str(s.webFingerprint.generator)} />
@@ -824,7 +852,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
       )}
 
       {/* ── Topology ── */}
-      {s.topology && (
+      {inView('data') && s.topology && (
         <Panel title="Network Topology" collapsible defaultOpen={false}>
           <KV k="Reverse DNS" v={str(s.topology.ptr)} />
           <KV k="ASN" v={[s.topology.asn, s.topology.asn_org, s.topology.country].filter(Boolean).map(str).join(' · ')} />
@@ -834,7 +862,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring }: {
       )}
 
       {/* ── TLS summary ── */}
-      {s.tls && arr(s.tls.results).length > 0 && (
+      {inView('data') && s.tls && arr(s.tls.results).length > 0 && (
         <Panel title="TLS / Certificate" collapsible defaultOpen={false}>
           {arr(s.tls.results).map((t, i) => {
             const cert = (t.cert as Record<string, unknown>) ?? {}
