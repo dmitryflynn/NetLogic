@@ -171,6 +171,8 @@ def build_surface_summary(
         "notes": [
             "Baseline only — version/banner CVE hits are LEADS until tool proof.",
             "You control next tools. Prefer non-destructive proof. "
-            "crash_probe needs allow_crash_probes; http_proof needs allow_freeform_proof.",
+            "crash_probe needs allow_crash_probes; http_proof needs allow_freeform_proof; "
+            "exploit_request (any method + freeform body, authorized targets) needs "
+            "allow_exploit_requests. Only tools listed in the catalog are available.",
         ],
     }

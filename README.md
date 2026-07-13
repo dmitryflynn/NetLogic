@@ -29,6 +29,7 @@ NetLogic is a network security platform combining active port scanning, CVE corr
 | **AI Analysis** | OpenAI / Anthropic / OpenRouter / Ollama / Gemini / Groq / Kimi / Qwen — token-streaming SSE |
 | **Reasoning Engine** | Adaptive observe→reason→act loop with EvidenceGraph, hypothesis engine, confidence decay, provenance, scheduler, playbooks, change detection, active validation |
 | **Deep Probe** | Per-service agent architecture: ScoutAgent (recon), ProbeAgent (targeted CVE checks), Coordinator, Sandbox |
+| **AI Investigation Agent** | ReAct-style loop: after baseline sensors, the AI drives a curated, scope-gated, audited tool surface (~35 tools) to verify leads and build attack chains — with opt-in aggressive tools (crash probes, freeform proof, freeform exploit) for authorized targets |
 | **Verifier Engine** | AI-driven CVE re-verification: designs raw-HTTP probe plans from CVE context, executes via stdlib sockets |
 | **Multi-Host Orchestration** | Full scan pipeline per host → cross-host context and reachability matrix → attack chain discovery |
 | **AI Sensor Directors** | LLM decides which sensors to prioritise based on open ports, tech stack, and CVEs |
@@ -192,6 +193,45 @@ netlogic example.com --reason --active-validate
 netlogic example.com --deep-probe
 ```
 
+### AI Investigation Agent
+
+After baseline sensors run, an optional ReAct-style agent lets the AI **drive its own tools** to verify
+leads and build attack chains, instead of leaving version/banner CVE hits as unverified leads. The AI
+proposes tool calls; a deterministic runtime executes them — every tool is **scope-gated** to the target,
+sanitized, and recorded as an observation. The AI never touches the wire directly.
+
+```
+# AI chooses tools after baseline (needs --ai)
+netlogic example.com --ai --ai-agent
+
+# Depth mode — higher budgets, chases CVE leads + attack chains, blocks early stop
+netlogic example.com --ai --agent-depth --agent-max-steps 24 --agent-max-requests 80
+```
+
+The agent has ~35 read-only/safe-active tools by default: HTTP/TLS/DNS probes, `dir_enum`, `confirm_tech`,
+`timing_probe`, `cve_probe` (curated known-CVE marker checks), `sqli_boolean`/`sqli_time`, `ssrf_canary`,
+`idor_diff`, `file_disclosure`, `browser_get` (headless, passes JS challenges), plus HackerOne bookkeeping
+(`record_poc`, `severity_suggest`, `submit_readiness`).
+
+**Opt-in aggressive tools** — off by default, **AUTHORIZED / owned in-scope targets only** (never on a
+public or stranger scan). Each requires `--ai-agent`:
+
+| Flag | Tool | What it unlocks | Rails kept |
+|---|---|---|---|
+| `--allow-crash-probes` | `crash_probe` | Curated crash/DoS CVE checks (http.sys, MS15-034) that MAY crash the host | Fixed 3-CVE catalog — not freeform |
+| `--allow-freeform-proof` | `http_proof` | Tier C: freeform GET/HEAD/OPTIONS (+ POST on search/login/graphql-like paths) | Destructive patterns + PUT/PATCH/DELETE blocked; proof, not mutation |
+| `--allow-exploit-requests` | `exploit_request` | Tier E: **any method** (incl. PUT/PATCH/DELETE) + arbitrary path/headers/body against the target | Scope-gated; fail-closed on mass-destructive patterns (DROP/TRUNCATE TABLE, `rm -rf`) and CR/LF header injection; every request audited |
+
+The deterministic ActionGate keeps the core at `safe_active`; these three flags are the explicit, audited
+opt-ins above it. Example (owned lab box + local model):
+
+```
+netlogic YOUR_LAB_HOST --full --ai --ai-agent --agent-depth \
+  --allow-crash-probes --allow-exploit-requests \
+  --ai-provider ollama --ai-model gemma4:31b-cloud \
+  --ai-base-url http://localhost:11434/v1 --ai-key ollama
+```
+
 ### Authenticated scanning
 
 ```
@@ -203,16 +243,6 @@ netlogic example.com --ssh-user admin --ssh-pass SECRET
 
 # Custom SSH port
 netlogic example.com --ssh-user admin --ssh-key ~/.ssh/id_rsa --ssh-port 2222
-```
-
-### Vulnerability database management
-
-```
-
-
-# Full sync from NVD
-
-# Partial sync (first N products)
 ```
 
 ### Benchmark

@@ -270,6 +270,7 @@ class ToolRuntime:
         scope: list[str] | None = None,
         allow_crash_probes: bool = False,
         allow_freeform_proof: bool = False,
+        allow_exploit_requests: bool = False,
         http_fn: Callable | None = None,
         obs_counter_start: int = 0,
     ) -> None:
@@ -281,6 +282,10 @@ class ToolRuntime:
         # Tier C: freeform GET/HEAD/OPTIONS (+ allowlisted POST) proof payloads.
         # Still fail-closed on destructive patterns — never write/delete app data.
         self.allow_freeform_proof = bool(allow_freeform_proof)
+        # Tier E (opt-in, owned/in-scope targets only): freeform EXPLOIT requests — ANY method +
+        # arbitrary path/headers/body against the SCOPE-GATED target, audited. Still fail-closed on
+        # mass-destructive patterns and CR/LF header injection. Off by default.
+        self.allow_exploit_requests = bool(allow_exploit_requests)
         self._http_fn = http_fn  # injectable (tests)
         self._n = obs_counter_start
         self.findings: list[dict] = []
@@ -386,6 +391,17 @@ class ToolRuntime:
                     "Never PUT/PATCH/DELETE. Goal: expose a vuln signal, not mutate target data."
                 ),
             })
+        if self.allow_exploit_requests:
+            tools.append({
+                "name": "exploit_request", "risk": "exploit",
+                "args": (
+                    "method(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS),path,headers?,body?,port?,tls?,"
+                    "timeout?,expect_marker? — Tier E FREEFORM EXPLOIT (opt-in, AUTHORIZED/owned "
+                    "in-scope target ONLY). Any method + arbitrary path/headers/body. Still blocks "
+                    "mass-destructive patterns (DROP/TRUNCATE TABLE, rm -rf, …) and CR/LF header "
+                    "injection. Scope-gated + audited. Use to actively exploit/verify on YOUR target."
+                ),
+            })
         return tools
 
     def execute(self, tool: str, args: dict | None) -> ToolResult:
@@ -413,6 +429,7 @@ class ToolRuntime:
                 "file_disclosure": self._file_disclosure,
                 "smuggling_desync": self._smuggling_desync,
                 "http_proof": self._http_proof,
+                "exploit_request": self._exploit_request,
                 "record_poc": self._record_poc,
                 "scope_check": self._scope_check,
                 "severity_suggest": self._severity_suggest,
@@ -461,11 +478,17 @@ class ToolRuntime:
         return out
 
     def _do_http(self, method: str, path: str, headers: dict, body: str | None,
-                 port: int, tls: bool, timeout: float, *, allow_post: bool = False) -> dict:
+                 port: int, tls: bool, timeout: float, *, allow_post: bool = False,
+                 allow_any_method: bool = False) -> dict:
         # Default: GET/HEAD/OPTIONS only. Curated POST allowed only when allow_post=True
         # and body is an engine template (never free-form model payloads).
         method = (method or "GET").upper()
-        if method in ("GET", "HEAD", "OPTIONS"):
+        if allow_any_method:
+            # Freeform exploit request (opt-in, scope-gated, already destructive-filtered by the
+            # caller): honor any method and keep the (bounded) body — incl. PUT/PATCH/DELETE.
+            if body is not None:
+                body = str(body)[:65_536]
+        elif method in ("GET", "HEAD", "OPTIONS"):
             body = None
         elif method == "POST" and allow_post and body is not None:
             body = str(body)[:4096]
@@ -715,6 +738,89 @@ class ToolRuntime:
                 f"PROOF {method} {path} → HTTP {status}{sig}",
                 data=data, network=True,
             )
+        self.observations.append(tr.to_dict())
+        return tr
+
+    def _exploit_request(self, args: dict) -> ToolResult:
+        """Tier E freeform EXPLOIT request — opt-in (`allow_exploit_requests`), for AUTHORIZED
+        engagements on owned/in-scope targets ONLY.
+
+        Latitude: ANY HTTP method (incl. PUT/PATCH/DELETE) + arbitrary path/headers/body against the
+        scope-gated target. Rails kept: (1) fail-closed on mass-destructive patterns
+        (`is_destructive_payload`), (2) CR/LF/NUL header injection refused (`safe_exploit_headers`) so
+        the request can't split/smuggle out of scope, (3) the executor still only ever prefixes the
+        in-scope host:port. Every request is recorded as an observation (audit).
+        """
+        oid = self._oid()
+        if not self.allow_exploit_requests:
+            return ToolResult(
+                False, oid, "exploit_request",
+                "exploit_request disabled — set allow_exploit_requests (opt-in; owned/authorized "
+                "in-scope targets only)",
+                error="exploit requests not authorized", network=False,
+            )
+        method = san.safe_exploit_method(args.get("method") or "GET")
+        if method is None:
+            return ToolResult(False, oid, "exploit_request", "invalid HTTP method",
+                              error="method not allowed", network=False)
+        path = san.safe_path(args.get("path") or "/")
+        headers = san.safe_exploit_headers(args.get("headers"))
+        if path is None or headers is None:
+            return ToolResult(
+                False, oid, "exploit_request",
+                "invalid path or headers (absolute URL, control chars, or CR/LF injection)",
+                error="sanitize failed", network=False)
+        body = san.safe_exploit_body(args.get("body"))
+
+        # Rail 1: fail closed on mass-destructive patterns in path/headers/body.
+        hdr_blob = "\n".join(f"{k}: {v}" for k, v in (headers or {}).items())
+        bad, reason = san.is_destructive_payload(path, hdr_blob, body or "")
+        if bad:
+            return ToolResult(
+                False, oid, "exploit_request", f"blocked: {reason}",
+                error=reason, network=False,
+                data={"blocked": True, "reason": reason, "method": method, "path": path})
+
+        port = san.safe_port(args.get("port"), self.port)
+        tls = bool(args.get("tls", self.tls))
+        timeout = san.safe_timeout(args.get("timeout"), 8.0)
+        expect_marker = str(args.get("expect_marker") or args.get("marker") or "").strip()[:120]
+
+        resp = self._do_http(method, path, headers, body, port, tls, timeout, allow_any_method=True)
+        status = resp.get("status")
+        rbody = str(resp.get("body") or "")
+        low = rbody.lower()
+        rh_blob = " ".join(f"{k}: {v}" for k, v in (resp.get("headers") or {}).items())
+
+        signals: list[str] = []
+        if expect_marker and (expect_marker in rbody or expect_marker in rh_blob):
+            signals.append("expect_marker_reflected")
+        if status and int(status) >= 500:
+            signals.append("server_error")
+        if "sql" in low and any(x in low for x in ("syntax", "mysql", "postgresql", "odbc")):
+            signals.append("sql_error_leak")
+        if any(x in low for x in ("stack trace", "traceback", "exception in", "at com.", "at org.")):
+            signals.append("stack_trace_leak")
+        # A write method that the server ACCEPTS (2xx) is itself a signal on an authorized target.
+        if method in ("PUT", "PATCH", "DELETE", "POST") and status and 200 <= int(status) < 300:
+            signals.append(f"{method.lower()}_accepted")
+
+        vuln_classes = {"expect_marker_reflected", "server_error", "sql_error_leak",
+                        "stack_trace_leak", "put_accepted", "patch_accepted", "delete_accepted"}
+        vulnerable = bool(vuln_classes.intersection(signals))
+
+        data = {
+            **resp, "method": method, "path": path, "exploit_mode": True,
+            "body_sent": (body[:400] if body else None), "expect_marker": expect_marker or None,
+            "proof_signals": signals, "vulnerable_signal": vulnerable,
+        }
+        if resp.get("error"):
+            tr = ToolResult(False, oid, "exploit_request", f"{method} {path} → {resp['error']}",
+                            data=data, error=str(resp["error"]), network=True)
+        else:
+            sig = f" signals={signals}" if signals else ""
+            tr = ToolResult(True, oid, "exploit_request",
+                            f"EXPLOIT {method} {path} → HTTP {status}{sig}", data=data, network=True)
         self.observations.append(tr.to_dict())
         return tr
 

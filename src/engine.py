@@ -509,6 +509,7 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
                 max_requests=int(_g(args, "agent_max_requests", 40) or 40),
                 allow_crash_probes=bool(_g(args, "allow_crash_probes", False)),
                 allow_freeform_proof=bool(_g(args, "allow_freeform_proof", False)),
+                allow_exploit_requests=bool(_g(args, "allow_exploit_requests", False)),
                 depth_mode=_depth,
                 emit=_agent_emit,
             )

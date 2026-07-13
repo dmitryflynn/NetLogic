@@ -250,6 +250,7 @@ export default function ScanDetail() {
                 {job.config.agent_depth && <Flag label="Depth" />}
                 {job.config.allow_crash_probes && <Flag label="Crash probes" />}
                 {job.config.allow_freeform_proof && <Flag label="Freeform proof" />}
+                {job.config.allow_exploit_requests && <Flag label="Exploit requests" />}
               </dl>
             </div>
 

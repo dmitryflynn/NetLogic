@@ -85,6 +85,16 @@ class ScanRequest(BaseModel):
             "Requires do_ai_agent. Off by default."
         ),
     )
+    allow_exploit_requests: bool = Field(
+        False,
+        description=(
+            "Tier E: allow the AI's freeform exploit_request tool — ANY method (incl. "
+            "PUT/PATCH/DELETE) + arbitrary path/headers/body against the scope-gated target. "
+            "AUTHORIZED / owned in-scope targets ONLY. Still blocks mass-destructive patterns "
+            "(DROP/TRUNCATE TABLE, rm -rf, …) and CR/LF header injection; every request audited. "
+            "Requires do_ai_agent. Off by default."
+        ),
+    )
     agent_max_steps: int = Field(
         12, ge=1, le=40,
         description="Max AI agent reasoning turns (depth mode default floor is 24).",

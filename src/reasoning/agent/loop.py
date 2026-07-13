@@ -232,6 +232,7 @@ class InvestigationAgent:
         max_requests: int = 40,
         allow_crash_probes: bool = False,
         allow_freeform_proof: bool = False,
+        allow_exploit_requests: bool = False,
         depth_mode: bool = False,
         min_high_value: int | None = None,
         min_steps_before_stop: int | None = None,
@@ -241,6 +242,7 @@ class InvestigationAgent:
         self.depth_mode = bool(depth_mode)
         self.allow_crash_probes = allow_crash_probes
         self.allow_freeform_proof = bool(allow_freeform_proof)
+        self.allow_exploit_requests = bool(allow_exploit_requests)
         self.emit = emit or (lambda *a, **k: None)
 
         if self.depth_mode:
@@ -323,6 +325,7 @@ class InvestigationAgent:
             scope=scope or surface.get("scope") or [host],
             allow_crash_probes=self.allow_crash_probes,
             allow_freeform_proof=self.allow_freeform_proof,
+            allow_exploit_requests=self.allow_exploit_requests,
             http_fn=http_fn,
         )
         catalog = runtime.catalog()

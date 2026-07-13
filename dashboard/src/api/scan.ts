@@ -41,6 +41,7 @@ export interface ScanRequest {
   agent_depth?: boolean
   allow_crash_probes?: boolean
   allow_freeform_proof?: boolean
+  allow_exploit_requests?: boolean
   agent_max_steps?: number
   agent_max_requests?: number
   // Intelligent agent routing: require capabilities and/or pin to a vantage point

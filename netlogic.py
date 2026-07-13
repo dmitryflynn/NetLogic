@@ -99,6 +99,11 @@ def parse_args():
                    help="Tier C: allow freeform http_proof payloads (GET/query/headers; "
                         "POST only on search/login/graphql-like paths). Destructive patterns "
                         "and PUT/PATCH/DELETE stay blocked. Opt-in; requires --ai-agent.")
+    p.add_argument("--allow-exploit-requests", action="store_true",
+                   help="Tier E: allow the AI's freeform exploit_request tool — ANY method + "
+                        "arbitrary path/headers/body against the scope-gated target. AUTHORIZED / "
+                        "owned targets ONLY. Mass-destructive patterns + CR/LF injection stay "
+                        "blocked; every request audited. Opt-in; requires --ai-agent.")
     p.add_argument("--agent-max-steps", type=int, default=12,
                    help="Max AI agent reasoning turns (default: 12; depth mode floor 24)")
     p.add_argument("--agent-max-requests", type=int, default=40,
