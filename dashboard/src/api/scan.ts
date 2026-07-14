@@ -626,6 +626,11 @@ export async function exploreBeyond(jobId: string, finding: string): Promise<{ m
   return api.post(`/jobs/${jobId}/explore-beyond`, { finding })
 }
 
+/** On-demand: expand the executive AI report into a much more elaborate technical version. */
+export async function technicalAnalysis(jobId: string, executive: string): Promise<{ markdown: string; error?: string }> {
+  return api.post(`/jobs/${jobId}/technical-analysis`, { executive })
+}
+
 /** Download scan results as a file (JSON, Markdown, or RAW). */
 export async function downloadExport(jobId: string, fmt: 'json' | 'md' | 'raw', filename: string): Promise<void> {
   const token = window.Clerk?.session ? await window.Clerk.session.getToken() : null

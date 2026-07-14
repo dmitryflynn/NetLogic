@@ -764,13 +764,16 @@ def _call_anthropic(cfg: AIConfig, messages: list[dict]) -> AIAnalysis:
 
 # ─── Public entry point ───────────────────────────────────────────────────────
 
-def analyze(findings: dict, cfg: AIConfig) -> AIAnalysis:
-    """Send findings to the configured LLM and return an AIAnalysis (fail-soft)."""
+def analyze(findings: dict, cfg: AIConfig, *, messages: list[dict] | None = None) -> AIAnalysis:
+    """Send findings to the configured LLM and return an AIAnalysis (fail-soft).
+
+    `messages` overrides the default analysis-contract prompt with a raw system+user pair
+    (used by on-demand elaborations like the Technical deep-dive)."""
     usable, reason = cfg.is_usable()
     if not usable:
         return AIAnalysis(error=reason, model=cfg.model or "", provider=cfg.provider)
 
-    messages = _build_messages(findings)
+    messages = messages if messages is not None else _build_messages(findings)
 
     def _once() -> AIAnalysis:
         if cfg.api_style == "anthropic":
