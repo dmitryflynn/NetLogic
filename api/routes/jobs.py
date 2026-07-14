@@ -285,6 +285,66 @@ class ExploreBeyondIn(BaseModel):
     finding: str = Field(..., max_length=2000, description="The Beyond CVE finding text to elaborate on")
 
 
+class TechnicalAnalysisIn(BaseModel):
+    executive: str = Field("", max_length=40000, description="The executive AI report to expand into a deeper technical version")
+
+
+_TECHNICAL_SYSTEM = (
+    "You are a senior penetration tester writing the DETAILED TECHNICAL edition of a security "
+    "report for an engineer who will act on it. You are given the executive report from a completed, "
+    "AUTHORIZED scan. Rewrite it as a significantly MORE elaborate, deeply technical version of the "
+    "SAME findings. Do NOT invent new findings, CVEs, ports, services, or versions beyond what the "
+    "executive report states. For EVERY finding go much deeper: the exact affected component and "
+    "version, the underlying vulnerability mechanism (how and why it works), a concrete STEP-BY-STEP "
+    "proof-of-concept with the exact requests/commands to run, how to detect or confirm it, and "
+    "precise remediation (the exact version to upgrade to, config directive/value, or header — with "
+    "the command). Keep the same section structure but expand every section substantially. Keep any "
+    "hypotheses clearly labeled as hypotheses; never present an unverified lead as confirmed, and "
+    "never fabricate a CVE id. GitHub-Flavored Markdown only — no preamble, no sign-off."
+)
+
+
+@router.post("/{job_id}/technical-analysis", summary="Deeper, more technical version of the AI report")
+async def technical_analysis(
+    job_id: str,
+    body: TechnicalAnalysisIn,
+    request: Request,
+    org_id: str = Depends(require_org),
+) -> dict:
+    """Ask the AI to expand the executive report into a much more elaborate technical write-up."""
+    if not jobs_control_limiter.allow(org_id):
+        raise HTTPException(status_code=429, detail="Too many analysis requests. Slow down.")
+    job = _get_or_404(job_id, org_id)
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Scan must be completed first.")
+    executive = (body.executive or "").strip()
+    if not executive:
+        return {"markdown": "", "error": "No executive report available to expand yet."}
+
+    from src.ai_analyst import config_for_org, analyze  # noqa: PLC0415
+
+    cfg = config_for_org(org_id, role="ai").resolve()
+    usable, reason = cfg.is_usable()
+    if not usable:
+        if not cfg.provider:
+            reason = "No AI provider is configured. Go to Settings → AI to add an API key, then retry."
+        return {"markdown": "", "error": reason}
+
+    user = (
+        f"Executive report for the authorized scan of `{job.config.target}`:\n\n"
+        f"{executive[:38000]}\n\n"
+        "Write the expanded, deeply technical version now — go much deeper on every finding "
+        "(mechanism, step-by-step PoC, detection, exact remediation), without inventing new facts."
+    )
+    result = analyze({}, cfg, messages=[
+        {"role": "system", "content": _TECHNICAL_SYSTEM},
+        {"role": "user", "content": user},
+    ])
+    if result.error:
+        return {"markdown": "", "error": result.error}
+    return {"markdown": result.markdown}
+
+
 @router.post("/{job_id}/explore-beyond", summary="Elaborate on a Beyond Known CVEs finding")
 async def explore_beyond(
     job_id: str,

@@ -45,21 +45,6 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
   )
 }
 
-/** Split the AI-analyst markdown into its Executive-Summary section vs. the detailed technical
- *  sections (Findings/PoC/Attack Chains/Beyond CVEs/Remediation) for the Summary tabs. */
-function splitAiMarkdown(md: string): { exec: string; technical: string } {
-  const lines = (md || '').split('\n')
-  const exec: string[] = []
-  const tech: string[] = []
-  let cur: 'exec' | 'tech' = 'exec'      // content before the first ## goes with the exec summary
-  for (const line of lines) {
-    const h = /^##\s+(.*)$/.exec(line)
-    if (h) cur = h[1].trim().toLowerCase().startsWith('executive summary') ? 'exec' : 'tech'
-    ;(cur === 'exec' ? exec : tech).push(line)
-  }
-  return { exec: exec.join('\n').trim(), technical: tech.join('\n').trim() }
-}
-
 export default function ScanSections({ s, onExplore, exploreMd, exploring, view }: {
   s: ScanSections
   onExplore?: (finding: string) => void
@@ -241,22 +226,13 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring, view 
         </Panel>
       )}
 
-      {/* ── AI Analysis — Executive Summary (exec view) vs full technical breakdown (technical view) ── */}
-      {!inView('data') && s.ai && (s.ai.markdown || s.ai.error) && (() => {
-        if (s.ai.error) {
-          return <Panel title="AI Analyst"><p className="text-high">⚠ {s.ai.error}</p></Panel>
-        }
-        const { exec, technical } = splitAiMarkdown(s.ai.markdown ?? '')
-        // executive view → Executive Summary section; technical view → the detailed sections;
-        // no view (tests/legacy) → the whole report.
-        const md = view === 'executive' ? exec : view === 'technical' ? technical : (s.ai.markdown ?? '')
-        if (!md) return null
-        const title = view === 'technical' ? 'Technical Analysis' : 'Executive Summary'
-        const showExplore = view !== 'executive'   // Beyond-CVEs deep dives live in the technical view
-        return (
-        <Panel title={`${title}${s.ai.model ? ` · ${s.ai.provider}/${s.ai.model}` : ''}`}>
-          <Markdown text={md} onExplore={showExplore ? onExplore : undefined} exploring={exploring} />
-          {showExplore && exploreMd && Object.entries(exploreMd).length > 0 && (
+      {/* ── AI Analysis (Executive tab) — the full analyst report as-is ── */}
+      {inView('executive') && s.ai && (s.ai.markdown || s.ai.error) && (
+        <Panel title={`AI Analyst${s.ai.model ? ` · ${s.ai.provider}/${s.ai.model}` : ''}`}>
+          {s.ai.error
+            ? <p className="text-high">⚠ {s.ai.error}</p>
+            : <Markdown text={s.ai.markdown ?? ''} onExplore={onExplore} exploring={exploring} />}
+          {exploreMd && Object.entries(exploreMd).length > 0 && (
             <div ref={deepDiveRef} className="mt-3 border-t border-border pt-3 space-y-3">
               {Object.entries(exploreMd).map(([finding, dm]) => (
                 <div key={finding} className="border border-accent/20 rounded p-3 bg-elevated/50">
@@ -266,13 +242,12 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring, view 
               ))}
             </div>
           )}
-          {showExplore && exploring && <p className="text-[11px] text-text-dim mt-2 italic">⟐ Exploring…</p>}
+          {exploring && <p className="text-[11px] text-text-dim mt-2 italic">⟐ Exploring…</p>}
         </Panel>
-        )
-      })()}
+      )}
 
       {/* ── Findings detail (investigations) — open when it's the main technical list ── */}
-      {inView('technical') && (s.investigations?.length ?? 0) > 0 && (() => {
+      {inView('executive') && (s.investigations?.length ?? 0) > 0 && (() => {
         const adjudicated = s.investigations!.filter((iv) => iv.adjudicated_by_ai).length
         // Prefer investigations that reached a real verdict; UNVERIFIED pattern leads last
         const sorted = [...s.investigations!].sort((a, b) => {
@@ -574,7 +549,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring, view 
       )}
 
       {/* ── AI Investigation Agent (tool-driven) ── */}
-      {inView('technical') && s.aiAgent && ((s.aiAgent.findings?.length ?? 0) > 0 || (s.aiAgent.turns?.length ?? 0) > 0 || (s.aiAgent.chains?.length ?? 0) > 0) && (
+      {inView('executive') && s.aiAgent && ((s.aiAgent.findings?.length ?? 0) > 0 || (s.aiAgent.turns?.length ?? 0) > 0 || (s.aiAgent.chains?.length ?? 0) > 0) && (
         <Panel title="AI Investigation Agent" collapsible defaultOpen={(s.aiAgent.confirmed ?? 0) > 0 || !!s.aiAgent.depth_mode}
                subtitle={`${s.aiAgent.depth_mode ? 'depth · ' : ''}${s.aiAgent.confirmed ?? 0} confirmed · ${s.aiAgent.high_value_used ?? 0} high-value · ${s.aiAgent.steps_used ?? 0} steps`}>
           <p className="text-[11px] text-text-dim mb-2">

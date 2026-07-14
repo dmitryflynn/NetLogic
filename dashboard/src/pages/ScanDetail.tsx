@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useJob, useCancelJob, useStreamScan, extractSections, exploreBeyond, downloadExport, type PortEvent, type VulnEvent } from '../api/scan'
+import { useJob, useCancelJob, useStreamScan, extractSections, exploreBeyond, technicalAnalysis, downloadExport, type PortEvent, type VulnEvent } from '../api/scan'
 import StatusBadge from '../components/StatusBadge'
 import PortTable from '../components/PortTable'
 import ScanFeed from '../components/ScanFeed'
 import ScanSections from '../components/ScanSections'
+import Markdown from '../components/Markdown'
 
 function fmtDate(ts: number | null) {
   return ts ? new Date(ts * 1000).toLocaleString() : '—'
@@ -86,6 +87,22 @@ export default function ScanDetail() {
   // Tabs: Summary (Executive | Technical) vs Data. Live scans open on Data (the live stream).
   const [tab, setTab] = useState<'summary' | 'data'>(live ? 'data' : 'summary')
   const [subTab, setSubTab] = useState<'executive' | 'technical'>('executive')
+
+  // Technical Summary = a deeper AI writeup, generated on-demand the first time the tab is opened.
+  const [technicalMd, setTechnicalMd] = useState<string>('')
+  const [technicalErr, setTechnicalErr] = useState<string>('')
+  const [technicalLoading, setTechnicalLoading] = useState(false)
+  const execMarkdown = sections.ai?.markdown ?? ''
+  useEffect(() => {
+    if (tab !== 'summary' || subTab !== 'technical') return
+    if (technicalMd || technicalLoading || technicalErr) return
+    if (!id || !execMarkdown) return
+    setTechnicalLoading(true)
+    technicalAnalysis(id, execMarkdown)
+      .then((r) => { r.error ? setTechnicalErr(r.error) : setTechnicalMd(r.markdown || '') })
+      .catch(() => setTechnicalErr('Failed to generate the technical analysis.'))
+      .finally(() => setTechnicalLoading(false))
+  }, [tab, subTab, id, execMarkdown, technicalMd, technicalLoading, technicalErr])
   async function onExplore(finding: string) {
     if (!id) return
     if (exploreMd[finding]) return  // already loaded
@@ -203,7 +220,28 @@ export default function ScanDetail() {
                   Technical Summary
                 </SubTabBtn>
               </div>
-              <ScanSections s={sections} view={subTab} onExplore={onExplore} exploreMd={exploreMd} exploring={exploring} />
+              {subTab === 'executive' ? (
+                <ScanSections s={sections} view="executive" onExplore={onExplore} exploreMd={exploreMd} exploring={exploring} />
+              ) : (
+                <>
+                  <p className="text-[11px] text-text-dim">
+                    A deeper, more technical version of the executive report — expanded mechanism,
+                    step-by-step PoC, and exact remediation for every finding (AI-generated on demand).
+                  </p>
+                  {technicalLoading && (
+                    <p className="text-text-dim text-[12px] italic">⟐ Generating a deeper technical analysis…</p>
+                  )}
+                  {technicalErr && <p className="text-high text-[12px]">⚠ {technicalErr}</p>}
+                  {technicalMd && (
+                    <section className="panel border border-border rounded-lg p-4">
+                      <Markdown text={technicalMd} />
+                    </section>
+                  )}
+                  {!technicalLoading && !technicalErr && !technicalMd && !execMarkdown && (
+                    <p className="text-text-dim text-[12px]">No AI report available to expand — enable AI on the scan.</p>
+                  )}
+                </>
+              )}
             </>
           ) : (
             <>
