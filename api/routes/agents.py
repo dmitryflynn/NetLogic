@@ -260,7 +260,7 @@ async def complete_task(
         raise HTTPException(status_code=403, detail="Job does not belong to this agent.")
 
     # Ignore completion calls for jobs already in a terminal state (e.g. cancelled).
-    if job.status not in ("running", "queued"):
+    if job.status != "running":
         agent_registry.mark_done(agent_id, job_id)
         return {"job_id": job_id, "status": job.status}
 

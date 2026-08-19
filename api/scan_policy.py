@@ -11,12 +11,16 @@ import ipaddress
 import os
 import socket
 
-# Hostnames that always resolve to sensitive infrastructure regardless of IP.
+# Hostnames blocked in SaaS mode (loopback aliases + cloud metadata).
 _BLOCKED_HOSTNAMES = frozenset({
     "metadata.google.internal",
     "metadata.goog",
     "metadata",
     "instance-data",
+    "localhost",
+    "localhost.localdomain",
+    "ip6-localhost",
+    "ip6-loopback",
 })
 
 # Supernets blocked in SaaS mode (IPv4 + IPv6 private/link-local/CGNAT/etc.).
@@ -114,7 +118,10 @@ def _check_literal_target(target: str) -> str | None:
         pass
 
     labels = target.lower().rstrip(".").split(".")
-    if labels and labels[0] in _BLOCKED_HOSTNAMES or target.lower().rstrip(".") in _BLOCKED_HOSTNAMES:
+    host_lower = target.lower().rstrip(".")
+    if host_lower in _BLOCKED_HOSTNAMES:
+        return f"Scan target {target!r} is not permitted in hosted mode."
+    if labels and labels[0] in _BLOCKED_HOSTNAMES:
         return f"Scan target {target!r} is not permitted in hosted mode."
 
     return None
@@ -129,10 +136,12 @@ def validate_scan_target(target: str) -> None:
     if err:
         raise ValueError(err)
 
-    # Hostname: also reject if DNS resolves exclusively to restricted addresses.
+    # Hostname: reject if DNS fails (fail-closed) or resolves to restricted addresses.
     ips = _resolve_host_ips(target)
     if not ips:
-        return  # unresolved public hostname — allow (scan will fail safely at runtime)
+        raise ValueError(
+            f"Scan target {target!r} could not be resolved and is not permitted in hosted mode."
+        )
 
     restricted = [ip for ip in ips if _is_restricted_ip(ipaddress.ip_address(ip))]
     if restricted:

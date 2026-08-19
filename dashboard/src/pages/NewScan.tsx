@@ -1,4 +1,4 @@
-import { useState, FormEvent } from 'react'
+import { useState, FormEvent, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useCreateJob, useAgents, useAiSettings, type ScanRequest } from '../api/scan'
 
@@ -86,6 +86,16 @@ export default function NewScan() {
       do_active_validate: on, do_ai_driven: on, do_ai_agent: on, agent_depth: on,
     }))
   }
+
+  // Keep the master Phase Test checkbox in sync when individual flags change.
+  useEffect(() => {
+    const allOn = Boolean(
+      form.do_reason && form.do_since_last && form.do_multi_host
+      && form.do_active_validate && form.do_ai_driven && form.do_ai_agent && form.agent_depth
+    )
+    setPhaseTest(allOn)
+  }, [form.do_reason, form.do_since_last, form.do_multi_host, form.do_active_validate,
+      form.do_ai_driven, form.do_ai_agent, form.agent_depth])
 
   async function submit(e: FormEvent) {
     e.preventDefault()

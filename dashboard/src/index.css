@@ -3,9 +3,12 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --bg-canvas: #06080d;
+  }
+
   html, body, #root {
-    @apply h-full bg-base text-text font-mono text-[13px];
-    -webkit-font-smoothing: antialiased;
+    @apply h-full bg-base text-text font-sans text-[13px] antialiased;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -18,27 +21,60 @@
 
 @layer components {
   .btn {
-    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded text-[12px] font-medium
+    @apply inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-[12px] font-medium
            border border-border bg-surface text-text
-           hover:bg-elevated hover:border-text-dim
-           transition-colors duration-150 cursor-pointer;
+           hover:bg-elevated hover:border-text-dim/40
+           transition-all duration-150 cursor-pointer;
   }
   .btn-primary {
-    @apply bg-accent text-base border-accent font-semibold
+    @apply bg-accent text-base border-accent/80 font-semibold shadow-glow
            hover:brightness-110 hover:border-accent;
   }
   .btn-danger {
     @apply border-critical/40 text-critical hover:bg-critical/10;
   }
   .input {
-    @apply w-full bg-surface border border-border rounded px-3 py-1.5 text-text-bright text-[12px]
-           focus:outline-none focus:border-accent
+    @apply w-full bg-surface border border-border rounded-lg px-3 py-2 text-text-bright text-[13px]
+           focus:outline-none focus:border-accent/60 focus:ring-1 focus:ring-accent/20
            transition-colors duration-150 placeholder:text-text-dim;
   }
   .panel {
-    @apply bg-panel border border-border rounded-lg;
+    @apply bg-panel border border-border rounded-xl shadow-panel;
+  }
+  .card {
+    @apply panel p-5;
   }
   .section-title {
-    @apply text-[10px] font-bold tracking-[0.14em] uppercase text-text-dim;
+    @apply text-[11px] font-semibold tracking-[0.12em] uppercase text-text-dim;
+  }
+  .page-header {
+    @apply mb-6;
+  }
+  .page-title {
+    @apply font-display font-semibold text-xl text-text-bright tracking-tight;
+  }
+  .page-subtitle {
+    @apply text-text-dim text-[13px] mt-1 max-w-2xl leading-relaxed;
+  }
+  .stat-card {
+    @apply panel px-4 py-3 min-w-[8rem];
+  }
+  .nav-item {
+    @apply flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors;
+  }
+  .nav-item-active {
+    @apply bg-accent/10 text-accent border border-accent/20;
+  }
+  .nav-item-idle {
+    @apply text-text-dim hover:text-text hover:bg-elevated/80;
+  }
+  .data-table th {
+    @apply pb-3 text-left text-[11px] font-semibold uppercase tracking-wider text-text-dim;
+  }
+  .data-table td {
+    @apply py-3 pr-4 align-middle;
+  }
+  .data-table tbody tr {
+    @apply border-b border-border/40 hover:bg-elevated/40 transition-colors;
   }
 }
