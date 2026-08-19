@@ -82,10 +82,12 @@ def validate_license_key(key: str) -> Optional[dict]:
         if key in [k.strip() for k in valid_env.split(",") if k.strip()]:
             return {"plan": "pro", "valid": True}
 
-    # Stub: keys starting with NL- (at least 10 chars) are treated as valid.
-    # Replace this with a real check before shipping to production.
-    if key.upper().startswith("NL-") and len(key) >= 10:
-        return {"plan": "pro", "valid": True}
+    # Stub: keys starting with NL- (at least 10 chars) are treated as valid in
+    # non-production only. Replace with a real check before shipping to production.
+    env = (os.environ.get("NETLOGIC_ENV") or "").strip().lower()
+    if env not in ("production", "prod"):
+        if key.upper().startswith("NL-") and len(key) >= 10:
+            return {"plan": "pro", "valid": True}
 
     return None
 
