@@ -17,9 +17,9 @@ export default class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.error) {
       return (
-        <div className="min-h-screen flex items-center justify-center bg-base">
-          <div className="panel w-full max-w-lg p-8 space-y-4 rounded-xl text-center">
-            <h2 className="text-text-bright font-bold text-lg">Something went wrong</h2>
+        <div className="min-h-screen flex items-center justify-center site-bg">
+          <div className="glass w-full max-w-lg p-8 space-y-4 rounded-2xl text-center">
+            <h2 className="font-serif text-text-bright font-semibold text-xl">Something went wrong</h2>
             <p className="text-text-dim text-[13px]">{this.state.error.message}</p>
             <div className="flex gap-3 justify-center">
               <button

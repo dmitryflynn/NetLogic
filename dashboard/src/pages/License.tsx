@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api/client'
 import { useQueryClient } from '@tanstack/react-query'
+import { Brand } from '../components/Brand'
 
 export default function License() {
   const [key, setKey]       = useState('')
@@ -24,14 +25,16 @@ export default function License() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-base">
-      <div className="panel w-full max-w-md p-8 space-y-6 rounded-xl">
-        <div className="text-center space-y-1">
-          <h1 className="font-display font-bold text-2xl text-text-bright tracking-wide">NetLogic</h1>
-          <p className="text-text-dim text-sm">License Required</p>
+    <div className="min-h-screen site-bg relative flex items-center justify-center px-6">
+      <div className="site-grid pointer-events-none absolute inset-0" />
+      <div className="site-noise pointer-events-none absolute inset-0" />
+      <div className="relative z-10 glass-strong w-full max-w-md p-9 space-y-7 rounded-2xl">
+        <div className="text-center space-y-2">
+          <Brand size="md" />
+          <p className="text-text-dim text-[14px]">License required</p>
         </div>
 
-        <p className="text-text-dim text-[13px] leading-relaxed">
+        <p className="text-text-dim text-[14px] leading-relaxed">
           A valid license is required to access NetLogic.{' '}
           <a
             href="https://netlogic.io/pricing"
@@ -45,9 +48,7 @@ export default function License() {
 
         <form onSubmit={activate} className="space-y-4">
           <div>
-            <label className="text-[11px] text-text-dim uppercase tracking-wide block mb-1">
-              License Key
-            </label>
+            <label className="section-title block mb-2">License key</label>
             <input
               className="input w-full font-mono tracking-widest"
               placeholder="NL-XXXX-XXXX-XXXX"
@@ -57,13 +58,13 @@ export default function License() {
               spellCheck={false}
             />
           </div>
-          {error && <p className="text-[12px] text-critical">{error}</p>}
+          {error && <p className="text-[13px] text-critical">{error}</p>}
           <button
             type="submit"
             className="btn btn-primary w-full"
             disabled={loading || !key.trim()}
           >
-            {loading ? 'Activating…' : 'Activate License'}
+            {loading ? 'Activating…' : 'Activate license'}
           </button>
         </form>
       </div>
