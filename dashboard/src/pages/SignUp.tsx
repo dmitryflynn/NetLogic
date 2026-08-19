@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { SignUp } from '@clerk/clerk-react'
 import { Link } from 'react-router-dom'
+import { Brand } from '../components/Brand'
 
 /**
  * Sign-up screen — Clerk owns account creation (verification, MFA, passkeys).
@@ -15,23 +16,22 @@ export default function SignUpPage() {
   const [agreed, setAgreed] = useState(false)
 
   return (
-    <div className="min-h-full flex flex-col items-center justify-center bg-base gap-6 py-10">
-      <div className="text-center space-y-1">
-        <p className="font-display font-semibold text-xl text-text-bright tracking-tight">
-          Net<span className="text-accent">Logic</span>
-        </p>
-        <p className="text-text-dim text-[11px]">Attack Surface Intelligence</p>
+    <div className="min-h-full site-bg relative flex flex-col items-center justify-center gap-8 py-12 px-6">
+      <div className="site-grid pointer-events-none absolute inset-0" />
+      <div className="site-noise pointer-events-none absolute inset-0" />
+      <div className="relative z-10">
+        <Brand size="md" subtitle />
       </div>
 
       {!agreed ? (
-        <div className="panel p-5 max-w-sm w-full space-y-4">
-          <p className="section-title">Before you create an account</p>
-          <label className="flex items-start gap-2.5 text-[12px] text-text-dim cursor-pointer select-none">
+        <div className="relative z-10 glass-strong p-7 max-w-md w-full space-y-5 rounded-2xl">
+          <p className="font-serif text-xl text-text-bright">Before you create an account</p>
+          <label className="flex items-start gap-3 text-[14px] text-text-dim cursor-pointer select-none leading-relaxed">
             <input
               type="checkbox"
               checked={agreed}
               onChange={(e) => setAgreed(e.target.checked)}
-              className="accent-accent mt-0.5"
+              className="accent-accent mt-1"
             />
             <span>
               I have read and agree to the{' '}
@@ -51,23 +51,23 @@ export default function SignUpPage() {
           </button>
         </div>
       ) : (
-        <>
+        <div className="relative z-10 glass-strong rounded-2xl p-2 w-full max-w-[420px]">
           <SignUp
             routing="path"
             path="/sign-up"
             signInUrl="/login"
             forceRedirectUrl="/"
           />
-          <p className="text-center text-text-dim text-[10px] max-w-sm">
+          <p className="text-center text-text-dim text-[12px] max-w-sm mx-auto pb-4 px-4">
             By creating an account you agree to the{' '}
             <Link to="/terms" className="text-accent hover:underline">Terms of Service</Link>{' '}
             and{' '}
             <Link to="/privacy" className="text-accent hover:underline">Privacy Policy</Link>.
           </p>
-        </>
+        </div>
       )}
 
-      <p className="text-center text-text-dim text-[10px]">For authorized use only</p>
+      <p className="relative z-10 text-center text-text-dim text-[12px]">Authorized use only</p>
     </div>
   )
 }

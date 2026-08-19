@@ -36,7 +36,7 @@ export default function Dashboard() {
             </p>
           </div>
           <Link to="/scans/new" className="btn btn-primary shrink-0">
-            + New Scan
+            New scan
           </Link>
         </div>
       </div>

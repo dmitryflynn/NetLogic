@@ -131,10 +131,8 @@ export default function NewScan() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-6 py-6 space-y-6">
-      <h2 className="font-display font-bold text-lg text-text-bright tracking-wide">
-        New Scan
-      </h2>
+    <div className="max-w-2xl mx-auto px-8 py-10 space-y-6">
+      <h1 className="page-title">New scan</h1>
 
       {err && (
         <div className="flex items-start justify-between gap-3 text-critical text-[12px] bg-critical/10 border border-critical/30 rounded px-3 py-2">

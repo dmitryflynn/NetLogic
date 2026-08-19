@@ -30,12 +30,11 @@ function RequireLicense({ children }: { children: React.ReactNode }) {
   })
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-base">
-        <div className="text-center space-y-3">
-          <p className="font-display font-semibold text-xl text-text-bright tracking-tight">
-            Net<span className="text-accent">Logic</span>
-          </p>
-          <p className="text-text-dim text-[12px]">Loading…</p>
+      <div className="min-h-screen site-bg relative flex items-center justify-center">
+        <div className="site-grid pointer-events-none absolute inset-0" />
+        <div className="text-center space-y-3 relative z-10">
+          <p className="font-serif text-2xl font-semibold text-text-bright tracking-[-0.03em]">NetLogic</p>
+          <p className="text-text-dim text-[13px]">Loading…</p>
         </div>
       </div>
     )

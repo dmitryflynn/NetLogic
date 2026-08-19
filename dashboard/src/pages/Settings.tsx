@@ -173,10 +173,10 @@ function AiSection() {
 
 export default function Settings() {
   return (
-    <div className="max-w-2xl mx-auto px-6 py-6 space-y-6">
-      <div>
-        <h2 className="font-display font-bold text-lg text-text-bright tracking-wide">Settings</h2>
-        <p className="text-text-dim text-[12px] mt-1">
+    <div className="max-w-2xl mx-auto px-8 py-10 space-y-6">
+      <div className="page-header">
+        <h1 className="page-title">Settings</h1>
+        <p className="page-subtitle">
           Configure the AI provider. The key is stored on the server and never displayed again.
         </p>
       </div>
