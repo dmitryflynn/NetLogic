@@ -196,7 +196,7 @@ export default function TargetTimeline() {
       <div className="flex items-center justify-between">
         <div>
           <Link to="/targets" className="text-accent text-[12px] hover:underline">← All targets</Link>
-          <h2 className="font-display font-bold text-lg text-text-bright tracking-wide mt-1 font-mono">{decoded}</h2>
+          <h2 className="font-serif font-semibold text-xl text-text-bright tracking-[-0.02em] mt-1 font-mono">{decoded}</h2>
           <p className="text-text-dim text-[12px]">
             {completedScans.length} scan{completedScans.length === 1 ? '' : 's'}
             {running.length > 0 && <> · <span className="text-accent">{running.length} in progress</span></>}

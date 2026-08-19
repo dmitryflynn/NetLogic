@@ -133,11 +133,11 @@ export default function ScanDetail() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="shrink-0 px-6 py-3 border-b border-border bg-panel flex items-center gap-4">
-        <button onClick={() => nav('/')} className="text-text-dim hover:text-text text-[12px]">
+      <div className="shrink-0 mx-6 mt-5 px-5 py-4 glass rounded-xl flex items-center gap-4">
+        <button onClick={() => nav('/')} className="text-text-dim hover:text-text text-[13px]">
           ← Back
         </button>
-        <span className="font-display font-bold text-text-bright tracking-wide">{job.target}</span>
+        <span className="font-serif text-[1.15rem] font-semibold text-text-bright tracking-[-0.02em]">{job.target}</span>
         <StatusBadge status={job.status} />
         {streaming && (
           <span className="text-accent text-[11px] animate-pulse">● Live</span>
@@ -182,7 +182,7 @@ export default function ScanDetail() {
 
       {/* Tab bar — Summary vs Data */}
       {job.status !== 'queued' && (
-        <div className="shrink-0 px-6 border-b border-border bg-panel flex items-center gap-1">
+        <div className="shrink-0 mx-6 px-2 flex items-center gap-1">
           <TabBtn active={tab === 'summary'} onClick={() => setTab('summary')}>Summary</TabBtn>
           <TabBtn active={tab === 'data'} onClick={() => setTab('data')}>Data</TabBtn>
         </div>
@@ -285,7 +285,7 @@ export default function ScanDetail() {
         </div>
 
         {/* Sidebar */}
-        <aside className="w-56 shrink-0 border-l border-border bg-panel overflow-y-auto">
+        <aside className="w-56 shrink-0 border-l border-white/5 overflow-y-auto bg-black/10">
           <div className="p-4 space-y-4">
             <div>
               <p className="section-title mb-2">Scan Info</p>

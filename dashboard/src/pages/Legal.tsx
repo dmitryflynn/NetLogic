@@ -9,8 +9,8 @@ import { TERMS_MD, PRIVACY_MD } from '../legal'
  */
 function LegalDoc({ md }: { md: string }) {
   return (
-    <div className="min-h-full bg-base">
-      <div className="max-w-3xl mx-auto px-6 py-10">
+    <div className="min-h-full site-bg">
+      <div className="max-w-3xl mx-auto px-6 py-12">
         <Link to="/sign-up" className="text-accent text-[12px] hover:underline">← Back to sign-up</Link>
         <div className="mt-6 text-text-dim text-[13px] leading-relaxed legal-doc">
           <Markdown text={md} />
