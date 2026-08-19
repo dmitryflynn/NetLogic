@@ -290,7 +290,7 @@ export default function ScanDetail() {
         </div>
 
         {/* Sidebar */}
-        <aside className="w-56 shrink-0 border-l border-white/5 overflow-y-auto bg-black/10">
+        <aside className="w-56 shrink-0 border-l border-border overflow-y-auto bg-base/40">
           <div className="p-4 space-y-4">
             <div>
               <p className="section-title mb-2">Scan Info</p>

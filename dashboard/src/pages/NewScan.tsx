@@ -1,7 +1,7 @@
 import { useState, FormEvent, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useCreateJob, useAgents, useAiSettings, type ScanRequest } from '../api/scan'
-import { ChapterLabel } from '../components/Console'
+import { ChapterLabel, ConsoleFrame } from '../components/Console'
 
 const DEFAULT: ScanRequest = {
   target:      '',
@@ -134,7 +134,10 @@ export default function NewScan() {
   return (
     <div className="max-w-2xl mx-auto px-8 py-10 space-y-6">
       <ChapterLabel chapter="01" title="new scan" />
-      <h1 className="page-title">New scan</h1>
+      <div>
+        <h1 className="page-title">New scan</h1>
+        <p className="page-subtitle">Collect, classify, adjudicate, report. Evidence attached — or it doesn't ship.</p>
+      </div>
 
       {err && (
         <div className="flex items-start justify-between gap-3 text-critical text-[12px] bg-critical/10 border border-critical/30 rounded px-3 py-2">
@@ -149,6 +152,8 @@ export default function NewScan() {
         </div>
       )}
 
+      <ConsoleFrame title="netlogic · compose scan" meta="read-only by default">
+      <div className="p-4 space-y-5">
       <form onSubmit={submit} className="space-y-5">
         {/* Target */}
         <div className="panel p-4 space-y-3">
@@ -492,6 +497,8 @@ export default function NewScan() {
           </button>
         </div>
       </form>
+      </div>
+      </ConsoleFrame>
     </div>
   )
 }
