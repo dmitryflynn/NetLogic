@@ -374,17 +374,27 @@ class ScanRequest(BaseModel):
                 )
         return self
 
-    def public_dump(self) -> dict:
-        """Return API-safe config with AI secrets masked."""
-        data = self.model_dump(mode="json")
-        if self.ai_key:
-            data["ai_key"] = "**********"
+    @model_validator(mode="after")
+    def _validate_saas_scan_target(self) -> "ScanRequest":
+        from api.scan_policy import validate_scan_target  # noqa: PLC0415
+        validate_scan_target(self.target)
+        return self
+
+    def _redact_secrets(self, data: dict) -> dict:
+        """Strip credential fields from a serialised config dict."""
+        data["ai_key"] = "**********" if self.ai_key else ""
+        data["ssh_pass"] = "**********" if self.ssh_pass else ""
         return data
 
+    def public_dump(self) -> dict:
+        """Return API-safe config with secrets masked."""
+        return self._redact_secrets(self.model_dump(mode="json"))
+
     def persisted_dump(self) -> dict:
-        """Return disk-safe config; per-scan AI keys are never persisted."""
+        """Return disk-safe config; per-scan secrets are never persisted."""
         data = self.model_dump(mode="json")
         data["ai_key"] = ""
+        data["ssh_pass"] = ""
         return data
 
     def task_dump(self) -> dict:
