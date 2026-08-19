@@ -1,6 +1,7 @@
 import { useState, FormEvent, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useCreateJob, useAgents, useAiSettings, type ScanRequest } from '../api/scan'
+import { ChapterLabel } from '../components/Console'
 
 const DEFAULT: ScanRequest = {
   target:      '',
@@ -132,6 +133,7 @@ export default function NewScan() {
 
   return (
     <div className="max-w-2xl mx-auto px-8 py-10 space-y-6">
+      <ChapterLabel chapter="01" title="new scan" />
       <h1 className="page-title">New scan</h1>
 
       {err && (

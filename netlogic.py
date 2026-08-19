@@ -610,6 +610,32 @@ def run_cidr(cidr, args):
                              os.path.join(args.out, f"netlogic_{hr.ip}_{ts}.json"))
 
 
+def _dashboard_needs_build(dash_dir: Path, dist_dir: Path) -> bool:
+    """True when dist is missing or dashboard source is newer than the last build."""
+    built = dist_dir / "index.html"
+    if not built.exists():
+        return True
+    dist_mtime = built.stat().st_mtime
+    watch = (
+        dash_dir / "src",
+        dash_dir / "index.html",
+        dash_dir / "tailwind.config.ts",
+        dash_dir / "vite.config.ts",
+        dash_dir / "package.json",
+    )
+    for path in watch:
+        if not path.exists():
+            continue
+        if path.is_file():
+            if path.stat().st_mtime > dist_mtime:
+                return True
+            continue
+        for child in path.rglob("*"):
+            if child.is_file() and child.stat().st_mtime > dist_mtime:
+                return True
+    return False
+
+
 def run_gui():
     """Start the web dashboard (blocking)."""
     CONFIG_DIR   = Path.home() / ".netlogic"
@@ -650,21 +676,21 @@ def run_gui():
     # dashboard opens in exactly ONE window, not two.
     os.environ["NETLOGIC_NO_BROWSER"] = "1"
 
-    # ── Build dashboard if needed ──
-    if not (DIST_DIR / "index.html").exists():
-        dash_dir = Path(__file__).parent / "dashboard"
-        if dash_dir.exists():
-            print("[netlogic] Building dashboard for the first time (~30 s)...")
-            try:
-                subprocess.run("npm install", cwd=dash_dir, shell=True, check=True,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run("npm run build", cwd=dash_dir, shell=True, check=True,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                print("[netlogic] Dashboard ready.")
-            except subprocess.CalledProcessError:
-                print("[netlogic] Warning: dashboard build failed — API-only mode.")
-            except FileNotFoundError:
-                print("[netlogic] Warning: npm not found — install Node.js for the dashboard.")
+    # ── Build dashboard if missing or source is newer than dist ──
+    dash_dir = Path(__file__).parent / "dashboard"
+    if dash_dir.exists() and _dashboard_needs_build(dash_dir, DIST_DIR):
+        first = not (DIST_DIR / "index.html").exists()
+        print("[netlogic] Building dashboard" + (" for the first time (~30 s)..." if first else " (source changed)…"))
+        try:
+            subprocess.run("npm install", cwd=dash_dir, shell=True, check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run("npm run build", cwd=dash_dir, shell=True, check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print("[netlogic] Dashboard ready.")
+        except subprocess.CalledProcessError:
+            print("[netlogic] Warning: dashboard build failed — API-only mode.")
+        except FileNotFoundError:
+            print("[netlogic] Warning: npm not found — install Node.js for the dashboard.")
 
     port = int(os.environ.get("NETLOGIC_PORT", "8000"))
     host = os.environ.get("NETLOGIC_HOST", "0.0.0.0")

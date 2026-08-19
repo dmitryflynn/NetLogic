@@ -4,6 +4,7 @@ import {
   useAiSettings, useSaveAiSettings, useTestAiSettings,
   type AiSettings, type AiSettingsUpdate,
 } from '../api/scan'
+import { ChapterLabel } from '../components/Console'
 
 type SaveMut = UseMutationResult<AiSettings, Error, AiSettingsUpdate>
 type TestMut = UseMutationResult<{ ok: boolean; error?: string; provider?: string; model?: string }, Error, void>
@@ -175,7 +176,8 @@ export default function Settings() {
   return (
     <div className="max-w-2xl mx-auto px-8 py-10 space-y-6">
       <div className="page-header">
-        <h1 className="page-title">Settings</h1>
+        <ChapterLabel chapter="04" title="settings" />
+        <h1 className="page-title mt-5">Settings</h1>
         <p className="page-subtitle">
           Configure the AI provider. The key is stored on the server and never displayed again.
         </p>
