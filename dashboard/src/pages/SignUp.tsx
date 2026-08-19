@@ -82,10 +82,10 @@ export default function SignUpPage() {
         </div>
       )}
 
-      <p className="relative z-10 text-center text-[13px] font-mono tracking-[0.08em]">
-        <Link to="/terms" className="text-accent hover:underline">terms</Link>
+      <p className="relative z-10 text-center text-[14px]">
+        <Link to="/terms" className="text-accent hover:underline underline-offset-2">terms</Link>
         <span className="text-text-dim"> · </span>
-        <Link to="/privacy" className="text-accent hover:underline">privacy</Link>
+        <Link to="/privacy" className="text-accent hover:underline underline-offset-2">privacy</Link>
       </p>
     </div>
   )
