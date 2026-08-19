@@ -159,13 +159,14 @@ export default function Agents() {
   const [showModal, setShowModal] = useState(false)
 
   return (
-    <div className="px-6 py-6 space-y-4">
+    <div className="px-8 py-10 space-y-6">
       {showModal && <RegisterModal onClose={() => setShowModal(false)} />}
 
-      <div className="flex items-center justify-between">
-        <h2 className="font-display font-bold text-lg text-text-bright tracking-wide">
-          Remote Agents
-        </h2>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="page-title">Agents</h1>
+          <p className="page-subtitle">Remote scanners that execute jobs on your network.</p>
+        </div>
         <div className="flex items-center gap-3">
           <span className="text-text-dim text-[11px]">
             {agents.filter((a) => a.status === 'online' || a.status === 'busy').length} / {agents.length} online
