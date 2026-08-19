@@ -4,7 +4,7 @@ import { Brand } from '../components/Brand'
 
 export default function Login() {
   return (
-    <div className="min-h-full overflow-hidden site-bg relative flex">
+    <div className="min-h-full overflow-x-hidden site-bg relative flex">
       <div className="site-grid pointer-events-none absolute inset-0" />
       <div className="site-noise pointer-events-none absolute inset-0" />
       <div className="radar" aria-hidden>
@@ -19,10 +19,12 @@ export default function Login() {
       <div className="relative z-10 hidden lg:flex lg:w-[48%] flex-col justify-between p-14">
         <Brand size="md" subtitle />
         <div className="max-w-lg space-y-8">
-          <h1 className="font-display text-[2.65rem] font-bold text-text-bright leading-[1.12] tracking-[-0.03em]">
-            Attack-surface scanner that{' '}
-            <span className="text-accent">proves,</span>{' '}
-            not <span className="text-text-dim font-medium">guesses.</span>
+          <h1 className="font-display text-[2.35rem] xl:text-[2.65rem] font-bold text-text-bright leading-[1.12] tracking-[-0.03em]">
+            Attack-surface scanner
+            <br />
+            that <span className="text-accent">proves,</span> not
+            <br />
+            <span className="text-text-dim font-medium">guesses.</span>
           </h1>
           <p className="text-[14.5px] text-text-dim leading-[1.75]">
             NetLogic scans your external footprint and comes back with what is
@@ -49,10 +51,10 @@ export default function Login() {
             forceRedirectUrl="/"
           />
         </div>
-        <p className="text-center text-text-dim text-[11px] font-mono tracking-[0.08em]">
-          <Link to="/terms" className="hover:text-accent">terms</Link>
-          {' · '}
-          <Link to="/privacy" className="hover:text-accent">privacy</Link>
+        <p className="text-center text-[13px] font-mono tracking-[0.08em]">
+          <Link to="/terms" className="text-accent hover:underline">terms</Link>
+          <span className="text-text-dim"> · </span>
+          <Link to="/privacy" className="text-accent hover:underline">privacy</Link>
         </p>
       </div>
     </div>

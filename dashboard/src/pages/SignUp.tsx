@@ -16,7 +16,7 @@ export default function SignUpPage() {
   const [agreed, setAgreed] = useState(false)
 
   return (
-    <div className="min-h-full overflow-hidden site-bg relative flex flex-col items-center justify-center gap-8 py-12 px-6">
+    <div className="min-h-full overflow-x-hidden site-bg relative flex flex-col items-center justify-center gap-8 py-12 px-6">
       <div className="site-grid pointer-events-none absolute inset-0" />
       <div className="site-noise pointer-events-none absolute inset-0" />
       <div className="radar" aria-hidden>
@@ -53,10 +53,17 @@ export default function SignUpPage() {
             type="button"
             className="btn btn-primary w-full"
             disabled={!agreed}
+            aria-disabled={!agreed}
+            title={!agreed ? 'Agree to the terms to continue' : undefined}
             onClick={() => setAgreed(true)}
           >
             Continue to sign up
           </button>
+          {!agreed && (
+            <p className="text-center text-[12px] text-text-dim font-mono">
+              Check the box above to enable continue
+            </p>
+          )}
         </div>
       ) : (
         <div className="relative z-10 glass-strong rounded-2xl p-2 w-full max-w-[420px]">
@@ -75,7 +82,11 @@ export default function SignUpPage() {
         </div>
       )}
 
-      <p className="relative z-10 text-center text-text-dim text-[12px]">Authorized use only</p>
+      <p className="relative z-10 text-center text-[13px] font-mono tracking-[0.08em]">
+        <Link to="/terms" className="text-accent hover:underline">terms</Link>
+        <span className="text-text-dim"> · </span>
+        <Link to="/privacy" className="text-accent hover:underline">privacy</Link>
+      </p>
     </div>
   )
 }

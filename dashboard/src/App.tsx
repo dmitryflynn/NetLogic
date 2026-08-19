@@ -15,6 +15,7 @@ import Targets       from './pages/Targets'
 import TargetTimeline from './pages/TargetTimeline'
 import Settings      from './pages/Settings'
 import ErrorBoundary from './components/ErrorBoundary'
+import { Brand } from './components/Brand'
 
 interface LicenseStatus {
   licensed: boolean
@@ -30,11 +31,13 @@ function RequireLicense({ children }: { children: React.ReactNode }) {
   })
   if (isLoading) {
     return (
-      <div className="min-h-screen site-bg relative flex items-center justify-center">
+      <div className="min-h-screen overflow-x-hidden site-bg relative flex items-center justify-center">
         <div className="site-grid pointer-events-none absolute inset-0" />
-        <div className="text-center space-y-3 relative z-10">
-          <p className="font-display text-2xl font-bold text-text-bright tracking-[0.02em]">netlogic</p>
-          <p className="text-text-dim text-[13px]">Loading…</p>
+        <div className="text-center space-y-4 relative z-10">
+          <div className="flex justify-center">
+            <Brand size="md" subtitle />
+          </div>
+          <p className="text-text-dim text-[13px] font-mono tracking-[0.08em]">Checking license…</p>
         </div>
       </div>
     )
