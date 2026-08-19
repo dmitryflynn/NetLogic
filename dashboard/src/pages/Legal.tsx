@@ -10,11 +10,11 @@ import { Brand } from '../components/Brand'
  */
 function LegalDoc({ md }: { md: string }) {
   return (
-    <div className="min-h-full site-bg">
-      <div className="max-w-3xl mx-auto px-6 py-12">
+    <div className="min-h-full overflow-x-hidden overflow-y-auto site-bg">
+      <div className="max-w-3xl mx-auto px-6 py-12 sm:px-8">
         <Brand size="sm" />
-        <Link to="/sign-up" className="text-accent text-[12px] hover:underline mt-6 inline-block">← Back to sign-up</Link>
-        <div className="mt-6 text-text-dim text-[13px] leading-relaxed legal-doc">
+        <Link to="/sign-up" className="text-accent text-[13px] hover:underline mt-6 inline-block">← Back to sign-up</Link>
+        <div className="mt-8 text-text text-[15px] sm:text-[16px] leading-[1.75] legal-doc">
           <Markdown text={md} />
         </div>
       </div>

@@ -622,6 +622,9 @@ def _dashboard_needs_build(dash_dir: Path, dist_dir: Path) -> bool:
         dash_dir / "tailwind.config.ts",
         dash_dir / "vite.config.ts",
         dash_dir / "package.json",
+        dash_dir / ".env",
+        dash_dir / ".env.local",
+        dash_dir / ".env.example",
     )
     for path in watch:
         if not path.exists():
@@ -634,6 +637,31 @@ def _dashboard_needs_build(dash_dir: Path, dist_dir: Path) -> bool:
             if child.is_file() and child.stat().st_mtime > dist_mtime:
                 return True
     return False
+
+
+def _vite_build_env(dash_dir: Path) -> dict:
+    """Env for `npm run build`, including VITE_* from dashboard dotenv files."""
+    env = os.environ.copy()
+    for fname in (".env.example", ".env", ".env.local"):
+        path = dash_dir / fname
+        if not path.exists():
+            continue
+        try:
+            for raw in path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                if key.startswith("VITE_"):
+                    if fname == ".env.example":
+                        env.setdefault(key, val)
+                    else:
+                        env[key] = val
+        except OSError:
+            pass
+    return env
 
 
 def run_gui():
@@ -683,9 +711,11 @@ def run_gui():
         print("[netlogic] Building dashboard" + (" for the first time (~30 s)..." if first else " (source changed)…"))
         try:
             subprocess.run("npm install", cwd=dash_dir, shell=True, check=True,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           env=_vite_build_env(dash_dir))
             subprocess.run("npm run build", cwd=dash_dir, shell=True, check=True,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           env=_vite_build_env(dash_dir))
             print("[netlogic] Dashboard ready.")
         except subprocess.CalledProcessError:
             print("[netlogic] Warning: dashboard build failed — API-only mode.")
