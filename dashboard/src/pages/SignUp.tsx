@@ -14,6 +14,7 @@ import { Brand } from '../components/Brand'
  */
 export default function SignUpPage() {
   const [agreed, setAgreed] = useState(false)
+  const [showSignUp, setShowSignUp] = useState(false)
 
   return (
     <div className="min-h-full overflow-x-hidden site-bg relative flex flex-col items-center justify-center gap-8 py-12 px-6">
@@ -31,7 +32,7 @@ export default function SignUpPage() {
         <Brand size="md" subtitle />
       </div>
 
-      {!agreed ? (
+      {!showSignUp ? (
         <div className="relative z-10 glass-strong p-7 max-w-md w-full space-y-5 rounded-2xl">
           <p className="font-display text-xl font-bold text-text-bright">Before you create an account</p>
           <label className="flex items-start gap-3 text-[14px] text-text-dim cursor-pointer select-none leading-relaxed">
@@ -55,7 +56,7 @@ export default function SignUpPage() {
             disabled={!agreed}
             aria-disabled={!agreed}
             title={!agreed ? 'Agree to the terms to continue' : undefined}
-            onClick={() => setAgreed(true)}
+            onClick={() => setShowSignUp(true)}
           >
             Continue to sign up
           </button>
