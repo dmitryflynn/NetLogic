@@ -7,31 +7,41 @@ export default function Login() {
     <div className="min-h-full site-bg relative flex">
       <div className="site-grid pointer-events-none absolute inset-0" />
       <div className="site-noise pointer-events-none absolute inset-0" />
+      <div className="radar" aria-hidden>
+        <div className="r-ring" />
+        <div className="r-ring r2" />
+        <div className="r-ring r3" />
+        <div className="r-cross" />
+        <div className="r-cross h" />
+        <div className="r-sweep" />
+      </div>
 
       <div className="relative z-10 hidden lg:flex lg:w-[48%] flex-col justify-between p-14">
         <Brand size="md" subtitle />
         <div className="max-w-lg space-y-8">
-          <h1 className="font-serif text-[2.65rem] font-semibold text-text-bright leading-[1.15] tracking-[-0.03em]">
-            See the attack surface as it actually is.
+          <h1 className="font-display text-[2.65rem] font-bold text-text-bright leading-[1.12] tracking-[-0.03em]">
+            Attack-surface scanner that{' '}
+            <span className="text-accent">proves,</span>{' '}
+            not <span className="text-text-dim font-medium">guesses.</span>
           </h1>
-          <p className="text-[16px] text-text-dim leading-relaxed">
-            Fusion-adjudicated findings, live CVE correlation, and executive reporting —
-            the same visual language as the product site, built for operators.
+          <p className="text-[14.5px] text-text-dim leading-[1.75]">
+            NetLogic scans your external footprint and comes back with what is
+            actually exploitable, evidence attached to each finding.
           </p>
-          <ul className="space-y-3 text-[14.5px] text-text">
-            <li className="flex gap-3"><span className="text-accent mt-0.5">—</span> Multi-sensor fusion with AI adjudication</li>
-            <li className="flex gap-3"><span className="text-accent mt-0.5">—</span> NVD + EPSS correlation, not signature noise</li>
-            <li className="flex gap-3"><span className="text-accent mt-0.5">—</span> Executive and technical reports from one scan</li>
+          <ul className="space-y-3 text-[14px] text-text font-mono tracking-tight">
+            <li className="flex gap-3"><span className="text-accent">01</span> collect → classify → adjudicate → report</li>
+            <li className="flex gap-3"><span className="text-accent">02</span> fusion pipeline, not signature noise</li>
+            <li className="flex gap-3"><span className="text-accent">03</span> graded findings with evidence attached</li>
           </ul>
         </div>
-        <p className="text-text-dim text-[12px]">Authorized assessments only.</p>
+        <p className="text-text-dim text-[11px] font-mono tracking-[0.12em] uppercase">Authorized assessments only</p>
       </div>
 
       <div className="relative z-10 flex-1 flex flex-col items-center justify-center gap-8 py-12 px-6">
         <div className="lg:hidden">
           <Brand size="md" subtitle />
         </div>
-        <div className="glass-strong rounded-2xl p-2 w-full max-w-[420px]">
+        <div className="glass-strong rounded-[28px] p-2 w-full max-w-[420px]">
           <SignIn
             routing="path"
             path="/login"
@@ -39,10 +49,10 @@ export default function Login() {
             forceRedirectUrl="/"
           />
         </div>
-        <p className="text-center text-text-dim text-[12px]">
-          <Link to="/terms" className="hover:text-text">Terms</Link>
+        <p className="text-center text-text-dim text-[11px] font-mono tracking-[0.08em]">
+          <Link to="/terms" className="hover:text-accent">terms</Link>
           {' · '}
-          <Link to="/privacy" className="hover:text-text">Privacy</Link>
+          <Link to="/privacy" className="hover:text-accent">privacy</Link>
         </p>
       </div>
     </div>

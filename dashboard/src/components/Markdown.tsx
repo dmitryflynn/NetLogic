@@ -104,7 +104,7 @@ export default function Markdown({ text, onExplore, exploring }: { text: string;
         continue
       }
       const cls = level <= 1
-        ? 'text-text-bright font-serif font-semibold text-[17px] mt-5 mb-2'
+        ? 'text-text-bright font-display font-bold text-[17px] mt-5 mb-2'
         : level === 2
           ? 'text-text-bright font-semibold text-[13px] mt-4 mb-1.5 border-b border-border pb-1'
           : `font-semibold text-[12px] mt-3 mb-1 ${sev || 'text-accent'}`

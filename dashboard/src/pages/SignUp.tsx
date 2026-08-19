@@ -19,13 +19,21 @@ export default function SignUpPage() {
     <div className="min-h-full site-bg relative flex flex-col items-center justify-center gap-8 py-12 px-6">
       <div className="site-grid pointer-events-none absolute inset-0" />
       <div className="site-noise pointer-events-none absolute inset-0" />
+      <div className="radar" aria-hidden>
+        <div className="r-ring" />
+        <div className="r-ring r2" />
+        <div className="r-ring r3" />
+        <div className="r-cross" />
+        <div className="r-cross h" />
+        <div className="r-sweep" />
+      </div>
       <div className="relative z-10">
         <Brand size="md" subtitle />
       </div>
 
       {!agreed ? (
         <div className="relative z-10 glass-strong p-7 max-w-md w-full space-y-5 rounded-2xl">
-          <p className="font-serif text-xl text-text-bright">Before you create an account</p>
+          <p className="font-display text-xl font-bold text-text-bright">Before you create an account</p>
           <label className="flex items-start gap-3 text-[14px] text-text-dim cursor-pointer select-none leading-relaxed">
             <input
               type="checkbox"

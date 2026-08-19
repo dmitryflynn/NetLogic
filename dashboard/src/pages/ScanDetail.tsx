@@ -137,7 +137,7 @@ export default function ScanDetail() {
         <button onClick={() => nav('/')} className="text-text-dim hover:text-text text-[13px]">
           ← Back
         </button>
-        <span className="font-serif text-[1.15rem] font-semibold text-text-bright tracking-[-0.02em]">{job.target}</span>
+        <span className="font-display text-[1.15rem] font-bold text-text-bright tracking-[-0.02em]">{job.target}</span>
         <StatusBadge status={job.status} />
         {streaming && (
           <span className="text-accent text-[11px] animate-pulse">● Live</span>
