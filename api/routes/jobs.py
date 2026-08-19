@@ -98,17 +98,10 @@ def _scan_metrics(job: ScanJob) -> dict:
             p = d.get("port")
             if isinstance(p, int):
                 ports.add(p)
-        elif t == "vuln":
-            cid = d.get("cve_id")
-            if cid:
-                cves.add(str(cid))
-            s = str(d.get("severity") or "").lower()
-            if s in sev:
-                sev[s] += 1
-    # Also count fusion-confirmed findings (probes, AI, adjudicated
-    # results) which are NOT stored as individual "vuln" events.
+
     fusion_events = [e for e in job.events if e.get("type") == "fusion"]
     if fusion_events:
+        # Fusion is authoritative — do not also count raw vuln events (double-count).
         data = fusion_events[-1].get("data") or {}
         for row in data.get("confirmed", []) + data.get("potential", []):
             imp = str(row.get("impact") or "").lower()
@@ -117,6 +110,23 @@ def _scan_metrics(job: ScanJob) -> dict:
             sub = row.get("subject", "")
             if sub.startswith("CVE-"):
                 cves.add(sub)
+    else:
+        for e in job.events:
+            if e.get("type") != "vuln":
+                continue
+            d = e.get("data") or {}
+            cid = d.get("cve_id")
+            if cid:
+                cves.add(str(cid))
+            s = str(d.get("severity") or "").lower()
+            if s in sev:
+                sev[s] += 1
+            for c in d.get("cves") or []:
+                if isinstance(c, dict) and c.get("id"):
+                    cves.add(str(c["id"]))
+                    cs = str(c.get("severity") or "").lower()
+                    if cs in sev:
+                        sev[cs] += 1
     return {
         "open_ports": sorted(ports),
         "severity": sev,

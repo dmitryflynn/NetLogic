@@ -7,6 +7,7 @@ interface TargetRow {
   lastScan: number
   lastVulns: number
   lastPorts: number
+  lastStatus: string
 }
 
 function fmtDate(ts: number | null): string {
@@ -14,25 +15,25 @@ function fmtDate(ts: number | null): string {
   return new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-/** Group completed scans by target → one row per domain, newest activity first. */
+/** Group scans by target → one row per domain, newest activity first. */
 function rollup(jobs: JobSummary[]): TargetRow[] {
   const byTarget = new Map<string, JobSummary[]>()
   for (const j of jobs) {
-    if (j.status !== 'completed') continue
     const arr = byTarget.get(j.target) ?? []
     arr.push(j)
     byTarget.set(j.target, arr)
   }
   const rows: TargetRow[] = []
   for (const [target, arr] of byTarget) {
-    arr.sort((a, b) => (b.completed_at ?? 0) - (a.completed_at ?? 0))
+    arr.sort((a, b) => (b.completed_at ?? b.started_at ?? b.created_at) - (a.completed_at ?? a.started_at ?? a.created_at))
     const last = arr[0]
     rows.push({
       target,
       scanCount: arr.length,
-      lastScan: last.completed_at ?? last.created_at,
+      lastScan: last.completed_at ?? last.started_at ?? last.created_at,
       lastVulns: last.result_counts.vulnerabilities,
       lastPorts: last.result_counts.ports,
+      lastStatus: last.status,
     })
   }
   return rows.sort((a, b) => b.lastScan - a.lastScan)
@@ -43,40 +44,46 @@ export default function Targets() {
   const rows = rollup(jobs)
 
   return (
-    <div className="max-w-3xl mx-auto px-6 py-6 space-y-5">
-      <div>
-        <h2 className="font-display font-bold text-lg text-text-bright tracking-wide">Targets</h2>
-        <p className="text-text-dim text-[12px] mt-1">
-          Every domain you've scanned, with its history. Open one to see progress over time and
-          what changed since the last scan.
+    <div className="max-w-4xl mx-auto px-8 py-8 space-y-6">
+      <div className="page-header">
+        <h1 className="page-title">Targets</h1>
+        <p className="page-subtitle">
+          Every asset you have assessed, with scan history and posture trends over time.
         </p>
       </div>
 
       {isLoading ? (
-        <p className="text-text-dim text-[12px]">Loading…</p>
+        <p className="text-text-dim text-[13px]">Loading targets…</p>
       ) : rows.length === 0 ? (
-        <div className="panel p-6 text-center space-y-3">
-          <p className="text-text-dim text-[13px]">No completed scans yet.</p>
-          <Link to="/scans/new" className="btn btn-primary">Run your first scan</Link>
+        <div className="card text-center space-y-4">
+          <p className="text-text-bright font-medium">No targets yet</p>
+          <p className="text-text-dim text-[13px]">Complete a scan to start building your target inventory.</p>
+          <Link to="/scans/new" className="btn btn-primary inline-flex">Run your first scan</Link>
         </div>
       ) : (
-        <div className="panel divide-y divide-border">
+        <div className="panel divide-y divide-border overflow-hidden">
           {rows.map((r) => (
-            <Link key={r.target} to={`/targets/${encodeURIComponent(r.target)}`}
-              className="flex items-center gap-4 px-4 py-3 hover:bg-elevated transition-colors">
+            <Link
+              key={r.target}
+              to={`/targets/${encodeURIComponent(r.target)}`}
+              className="flex items-center gap-4 px-5 py-4 hover:bg-elevated/50 transition-colors"
+            >
               <div className="min-w-0 flex-1">
                 <p className="font-mono text-[13px] text-text-bright truncate">{r.target}</p>
-                <p className="text-text-dim text-[11px]">
+                <p className="text-text-dim text-[11px] mt-0.5">
                   {r.scanCount} scan{r.scanCount === 1 ? '' : 's'} · last {fmtDate(r.lastScan)}
+                  {r.lastStatus !== 'completed' && (
+                    <span className="ml-2 text-accent capitalize">{r.lastStatus}</span>
+                  )}
                 </p>
               </div>
               <div className="text-right shrink-0">
-                <p className="text-[12px] text-text-bright">
-                  {r.lastVulns} vuln{r.lastVulns === 1 ? '' : 's'}
+                <p className="text-[13px] text-text-bright font-mono tabular-nums">
+                  {r.lastVulns} finding{r.lastVulns === 1 ? '' : 's'}
                 </p>
                 <p className="text-text-dim text-[11px]">{r.lastPorts} ports</p>
               </div>
-              <span className="text-accent text-[12px]">Timeline →</span>
+              <span className="text-accent text-[12px] shrink-0">Timeline →</span>
             </Link>
           ))}
         </div>

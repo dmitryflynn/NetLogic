@@ -27,6 +27,22 @@ def test_scan_metrics_aggregates_severity_ports_and_cves():
     assert m["cves"] == ["CVE-1", "CVE-2"]                  # de-duped, sorted
 
 
+def test_scan_metrics_uses_fusion_not_raw_vulns():
+    """When fusion is present, raw vuln events must not be double-counted."""
+    j = _job("x.com", [("CVE-1", "critical"), ("CVE-2", "high")], [80])
+    j.events.append({
+        "type": "fusion",
+        "data": {
+            "confirmed": [{"subject": "CVE-3", "impact": "critical"}],
+            "potential": [{"subject": "CVE-4", "impact": "high"}],
+        },
+    })
+    m = jobs_route._scan_metrics(j)
+    assert m["severity"] == {"critical": 1, "high": 1, "medium": 0, "low": 0}
+    assert m["vuln_total"] == 2
+    assert set(m["cves"]) == {"CVE-3", "CVE-4"}
+
+
 def test_history_is_chronological_and_org_scoped(monkeypatch):
     older = _job("acme.com", [("CVE-1", "critical"), ("CVE-2", "high")], [80, 443, 22], completed=100.0)
     newer = _job("acme.com", [("CVE-2", "high")], [80, 443], completed=200.0)   # CVE-1 + port 22 resolved

@@ -14,18 +14,15 @@ function fmtDate(ts: number | null) {
 export default function ScanDetail() {
   const { id } = useParams<{ id: string }>()
   const nav    = useNavigate()
+  const jobId  = id ?? ''
 
-  if (!id) {
-    return <p className="text-critical p-8 text-center">Invalid scan ID.</p>
-  }
-
-  const { data: job, isLoading } = useJob(id)
+  const { data: job, isLoading } = useJob(jobId)
   const cancel = useCancelJob()
 
   // SSE stream while job is running/queued. After finish, fall back to persisted job.events
   // so the event log remains accessible (not only during the live window).
-  const live = (job?.status === 'running' || job?.status === 'queued')
-  const { events: streamEvents, ports, progress, streaming } = useStreamScan(live ? id : null)
+  const live = !!(id && (job?.status === 'running' || job?.status === 'queued'))
+  const { events: streamEvents, ports, progress, streaming } = useStreamScan(live ? jobId : null)
 
   // Prefer the richest event list: live SSE while connected; otherwise stored history.
   // If the stream ended but the job poll still has fewer events, keep stream buffer until
@@ -96,25 +93,34 @@ export default function ScanDetail() {
   useEffect(() => {
     if (tab !== 'summary' || subTab !== 'technical') return
     if (technicalMd || technicalLoading || technicalErr) return
-    if (!id || !execMarkdown) return
+    if (!jobId || !execMarkdown) return
     setTechnicalLoading(true)
-    technicalAnalysis(id, execMarkdown)
+    technicalAnalysis(jobId, execMarkdown)
       .then((r) => { r.error ? setTechnicalErr(r.error) : setTechnicalMd(r.markdown || '') })
       .catch(() => setTechnicalErr('Failed to generate the technical analysis.'))
       .finally(() => setTechnicalLoading(false))
-  }, [tab, subTab, id, execMarkdown, technicalMd, technicalLoading, technicalErr])
+  }, [tab, subTab, jobId, execMarkdown, technicalMd, technicalLoading, technicalErr])
+
+  function retryTechnical() {
+    setTechnicalErr('')
+    setTechnicalMd('')
+  }
   async function onExplore(finding: string) {
-    if (!id) return
+    if (!jobId) return
     if (exploreMd[finding]) return  // already loaded
     setExploring(finding)
     try {
-      const res = await exploreBeyond(id, finding)
+      const res = await exploreBeyond(jobId, finding)
       setExploreMd((prev) => ({ ...prev, [finding]: res.markdown || res.error || 'No elaboration returned.' }))
     } catch {
       setExploreMd((prev) => ({ ...prev, [finding]: '_Failed to retrieve elaboration._' }))
     } finally {
       setExploring(null)
     }
+  }
+
+  if (!id) {
+    return <p className="text-critical p-8 text-center">Invalid scan ID.</p>
   }
 
   if (isLoading) {
@@ -231,7 +237,12 @@ export default function ScanDetail() {
                   {technicalLoading && (
                     <p className="text-text-dim text-[12px] italic">⟐ Generating a deeper technical analysis…</p>
                   )}
-                  {technicalErr && <p className="text-high text-[12px]">⚠ {technicalErr}</p>}
+                  {technicalErr && (
+                    <div className="flex items-center gap-3">
+                      <p className="text-high text-[12px]">⚠ {technicalErr}</p>
+                      <button type="button" onClick={retryTechnical} className="btn text-[11px]">Retry</button>
+                    </div>
+                  )}
                   {technicalMd && (
                     <section className="panel border border-border rounded-lg p-4">
                       <Markdown text={technicalMd} />
