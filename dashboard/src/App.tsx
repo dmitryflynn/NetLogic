@@ -32,8 +32,8 @@ function RequireLicense({ children }: { children: React.ReactNode }) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-base">
         <div className="text-center space-y-3">
-          <p className="font-display font-bold text-xl text-text-bright tracking-widest">
-            NET<span className="text-accent">LOGIC</span>
+          <p className="font-display font-semibold text-xl text-text-bright tracking-tight">
+            Net<span className="text-accent">Logic</span>
           </p>
           <p className="text-text-dim text-[12px]">Loading…</p>
         </div>

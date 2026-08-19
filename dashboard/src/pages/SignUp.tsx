@@ -17,8 +17,8 @@ export default function SignUpPage() {
   return (
     <div className="min-h-full flex flex-col items-center justify-center bg-base gap-6 py-10">
       <div className="text-center space-y-1">
-        <p className="font-display font-bold text-xl text-text-bright tracking-widest">
-          NET<span className="text-accent">LOGIC</span>
+        <p className="font-display font-semibold text-xl text-text-bright tracking-tight">
+          Net<span className="text-accent">Logic</span>
         </p>
         <p className="text-text-dim text-[11px]">Attack Surface Intelligence</p>
       </div>
