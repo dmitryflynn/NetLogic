@@ -64,10 +64,13 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring, view 
     }
   }, [exploreMd])
 
+  const PRIO_DOT: Record<string, string> = {
+    P1: 's-crit', P2: 's-high', P3: 's-med', P4: 's-low', P5: 's-low',
+  }
   const PRIO: Record<string, string> = {
-    P1: 'text-rose-400 border-rose-500/40 bg-rose-500/10',
-    P2: 'text-amber-400 border-amber-500/40 bg-amber-500/10',
-    P3: 'text-amber-300 border-amber-400/30 bg-amber-400/5',
+    P1: 'text-critical border-critical/40 bg-critical/10',
+    P2: 'text-high border-high/40 bg-high/10',
+    P3: 'text-medium border-medium/40 bg-medium/10',
     P4: 'text-text-dim border-border', P5: 'text-text-dim border-border',
   }
 
@@ -89,33 +92,36 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring, view 
                  ? `${s.triage!.attention!.length} worth attention · ${s.triage!.noise?.length ?? 0} catalog leads filtered`
                  : `no verified vulnerabilities · ${s.triage!.noise?.length ?? 0} catalog lead(s) filtered`}>
           {(s.triage!.attention?.length ?? 0) === 0 ? (
-            <p className="text-[12px] text-emerald-400">
+            <p className="text-[12px] text-low">
               ✓ No verified high-priority vulnerabilities. {s.triage!.noise?.length ?? 0} version/catalog
               lead(s) were filtered — not reported as vulnerabilities (patch level
               unverifiable from a version string alone).
             </p>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-1 -mx-1">
               {s.triage!.attention!.map((t, i) => (
-                <div key={i} className="flex items-start gap-2 text-[12px] border-b border-border/30 pb-2 last:border-0">
-                  <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded border ${PRIO[t.priority ?? 'P5'] ?? PRIO.P5}`}>
-                    {t.priority}
-                  </span>
+                <div key={i} className="finding-row">
+                  <span className={`sev-dot ${PRIO_DOT[t.priority ?? 'P5'] ?? 's-low'}`} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-text-bright font-medium">{t.title || t.cve || 'Vulnerability'}</span>
+                      <span className="finding-title">{t.title || t.cve || 'Vulnerability'}</span>
+                      <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded border ${PRIO[t.priority ?? 'P5'] ?? PRIO.P5}`}>
+                        {t.priority}
+                      </span>
                       {t.kind === 'web' && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-accent/15 text-accent border border-accent/30 uppercase">SaaS</span>}
                       {t.kind !== 'web' && t.cvss != null && t.cvss > 0 && <span className="text-text-dim text-[10px]">CVSS {t.cvss.toFixed(1)}</span>}
-                      {t.kev && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-rose-500/20 text-rose-400 border border-rose-500/40 uppercase">KEV</span>}
-                      {t.exploit_available && !t.kev && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/40 uppercase">exploit</span>}
-                      {t.kind !== 'web' && (t.service || t.port) && <span className="text-text-dim text-[10px]">{t.service}{t.port ? `:${t.port}` : ''}</span>}
+                      {t.kev && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-critical/20 text-critical border border-critical/40 uppercase">KEV</span>}
+                      {t.exploit_available && !t.kev && <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-high/20 text-high border border-high/40 uppercase">exploit</span>}
                     </div>
+                    {(t.kind !== 'web' && (t.service || t.port)) && (
+                      <span className="finding-sub">{t.service}{t.port ? `/${t.port}` : ''} · fusion-gated</span>
+                    )}
                     {t.cve && (
                       <p className="text-text-dim text-[10px] mt-0.5 font-mono">
                         Related: <span className="text-text-dim/90">{t.cve}</span>
                       </p>
                     )}
-                    <p className="text-text-dim text-[11px] mt-0.5">{t.rationale}</p>
+                    <span className="finding-ev">{t.rationale}</span>
                   </div>
                 </div>
               ))}
