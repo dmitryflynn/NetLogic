@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useJobs, type JobSummary } from '../api/scan'
+import { ChapterLabel, ConsoleFrame } from '../components/Console'
 
 interface TargetRow {
   target: string
@@ -46,7 +47,8 @@ export default function Targets() {
   return (
     <div className="max-w-4xl mx-auto px-8 py-8 space-y-6">
       <div className="page-header">
-        <h1 className="page-title">Targets</h1>
+        <ChapterLabel chapter="02" title="targets" />
+        <h1 className="page-title mt-5">Targets</h1>
         <p className="page-subtitle">
           Every asset you have assessed, with scan history and posture trends over time.
         </p>
@@ -61,7 +63,8 @@ export default function Targets() {
           <Link to="/scans/new" className="btn btn-primary inline-flex">Run your first scan</Link>
         </div>
       ) : (
-        <div className="panel divide-y divide-border overflow-hidden">
+        <ConsoleFrame title="netlogic · target inventory" meta={`${rows.length} assets`}>
+        <div className="divide-y divide-border">
           {rows.map((r) => (
             <Link
               key={r.target}
@@ -87,6 +90,7 @@ export default function Targets() {
             </Link>
           ))}
         </div>
+        </ConsoleFrame>
       )}
     </div>
   )

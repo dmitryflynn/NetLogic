@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useAgents, useDeleteAgent, useRegisterAgent, useSetAgentActive } from '../api/scan'
 import type { Agent, RegisterAgentResponse } from '../api/scan'
+import { ChapterLabel, ConsoleFrame } from '../components/Console'
 
 function fmtDate(ts: number | null) {
   if (!ts) return 'Never'
@@ -164,7 +165,8 @@ export default function Agents() {
 
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="page-title">Agents</h1>
+          <ChapterLabel chapter="03" title="agents" />
+          <h1 className="page-title mt-5">Agents</h1>
           <p className="page-subtitle">Remote scanners that execute jobs on your network.</p>
         </div>
         <div className="flex items-center gap-3">
@@ -187,7 +189,8 @@ export default function Agents() {
           </button>
         </div>
       ) : (
-        <div className="space-y-3">
+        <ConsoleFrame title="netlogic · scanners" meta={`${agents.length} registered`}>
+        <div className="p-3 space-y-3">
           {agents.map((a) => (
             <div key={a.agent_id} className="panel p-4 space-y-3">
               <div className="flex items-start justify-between gap-4">
@@ -271,6 +274,7 @@ export default function Agents() {
             </div>
           ))}
         </div>
+        </ConsoleFrame>
       )}
     </div>
   )

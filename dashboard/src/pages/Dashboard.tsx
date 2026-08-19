@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { useJobs, useDeleteJob, useAgents } from '../api/scan'
 import StatusBadge from '../components/StatusBadge'
+import { ChapterLabel, ConsoleFrame } from '../components/Console'
 
 function fmtTime(ts: number | null): string {
   if (!ts) return '—'
@@ -27,16 +28,17 @@ export default function Dashboard() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-8 pt-8 pb-6 border-b border-border/60">
-        <div className="page-header mb-0 flex items-start justify-between gap-4 flex-wrap">
+      <div className="px-8 pt-8 pb-6">
+        <ChapterLabel chapter="01" title="scans" />
+        <div className="page-header mb-0 mt-5 flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h1 className="page-title">Scans</h1>
             <p className="page-subtitle">
-              Monitor active assessments, review findings, and track scan history across your attack surface.
+              Every finding comes with evidence, or it doesn't ship. Monitor assessments and graded results.
             </p>
           </div>
           <Link to="/scans/new" className="btn btn-primary shrink-0">
-            New scan
+            new scan
           </Link>
         </div>
       </div>
@@ -62,7 +64,7 @@ export default function Dashboard() {
             </Link>
           </div>
         ) : (
-          <div className="panel overflow-hidden">
+          <ConsoleFrame title="netlogic · graded findings" meta={`${jobs.length} runs`}>
             <table className="w-full text-[13px] border-collapse data-table">
               <thead className="bg-elevated/50">
                 <tr>
@@ -112,7 +114,7 @@ export default function Dashboard() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ConsoleFrame>
         )}
       </div>
     </div>

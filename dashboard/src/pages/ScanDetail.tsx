@@ -6,6 +6,7 @@ import PortTable from '../components/PortTable'
 import ScanFeed from '../components/ScanFeed'
 import ScanSections from '../components/ScanSections'
 import Markdown from '../components/Markdown'
+import { ChapterLabel, ConsoleFrame } from '../components/Console'
 
 function fmtDate(ts: number | null) {
   return ts ? new Date(ts * 1000).toLocaleString() : '—'
@@ -132,15 +133,14 @@ export default function ScanDetail() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Header */}
-      <div className="shrink-0 mx-6 mt-5 px-5 py-4 glass rounded-xl flex items-center gap-4">
-        <button onClick={() => nav('/')} className="text-text-dim hover:text-text text-[13px]">
+      <div className="shrink-0 px-6 pt-5 flex items-center gap-4 flex-wrap">
+        <button onClick={() => nav('/')} className="text-text-dim hover:text-accent text-[13px]">
           ← Back
         </button>
-        <span className="font-display text-[1.15rem] font-bold text-text-bright tracking-[-0.02em]">{job.target}</span>
+        <ChapterLabel chapter="02" title="console" />
         <StatusBadge status={job.status} />
         {streaming && (
-          <span className="text-accent text-[11px] animate-pulse">● Live</span>
+          <span className="text-accent text-[11px] font-mono tracking-[0.14em] uppercase animate-pulse">live</span>
         )}
         <div className="ml-auto flex gap-2">
           {job.status !== 'queued' && (
@@ -180,15 +180,20 @@ export default function ScanDetail() {
         </div>
       </div>
 
+      <ConsoleFrame
+        className="mx-6 mt-4 mb-4 flex-1 min-h-0 flex flex-col"
+        title={`netlogic · ${job.target} · graded findings`}
+        meta={`run ${job.job_id.slice(0, 8)}`}
+      >
       {/* Tab bar — Summary vs Data */}
       {job.status !== 'queued' && (
-        <div className="shrink-0 mx-6 px-2 flex items-center gap-1">
+        <div className="shrink-0 px-2 flex items-center gap-1 border-b border-border-dim">
           <TabBtn active={tab === 'summary'} onClick={() => setTab('summary')}>Summary</TabBtn>
           <TabBtn active={tab === 'data'} onClick={() => setTab('data')}>Data</TabBtn>
         </div>
       )}
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden min-h-0">
         {/* Main content */}
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
           {/* Progress bar */}
@@ -347,6 +352,7 @@ export default function ScanDetail() {
           </div>
         </aside>
       </div>
+      </ConsoleFrame>
     </div>
   )
 }
