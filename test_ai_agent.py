@@ -18,6 +18,7 @@ def test_sanitize_rejects_ssrf_paths():
     assert safe_method("get") == "GET"
     assert safe_method("TRACE") is None
     assert safe_headers({"X-Foo": "bar", "Host": "evil"}) == {"X-Foo": "bar"}
+    assert safe_headers({"X-Foo": "bar\r\nHost: evil"}) == {}
     assert safe_raw_payload("hello") == b"hello"
 
 
@@ -121,6 +122,7 @@ def test_agent_loop_multi_turn_mock():
     assert res.chains
     d = agent_result_to_art(res)
     assert "findings" in d and d["steps_used"] >= 1
+    assert "depth_mode" in d and "high_value_used" in d
 
 
 def test_agent_off_without_completer():
@@ -651,6 +653,9 @@ def test_depth_mode_raises_budgets_and_blocks_early_stop():
     assert len(refused) >= 1
     # Eventually high-value /admin GETs should run
     assert res.high_value_used >= 1
+    art = agent_result_to_art(res)
+    assert art["depth_mode"] is True
+    assert art["high_value_used"] == res.high_value_used
     assert any(
         "admin" in str(r.get("summary") or "")
         for t in res.turns for r in (t.get("results") or [])

@@ -230,7 +230,10 @@ def safe_headers(raw: Any) -> dict[str, str] | None:
         # Block Host override / hop-by-hop smuggling helpers as free-form control
         if key.lower() in ("host", "content-length", "transfer-encoding"):
             continue
-        out[key] = v.strip()[:_MAX_HEADER_VAL]
+        val = v.strip()[:_MAX_HEADER_VAL]
+        if any(c in key or c in val for c in ("\r", "\n", "\x00")):
+            continue
+        out[key] = val
     return out
 
 
@@ -324,6 +327,69 @@ def safe_cookies(raw: Any) -> dict[str, str] | None:
             continue
         out[name] = val
     return out
+
+
+_SMUGGLE_HEADERS = frozenset({"host", "content-length", "transfer-encoding"})
+
+
+def sanitize_http_plan(plan: Any, *, default_port: int = 80) -> tuple[dict | None, str]:
+    """Normalize an AI/builtin HTTP probe plan for verifier/reprobe execution.
+
+    Same rails as ToolRuntime's default HTTP path: relative paths, GET/HEAD/OPTIONS
+    (POST only on proof allowlisted paths), no Host/CL/TE, no CR/LF, no destructive
+    payloads. Returns ``(clean_plan, "")`` or ``(None, reason)``.
+    """
+    if not isinstance(plan, dict):
+        return None, "plan is not an object"
+    raw_headers = plan.get("headers")
+    if isinstance(raw_headers, dict):
+        for k in raw_headers:
+            if str(k).strip().lower() in _SMUGGLE_HEADERS:
+                return None, f"hop-by-hop/smuggling header blocked: {k}"
+            if any(c in str(k) or c in str(raw_headers[k]) for c in ("\r", "\n", "\x00")):
+                return None, "CR/LF/NUL in headers blocked"
+    method_raw = plan.get("method") or "GET"
+    method = safe_proof_method(method_raw) or safe_method(method_raw)
+    if method is None:
+        return None, f"method not allowed: {method_raw!r}"
+    path = safe_path(plan.get("path") or "/")
+    if path is None:
+        return None, "invalid path"
+    if method == "POST" and not is_proof_post_path_allowed(path):
+        return None, "POST path not allowlisted"
+    headers = safe_headers(raw_headers)
+    if headers is None:
+        return None, "invalid headers"
+    body = plan.get("body")
+    if body is not None and body != "":
+        body = safe_body(body)
+        if body is None:
+            return None, "invalid body"
+        if method in _SAFE_METHODS and body:
+            # GET/HEAD/OPTIONS with a body is unused by honest probes and is a
+            # common smuggling vehicle — drop the body rather than send it.
+            body = None
+    else:
+        body = None
+    blocked, reason = is_destructive_payload(
+        path, body, *(headers.values() if headers else ())
+    )
+    if blocked:
+        return None, reason
+    port = safe_port(plan.get("port"), default_port)
+    clean = dict(plan)
+    clean.update({
+        "method": method,
+        "path": path,
+        "headers": headers or {},
+        "port": port,
+        "tls": bool(plan.get("tls", False)),
+    })
+    if body is not None:
+        clean["body"] = body
+    else:
+        clean.pop("body", None)
+    return clean, ""
 
 
 def safe_wordlist_name(name: Any) -> str:

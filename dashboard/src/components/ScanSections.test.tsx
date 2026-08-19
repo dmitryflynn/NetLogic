@@ -383,6 +383,24 @@ describe('ScanSections — AI Investigation Plan', () => {
   })
 })
 
+describe('ScanSections — AI Investigation Agent depth metadata', () => {
+  it('shows depth mode and high-value count from the serialized artifact', () => {
+    const s = {
+      aiAgent: {
+        depth_mode: true,
+        high_value_used: 12,
+        confirmed: 1,
+        steps_used: 18,
+        requests_used: 22,
+        findings: [{ id: 'xss', title: 'Reflected XSS', status: 'confirmed' }],
+        turns: [{ step: 1, thought: 'probe', results: [] }],
+      },
+    } as ScanSectionsT
+    render(<ScanSections s={s} />)
+    expect(screen.getByText(/depth · 1 confirmed · 12 high-value · 18 steps/)).toBeInTheDocument()
+  })
+})
+
 describe('ScanSections — smoke', () => {
   it('renders nothing catastrophic for an empty scan', () => {
     const { container } = render(<ScanSections s={{} as ScanSectionsT} />)

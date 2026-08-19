@@ -14,6 +14,11 @@ log = logging.getLogger("netlogic.verifier.planner")
 
 CompleteFn = Callable[[str, str], str]
 
+
+def _sanitize_plan(plan: dict, default_port: int = 80) -> tuple[Optional[dict], str]:
+    from src.reasoning.agent.sanitize import sanitize_http_plan  # noqa: PLC0415
+    return sanitize_http_plan(plan, default_port=default_port)
+
 _SYSTEM = (
     "You are a penetration testing assistant. Given a CVE and service context, "
     "design a single HTTP request that would RETURN EVIDENCE the vulnerability "
@@ -25,8 +30,10 @@ _SYSTEM = (
     "  • For SSRF: check for error messages that indicate server-side request processing.\n"
     "  • For RCE: use a safe side-channel (sleep-based timing with ?sleep=5, "
     "or DNS lookup to a canary domain). Default to sleep=3.\n"
-    "  • For request smuggling: send a crafted Content-Length + Transfer-Encoding pair "
-    "and check for 502/garbled response.\n"
+    "  • For request smuggling / CL+TE / Host override: skip — those probes are not "
+    "sent on this path (crash-probe tooling only).\n"
+    "  • Methods: GET, HEAD, OPTIONS, or POST on search/login/graphql-like paths only.\n"
+    "  • Paths must be relative (start with /). No CR/LF in path or headers.\n"
     "  • For open redirect: check if the Location header matches a supplied URL.\n"
     "  • For directory traversal: try /etc/passwd, /windows/win.ini, or similar platform files.\n"
     "  • The expected_status should be 200, 403, 500, or 502 for a vulnerable host — "
@@ -172,10 +179,14 @@ def generate_plans_for_cves(cves: list[dict], service: str, product: str, versio
         if builtin:
             for bp in builtin:
                 p = dict(bp)
-                p.setdefault("port", port)
-                p.setdefault("tls", use_tls)
+                p["port"] = port
+                p["tls"] = use_tls
                 p.setdefault("cve_id", cve_id)
-                plans.append(p)
+                clean, reason = _sanitize_plan(p, port)
+                if clean is None:
+                    log.debug("Dropped builtin plan for %s: %s", cve_id, reason)
+                    continue
+                plans.append(clean)
             continue
 
         # Try AI generation
@@ -185,7 +196,11 @@ def generate_plans_for_cves(cves: list[dict], service: str, product: str, versio
                 if ai_plan and ai_plan.get("testable"):
                     ai_plan.setdefault("port", port)
                     ai_plan.setdefault("tls", use_tls)
-                    plans.append(ai_plan)
+                    clean, reason = _sanitize_plan(ai_plan, port)
+                    if clean is None:
+                        log.debug("Dropped AI plan for %s: %s", cve_id, reason)
+                    else:
+                        plans.append(clean)
                 elif ai_plan and ai_plan.get("skip_reason"):
                     log.debug("AI skipped %s: %s", cve_id, ai_plan.get("skip_reason"))
                 continue
