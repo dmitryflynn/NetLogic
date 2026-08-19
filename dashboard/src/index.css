@@ -173,9 +173,15 @@
     background: rgba(255, 95, 95, 0.08);
   }
   .btn:disabled {
-    opacity: 0.4;
+    opacity: 0.32;
     cursor: not-allowed;
-    filter: none;
+    filter: grayscale(0.35);
+    box-shadow: none;
+  }
+  .btn-primary:disabled:hover {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0) 42%),
+      rgba(98, 229, 220, 0.11);
   }
 
   .input {

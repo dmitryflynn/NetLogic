@@ -24,7 +24,7 @@ export function Brand({ size = 'md', subtitle }: { size?: 'sm' | 'md' | 'lg'; su
           netlogic<sup className="text-[0.55em] font-medium ml-0.5">®</sup>
         </p>
         {subtitle && (
-          <p className="font-mono text-[10px] text-text-dim mt-1.5 tracking-[0.16em] uppercase">
+          <p className="font-mono text-[11px] text-text-dim mt-1.5 tracking-[0.04em]">
             proves, not guesses
           </p>
         )}
