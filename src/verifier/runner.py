@@ -98,17 +98,37 @@ def run_test(plan: dict, host: str) -> VerificationResult:
 
     *plan* is a dict from the AI planner with keys:
       cve_id, protocol, method, path, headers, body, expected_status, expected_body_patterns
-    """
-    cve_id = plan.get("cve_id", "unknown")
-    port = plan.get("port", 80)
-    use_tls = plan.get("tls", False)
-    method = plan.get("method", "GET")
-    path = plan.get("path", "/")
-    headers = plan.get("headers") or {}
-    body = plan.get("body")
 
-    result = VerificationResult(cve_id=cve_id, host=host, port=port,
-                                protocol="https" if use_tls else "http")
+    Plans are sanitized with the same ToolRuntime HTTP rails before anything
+    is written to the socket. Invalid plans fail closed (no request).
+    """
+    from src.reasoning.agent.sanitize import sanitize_http_plan  # noqa: PLC0415
+
+    cve_id = plan.get("cve_id", "unknown") if isinstance(plan, dict) else "unknown"
+    default_port = 80
+    if isinstance(plan, dict):
+        try:
+            default_port = int(plan.get("port") or 80)
+        except (TypeError, ValueError):
+            default_port = 80
+    clean, reason = sanitize_http_plan(plan, default_port=default_port)
+    if clean is None:
+        return VerificationResult(
+            cve_id=str(cve_id), host=host, port=default_port, protocol="http",
+            success=False, error=f"sanitize failed: {reason}",
+            evidence=f"Probe not sent — {reason}",
+        )
+
+    port = clean["port"]
+    use_tls = clean["tls"]
+    method = clean["method"]
+    path = clean["path"]
+    headers = clean.get("headers") or {}
+    body = clean.get("body")
+
+    result = VerificationResult(cve_id=str(cve_id), host=host, port=port,
+                                protocol="https" if use_tls else "http",
+                                success=False)
 
     payload = _build_http_request(method, path, host, headers, body)
     raw, elapsed, err = _tcp_send_recv(host, port, payload, use_tls=use_tls)

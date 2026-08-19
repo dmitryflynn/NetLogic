@@ -20,6 +20,8 @@ def agent_result_to_art(result) -> dict:
         "requests_used": d.get("requests_used") or 0,
         "stopped_reason": d.get("stopped_reason") or "",
         "surface": d.get("surface") or {},
+        "depth_mode": bool(d.get("depth_mode")),
+        "high_value_used": int(d.get("high_value_used") or 0),
     }
 
 

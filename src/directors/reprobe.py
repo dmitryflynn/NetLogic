@@ -31,8 +31,9 @@ SYSTEM = (
     "  • For path traversal / file read: expect the target file content "
     "in the body.\n"
     "  • For RCE: use a safe side-channel (sleep=3 timing or DNS lookup).\n"
-    "  • For request smuggling: send crafted CL+TE pair and check for "
-    "502/garbled response.\n"
+    "  • For request smuggling / CL+TE: skip — not sent on this path.\n"
+    "  • Methods: GET, HEAD, OPTIONS, or POST on search/login/graphql-like paths only.\n"
+    "  • Relative paths only. No CR/LF in path or headers. No Host/Transfer-Encoding.\n"
     "  • For open redirect: check if Location header matches supplied URL.\n"
     "  • The expected_status should be 200, 403, 500, or 502 — never 404.\n"
     "  • Use the full host context (HTTP response, TLS, headers, tech "
@@ -113,5 +114,10 @@ def _parse_probe_plans(text: str) -> list[dict]:
             plan["headers"] = obj["headers"]
         if obj.get("body"):
             plan["body"] = obj["body"]
-        plans.append(plan)
+        from src.reasoning.agent.sanitize import sanitize_http_plan  # noqa: PLC0415
+        clean, reason = sanitize_http_plan(plan, default_port=int(plan.get("port") or 80))
+        if clean is None:
+            log.debug("Dropped re-probe plan: %s", reason)
+            continue
+        plans.append(clean)
     return plans
