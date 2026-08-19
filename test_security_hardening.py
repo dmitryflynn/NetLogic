@@ -67,6 +67,18 @@ class TestSaasScanPolicy(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ScanRequest(target="metadata.google.internal")
 
+    def test_localhost_blocked_in_saas(self):
+        with patch.dict(os.environ, {"NETLOGIC_SAAS": "1"}, clear=False):
+            with self.assertRaises(ValueError):
+                ScanRequest(target="localhost")
+
+    def test_unresolved_hostname_blocked_in_saas(self):
+        with patch.dict(os.environ, {"NETLOGIC_SAAS": "1"}, clear=False):
+            with patch("api.scan_policy._resolve_host_ips", return_value=set()):
+                with self.assertRaises(ValueError) as ctx:
+                    ScanRequest(target="definitely-not-a-real-host.invalid")
+                self.assertIn("could not be resolved", str(ctx.exception).lower())
+
 
 class TestJwtRevocation(unittest.TestCase):
     def setUp(self):

@@ -3,6 +3,13 @@ import { useTargetHistory, downloadExport, type TargetScan } from '../api/scan'
 
 const SEVS = ['critical', 'high', 'medium', 'low'] as const
 
+const SEV_STYLE: Record<string, { badge: string; line: string; dot: string }> = {
+  critical: { badge: 'text-critical bg-critical/10', line: 'stroke-critical', dot: 'fill-critical' },
+  high:     { badge: 'text-high bg-high/10',         line: 'stroke-high',     dot: 'fill-high' },
+  medium:   { badge: 'text-medium bg-medium/10',     line: 'stroke-medium',   dot: 'fill-medium' },
+  low:      { badge: 'text-low bg-low/10',           line: 'stroke-low',      dot: 'fill-low' },
+}
+
 function fmtDate(ts: number | null): string {
   if (!ts) return '—'
   return new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
@@ -17,7 +24,7 @@ function SeverityBadges({ sev, status }: { sev: TargetScan['severity']; status?:
   return (
     <span className="flex items-center gap-1.5">
       {SEVS.filter((s) => sev[s] > 0).map((s) => (
-        <span key={s} className={`text-[10px] px-1.5 py-0.5 rounded text-${s} fill-current bg-${s}/10`}>
+        <span key={s} className={`text-[10px] px-1.5 py-0.5 rounded ${SEV_STYLE[s]?.badge ?? ''}`}>
           {sev[s]} {s}
         </span>
       ))}
@@ -76,12 +83,12 @@ function TrendChart({ scans }: { scans: TargetScan[] }) {
           if (total === 0) return null
           return (
             <g key={sev}>
-              <path d={linePath(sev)} className={`text-${sev} stroke-current`} fill="none" strokeWidth="1.5" strokeLinejoin="round" />
+              <path d={linePath(sev)} className={SEV_STYLE[sev]?.line ?? ''} fill="none" strokeWidth="1.5" strokeLinejoin="round" />
               {/* Dots */}
               {completed.map((s, i) => {
                 const v = s.severity[sev as keyof typeof s.severity]
                 return v > 0 ? (
-                  <circle key={s.job_id} cx={x(i)} cy={y(v)} r="2.5" className={`text-${sev} fill-current`} stroke="var(--bg-canvas)" strokeWidth="1" />
+                  <circle key={s.job_id} cx={x(i)} cy={y(v)} r="2.5" className={SEV_STYLE[sev]?.dot ?? ''} stroke="var(--bg-canvas)" strokeWidth="1" />
                 ) : null
               })}
             </g>
@@ -92,7 +99,7 @@ function TrendChart({ scans }: { scans: TargetScan[] }) {
       <div className="flex gap-4 mt-2 justify-center">
         {SEVS.map((sev) => (
           <span key={sev} className="flex items-center gap-1.5 text-[10px] text-text-dim">
-            <span className={`w-2.5 h-0.5 rounded text-${sev} bg-current`} />
+            <span className={`w-2.5 h-0.5 rounded bg-current ${SEV_STYLE[sev]?.badge.split(' ')[0] ?? ''}`} />
             {sev}
           </span>
         ))}

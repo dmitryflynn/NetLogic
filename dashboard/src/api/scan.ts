@@ -347,6 +347,7 @@ export const useJob = (jobId: string) =>
   useQuery<JobDetail>({
     queryKey: ['job', jobId],
     queryFn: () => api.get(`/jobs/${jobId}`),
+    enabled: !!jobId,
     refetchInterval: (q) =>
       q.state.data?.status === 'running' || q.state.data?.status === 'queued'
         ? 2000
@@ -528,6 +529,14 @@ export function useStreamScan(jobId: string | null) {
     async function connect(): Promise<void> {
       const ctrl = new AbortController()
       abortRef.current = ctrl
+
+      // On reconnect, resync from persisted job events to avoid duplicating the SSE replay.
+      if (retriesRef.current > 0 && jobId) {
+        try {
+          const snap = await api.get<JobDetail>(`/jobs/${jobId}`)
+          if (snap.events?.length) setEvents(snap.events)
+        } catch { /* best-effort */ }
+      }
 
       // Add a 15s connection timeout to prevent hanging forever
       const timeoutId = setTimeout(() => ctrl.abort(), 15_000)
