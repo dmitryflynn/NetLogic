@@ -27,6 +27,7 @@ import logging
 import os
 import secrets
 import time
+import uuid
 from typing import Optional
 
 log = logging.getLogger(__name__)
@@ -125,9 +126,16 @@ def create_token(
 ) -> str:
     """Sign and return a JWT carrying org_id and sub."""
     now = int(time.time())
+    exp = now + expiry_seconds
     payload = _b64url_encode(
         json.dumps(
-            {"sub": sub, "org_id": org_id, "iat": now, "exp": now + expiry_seconds}
+            {
+                "sub": sub,
+                "org_id": org_id,
+                "iat": now,
+                "exp": exp,
+                "jti": str(uuid.uuid4()),
+            }
         ).encode()
     )
     sig = _sign(_HEADER_B64, payload)
@@ -156,6 +164,9 @@ def verify_token(token: str) -> Optional[dict]:
             return None
         claims = json.loads(_b64url_decode(payload_b64))
         if claims.get("exp", 0) < time.time():
+            return None
+        from api.auth.token_revocation import is_token_revoked  # noqa: PLC0415
+        if is_token_revoked(claims.get("jti"), claims.get("exp")):
             return None
         return claims
     except Exception:  # noqa: BLE001
