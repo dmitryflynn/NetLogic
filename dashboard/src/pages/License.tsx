@@ -28,7 +28,15 @@ export default function License() {
     <div className="min-h-screen site-bg relative flex items-center justify-center px-6">
       <div className="site-grid pointer-events-none absolute inset-0" />
       <div className="site-noise pointer-events-none absolute inset-0" />
-      <div className="relative z-10 glass-strong w-full max-w-md p-9 space-y-7 rounded-2xl">
+      <div className="radar" aria-hidden>
+        <div className="r-ring" />
+        <div className="r-ring r2" />
+        <div className="r-ring r3" />
+        <div className="r-cross" />
+        <div className="r-cross h" />
+        <div className="r-sweep" />
+      </div>
+      <div className="relative z-10 glass-strong w-full max-w-md p-9 space-y-7 rounded-[28px]">
         <div className="text-center space-y-2">
           <Brand size="md" />
           <p className="text-text-dim text-[14px]">License required</p>
@@ -37,7 +45,7 @@ export default function License() {
         <p className="text-text-dim text-[14px] leading-relaxed">
           A valid license is required to access NetLogic.{' '}
           <a
-            href="https://netlogic.io/pricing"
+            href="https://netlogic.studio/#pricing"
             target="_blank"
             rel="noopener noreferrer"
             className="text-accent hover:underline"

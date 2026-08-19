@@ -1,17 +1,34 @@
+export function BrandMark({ className = '' }: { className?: string }) {
+  return (
+    <span className={`brand-lock ${className}`} aria-hidden>
+      <svg viewBox="0 0 66 48">
+        <rect x="7" y="18" width="4" height="20" rx="2" fill="#f2f1ee" />
+        <rect x="21" y="15" width="4" height="26" rx="2" fill="#f2f1ee" />
+        <rect x="34" y="8" width="4" height="40" rx="2" fill="#98e8db" />
+        <rect x="48" y="16" width="4" height="25" rx="2" fill="#f2f1ee" />
+        <rect x="62" y="18" width="4" height="20" rx="2" fill="#f2f1ee" />
+      </svg>
+    </span>
+  )
+}
+
 export function Brand({ size = 'md', subtitle }: { size?: 'sm' | 'md' | 'lg'; subtitle?: boolean }) {
   const title =
-    size === 'lg' ? 'text-[2rem]' :
-    size === 'sm' ? 'text-[1.15rem]' : 'text-[1.35rem]'
+    size === 'lg' ? 'text-[1.35rem]' :
+    size === 'sm' ? 'text-[15px]' : 'text-[16px]'
   return (
-    <div>
-      <p className={`font-serif font-semibold text-text-bright tracking-[-0.03em] leading-none ${title}`}>
-        NetLogic
-      </p>
-      {subtitle && (
-        <p className="font-sans text-[11px] text-text-dim mt-1.5 tracking-[0.08em] uppercase">
-          Attack surface intelligence
+    <div className="flex items-center gap-2.5">
+      <BrandMark />
+      <div>
+        <p className={`brand-name leading-none ${title}`}>
+          netlogic<sup className="text-[0.55em] font-medium ml-0.5">®</sup>
         </p>
-      )}
+        {subtitle && (
+          <p className="font-mono text-[10px] text-text-dim mt-1.5 tracking-[0.16em] uppercase">
+            proves, not guesses
+          </p>
+        )}
+      </div>
     </div>
   )
 }
