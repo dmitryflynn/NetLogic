@@ -4,7 +4,7 @@ import { Brand } from '../components/Brand'
 
 export default function Login() {
   return (
-    <div className="min-h-full site-bg relative flex">
+    <div className="min-h-full overflow-hidden site-bg relative flex">
       <div className="site-grid pointer-events-none absolute inset-0" />
       <div className="site-noise pointer-events-none absolute inset-0" />
       <div className="radar" aria-hidden>

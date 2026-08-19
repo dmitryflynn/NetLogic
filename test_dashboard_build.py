@@ -41,3 +41,15 @@ def test_skips_build_when_dist_fresh(tmp_path: Path) -> None:
     src_mtime = old.stat().st_mtime - 10
     os.utime(old, (src_mtime, src_mtime))
     assert _dashboard_needs_build(dash, dist) is False
+
+
+def test_vite_build_env_prefers_env_local(tmp_path: Path, monkeypatch) -> None:
+    from netlogic import _vite_build_env
+    dash = tmp_path / "dashboard"
+    dash.mkdir()
+    (dash / ".env.example").write_text("VITE_CLERK_PUBLISHABLE_KEY=pk_example\n")
+    (dash / ".env.local").write_text("VITE_CLERK_PUBLISHABLE_KEY=pk_local\n")
+    monkeypatch.delenv("VITE_CLERK_PUBLISHABLE_KEY", raising=False)
+    env = _vite_build_env(dash)
+    assert env["VITE_CLERK_PUBLISHABLE_KEY"] == "pk_local"
+

@@ -16,7 +16,7 @@ export default function SignUpPage() {
   const [agreed, setAgreed] = useState(false)
 
   return (
-    <div className="min-h-full site-bg relative flex flex-col items-center justify-center gap-8 py-12 px-6">
+    <div className="min-h-full overflow-hidden site-bg relative flex flex-col items-center justify-center gap-8 py-12 px-6">
       <div className="site-grid pointer-events-none absolute inset-0" />
       <div className="site-noise pointer-events-none absolute inset-0" />
       <div className="radar" aria-hidden>

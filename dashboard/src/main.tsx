@@ -5,6 +5,7 @@ import { QueryClientProvider, QueryClient } from '@tanstack/react-query'
 import { ClerkProvider } from '@clerk/clerk-react'
 import App from './App'
 import ErrorBoundary from './components/ErrorBoundary'
+import MissingConfig from './components/MissingConfig'
 import { clerkAppearance } from './clerkAppearance'
 import './index.css'
 
@@ -17,17 +18,16 @@ const queryClient = new QueryClient({
   },
 })
 
-// Clerk publishable key (non-secret). Without it the app can't authenticate, so
-// fail loudly rather than render a broken sign-in.
+// Clerk publishable key (non-secret). Vite inlines it at build time.
 const PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined
-if (!PUBLISHABLE_KEY) {
-  throw new Error(
-    'Missing VITE_CLERK_PUBLISHABLE_KEY — set it in dashboard/.env.local (see .env.example).',
-  )
-}
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
+function Root() {
+  if (!PUBLISHABLE_KEY) {
+    return (
+      <MissingConfig message="This build has no Clerk publishable key, so sign-in cannot start. The page used to go fully black here." />
+    )
+  }
+  return (
     <BrowserRouter>
       <ClerkProvider
         publishableKey={PUBLISHABLE_KEY}
@@ -43,5 +43,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         </QueryClientProvider>
       </ClerkProvider>
     </BrowserRouter>
-  </React.StrictMode>
+  )
+}
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <Root />
+  </React.StrictMode>,
 )

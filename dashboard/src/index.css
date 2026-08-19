@@ -23,6 +23,7 @@
     background-color: var(--bg-canvas);
     font-feature-settings: "ss01", "kern";
     letter-spacing: -0.01em;
+    overflow-x: hidden;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -36,6 +37,7 @@
 /* netlogic.studio canvas: teal-black base + faint radar */
 .site-bg {
   background-color: #071014;
+  overflow: hidden;
   background-image:
     radial-gradient(ellipse 70% 50% at 88% 8%, rgba(98, 229, 220, 0.07), transparent 55%),
     radial-gradient(ellipse 50% 40% at 8% 100%, rgba(98, 229, 220, 0.04), transparent 55%),
@@ -372,8 +374,13 @@
     color: var(--dim);
   }
 
-  select.input option {
-    background: #0d191e;
-    color: #eaf3f5;
+  .legal-doc h1,
+  .legal-doc .font-display {
+    font-size: 1.75rem;
+    line-height: 1.2;
+  }
+  .legal-doc h2 {
+    font-size: 1.05rem;
+    margin-top: 1.5rem;
   }
 }
