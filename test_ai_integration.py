@@ -70,6 +70,14 @@ def test_scan_request_masks_ai_key_for_public_and_persisted_dumps():
     assert req.task_dump()["ai_key"] == "secret"
 
 
+def test_scan_request_masks_ssh_pass_for_public_and_persisted_dumps():
+    req = ScanRequest(target="example.com", ssh_user="admin", ssh_pass="s3cr3t")
+
+    assert req.public_dump()["ssh_pass"] == "**********"
+    assert req.persisted_dump()["ssh_pass"] == ""
+    assert req.task_dump()["ssh_pass"] == "s3cr3t"
+
+
 def test_scan_request_normalizes_empty_ai_fields():
     req = ScanRequest(target="example.com", do_ai=True, ai_provider=" OPENAI ", ai_key=" ", ai_model=" gpt-4o-mini ")
 

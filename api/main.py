@@ -205,9 +205,17 @@ async def lifespan(app: FastAPI):
     from api.storage.json_store import JsonScanStore, SCANS_DIR  # noqa: PLC0415
     JsonScanStore(SCANS_DIR)
 
-    # Start the built-in local scan agent so scans work without any external agent.
-    from api.agents.local_agent import start as start_local_agent  # noqa: PLC0415
-    start_local_agent(org_id="")
+    # Built-in local agent: desktop/single-node only. In multi-tenant SaaS (Postgres
+    # enabled) scans must run on org-scoped remote agents — a global org_id="" agent
+    # would execute every tenant's jobs in-process on the controller.
+    if not db.is_enabled():
+        from api.agents.local_agent import start as start_local_agent  # noqa: PLC0415
+        start_local_agent(org_id="")
+    else:
+        _startup_log.info(
+            "Postgres enabled — built-in local scan agent not started; "
+            "register remote agents per org."
+        )
 
     # Open the web dashboard in the default browser unless suppressed.
     # Set NETLOGIC_NO_BROWSER=1 for headless / Docker / CI environments.
