@@ -144,6 +144,24 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring, view 
               </ul>
             </details>
           )}
+          {(() => {
+            const attn = s.triage!.attention?.length ?? s.triage!.counts?.attention ?? 0
+            const noise = s.triage!.noise?.length ?? s.triage!.counts?.noise ?? 0
+            const total = s.triage!.counts?.total ?? (attn + noise)
+            const keptPct = total > 0 ? Math.max(6, Math.round((attn / total) * 100)) : 0
+            return (
+              <div className="fusion-gate">
+                <p className="fusion-gate-line">
+                  <b>{total} signals</b>
+                  {' → '}
+                  <b>{attn} findings</b>
+                  {noise > 0 ? ` · ${noise} discarded at the gate` : ''}
+                </p>
+                <div className="fusion-bar" aria-hidden><i style={{ width: `${keptPct}%` }} /></div>
+                <p className="fusion-note">read-only verification · nothing executed against the target</p>
+              </div>
+            )
+          })()}
         </Panel>
       )}
 
@@ -272,7 +290,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring, view 
                subtitle={adjudicated > 0 ? `${adjudicated} AI-resolved` : undefined}>
           <p className="text-text-dim text-[11px] mb-3">
             One card per investigated vulnerability with evidence. Version/banner catalog matches without
-            a non-destructive remote proof stay <span className="text-slate-400">UNVERIFIED</span> (leads,
+            a non-destructive remote proof stay <span className="text-text-dim">UNVERIFIED</span> (leads,
             not confirmed vulnerabilities). Related CVE identifiers may appear in the evidence — the
             primary object is the weakness on this host, not the catalog ID.
           </p>
@@ -280,13 +298,13 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring, view 
             {sorted.map((iv, i) => {
               const c = (iv.conclusion ?? '').toUpperCase()
               const tone =
-                c === 'UNVERIFIED' ? 'text-slate-400 border-slate-500/30'
-                : c.includes('NOT EXPLOITABLE') || c === 'REFUTED' ? 'text-emerald-400 border-emerald-500/30'
-                : c === 'EXPLOITABLE' || c.startsWith('CONFIRMED') ? 'text-rose-400 border-rose-500/30'
-                : c.includes('POSSIBLY') || c.startsWith('LIKELY') ? 'text-amber-400 border-amber-500/30'
+                c === 'UNVERIFIED' ? 'text-text-dim border-border'
+                : c.includes('NOT EXPLOITABLE') || c === 'REFUTED' ? 'text-low border-low/30'
+                : c === 'EXPLOITABLE' || c.startsWith('CONFIRMED') ? 'text-critical border-critical/30'
+                : c.includes('POSSIBLY') || c.startsWith('LIKELY') ? 'text-high border-high/30'
                 : 'text-text-dim border-border'
               return (
-                <div key={i} className={`rounded border ${tone} bg-black/20 p-3`}>
+                <div key={i} className={`rounded-lg border ${tone} bg-base/40 p-3`}>
                   <div className="flex items-start justify-between gap-3">
                     <p className="text-text font-medium text-[13px]">{iv.question}</p>
                     <span className={`shrink-0 text-[11px] font-semibold ${tone.split(' ')[0]} flex items-center gap-1`}>
@@ -311,7 +329,7 @@ export default function ScanSections({ s, onExplore, exploreMd, exploring, view 
                     <ul className="mt-2 space-y-0.5">
                       {iv.evidence!.map((e, j) => (
                         <li key={j} className="text-[11px] flex items-center gap-1.5">
-                          <span className={e.satisfied ? 'text-emerald-400' : 'text-text-dim'}>
+                          <span className={e.satisfied ? 'text-low' : 'text-text-dim'}>
                             {e.satisfied ? '✓' : '○'}
                           </span>
                           <span className={e.satisfied ? 'text-text' : 'text-text-dim'}>{e.name}</span>

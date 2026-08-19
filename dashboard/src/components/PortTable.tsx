@@ -24,7 +24,7 @@ function str(v: unknown): string {
 export default function PortTable({ ports }: { ports: Port[] }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-[11px] border-collapse">
+      <table className="w-full text-[11px] border-collapse data-table">
         <thead>
           <tr className="text-left text-text-dim border-b border-border">
             <th className="pb-2 pr-4 font-medium">Port</th>

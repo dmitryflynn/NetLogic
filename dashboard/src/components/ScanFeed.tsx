@@ -597,24 +597,20 @@ export default function ScanFeed({
   ]
 
   return (
-    <section className="border border-border rounded-lg overflow-hidden bg-panel">
-      {/* Header */}
+    <section className="product-frame">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center gap-3 px-4 py-2.5 bg-elevated/50 border-b border-border hover:bg-elevated text-left"
+        className="console-bar w-full text-left hover:text-text-bright"
       >
-        <span className="text-text-dim text-[10px] transition-transform" style={{ transform: open ? 'rotate(90deg)' : undefined }}>▶</span>
-        <span className="section-title mb-0 normal-case tracking-normal text-[12px] text-text-bright">
-          {live ? 'Live event stream' : 'Event log'}
+        <span>
+          <span className="dot">■</span>
+          {' '}
+          {live ? 'netlogic · live event stream' : 'netlogic · event log'}
         </span>
-        {live && (
-          <span className="text-[10px] text-accent animate-pulse flex items-center gap-1">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent" /> Live
-          </span>
-        )}
-        <span className="text-[10px] text-text-dim ml-1">{events.length} events</span>
-        <span className="ml-auto text-[10px] text-text-dim">{open ? 'Hide' : 'Show'}</span>
+        <span>
+          {live ? 'live' : 'persisted'} · {events.length} events · {open ? 'hide' : 'show'}
+        </span>
       </button>
 
       {open && (

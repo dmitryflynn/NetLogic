@@ -297,6 +297,7 @@ describe('ScanSections — Vulnerabilities (triage)', () => {
     expect(screen.getByText('KEV')).toBeInTheDocument()
     // catalog leads are behind the disclosure summary
     expect(screen.getByText(/catalog lead\(s\) filtered/)).toBeInTheDocument()
+    expect(screen.getByText(/discarded at the gate/)).toBeInTheDocument()
   })
 
   it('surfaces a web/SaaS finding in the hero with its title and a SaaS tag', () => {

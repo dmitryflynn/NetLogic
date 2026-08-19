@@ -69,7 +69,7 @@ export default function Layout() {
         <main className="flex-1 min-h-0 overflow-y-auto">
           <Outlet />
         </main>
-        <footer className="shrink-0 h-9 flex items-center justify-center gap-3 px-6 text-text-dim text-[11px] font-mono tracking-[0.08em]">
+        <footer className="shrink-0 h-9 flex items-center justify-center gap-4 px-6 text-text-dim text-[10px] font-mono tracking-[0.12em] uppercase">
           <span>© {new Date().getFullYear()} netlogic</span>
           <span aria-hidden>·</span>
           <Link to="/terms" className="hover:text-accent transition-colors">terms</Link>

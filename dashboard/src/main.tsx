@@ -5,6 +5,7 @@ import { QueryClientProvider, QueryClient } from '@tanstack/react-query'
 import { ClerkProvider } from '@clerk/clerk-react'
 import App from './App'
 import ErrorBoundary from './components/ErrorBoundary'
+import { clerkAppearance } from './clerkAppearance'
 import './index.css'
 
 const queryClient = new QueryClient({
@@ -33,6 +34,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         signInUrl="/login"
         signUpUrl="/sign-up"
         afterSignOutUrl="/login"
+        appearance={clerkAppearance}
       >
         <QueryClientProvider client={queryClient}>
           <ErrorBoundary>
