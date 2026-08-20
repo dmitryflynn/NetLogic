@@ -164,8 +164,10 @@ def _stream_openai(cfg, messages: list[dict], on_token: Callable[[str], None]) -
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
+    from src.ai_analyst import urlopen_no_redirect  # noqa: PLC0415
+
     full_text = ""
-    with urllib.request.urlopen(req, timeout=cfg.timeout) as resp:
+    with urlopen_no_redirect(req, timeout=cfg.timeout) as resp:
         for raw_line in resp:
             line = raw_line.decode("utf-8", errors="replace").strip()
             if not line.startswith("data: "):
@@ -218,8 +220,10 @@ def _stream_anthropic(cfg, messages: list[dict], on_token: Callable[[str], None]
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
+    from src.ai_analyst import urlopen_no_redirect  # noqa: PLC0415
+
     full_text = ""
-    with urllib.request.urlopen(req, timeout=cfg.timeout) as resp:
+    with urlopen_no_redirect(req, timeout=cfg.timeout) as resp:
         event_type = None
         for raw_line in resp:
             line = raw_line.decode("utf-8", errors="replace").strip()
