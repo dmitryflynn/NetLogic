@@ -248,33 +248,8 @@ class ScanRequest(BaseModel):
     @field_validator("ai_base_url")
     @classmethod
     def _validate_ai_base_url(cls, v: str) -> str:
-        v = (v or "").strip()
-        if not v:
-            return ""
-        if not (v.startswith("https://") or v.startswith("http://")):
-            raise ValueError("ai_base_url must start with http:// or https://")
-
-        # HTTPS is always permitted (encrypted).
-        if v.startswith("https://"):
-            return v.rstrip("/")
-
-        # HTTP restricted to loopback and private IPs only.
-        from urllib.parse import urlparse
-        host = urlparse(v).hostname or ""
-        if host not in ("localhost", "127.0.0.1", "::1"):
-            try:
-                addr = ipaddress.ip_address(host)
-                if not (addr.is_private or addr.is_loopback):
-                    raise ValueError(
-                        "HTTP ai_base_url must point to localhost, 127.0.0.1, "
-                        "or a private IP (e.g. 10.x.x.x, 172.16-31.x.x, 192.168.x.x)"
-                    )
-            except ValueError:
-                raise ValueError(
-                    "HTTP ai_base_url must be an IP address in a private range "
-                    "or localhost; use https:// for hostnames"
-                )
-        return v.rstrip("/")
+        from api.scan_policy import normalize_llm_base_url  # noqa: PLC0415
+        return normalize_llm_base_url(v or "")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Validators

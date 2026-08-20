@@ -651,10 +651,26 @@ def _build_messages(findings: dict) -> list[dict]:
 
 # ─── HTTP transport (stdlib) ──────────────────────────────────────────────────
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """LLM calls must not follow 3xx — a public HTTPS base URL that redirects
+    to 169.254.169.254 (or any internal hop) would bypass URL validation."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        raise urllib.error.HTTPError(
+            newurl, code, "LLM HTTP redirects are not followed", headers, fp,
+        )
+
+
+def urlopen_no_redirect(req: urllib.request.Request, timeout: float):
+    """urlopen that refuses to follow redirects (shared with fusion streaming)."""
+    opener = urllib.request.build_opener(_NoRedirect)
+    return opener.open(req, timeout=timeout)
+
+
 def _http_post(url: str, headers: dict, payload: dict, timeout: float) -> dict:
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urlopen_no_redirect(req, timeout=timeout) as resp:
         status = resp.status
         body = resp.read().decode("utf-8")
     try:
