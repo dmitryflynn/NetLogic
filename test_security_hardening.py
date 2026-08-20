@@ -179,6 +179,59 @@ class TestLlmHttpNoRedirect(unittest.TestCase):
         self.assertEqual(hits["secret"], 0)
 
 
+class TestPersistedJobRehydration(unittest.TestCase):
+    """Durable jobs must reload without live DNS / current SaaS policy.
+
+    ScanJob.from_dict rebuilds ScanRequest from storage. Running the hosted
+    scan-target and LLM-URL checks there (including getaddrinfo) 404s history
+    after cache eviction or a DNS blip, and drops LAN scans if SaaS mode is
+    enabled later. New submissions still go through the strict validators.
+    """
+
+    def _completed_record(self, **config_kwargs) -> dict:
+        from api.jobs.manager import ScanJob
+        req = ScanRequest(**config_kwargs)
+        job = ScanJob(job_id="rehydrate-1", config=req, org_id="acme", status="completed")
+        job.completed_at = 1.0
+        return job.to_dict()
+
+    def test_reload_survives_saas_dns_failure(self):
+        from api.jobs.manager import ScanJob
+        with patch("api.scan_policy.saas_scan_restrictions_enabled", return_value=False):
+            data = self._completed_record(target="example.com")
+        with patch.dict(os.environ, {"NETLOGIC_SAAS": "1"}, clear=False):
+            with patch("api.scan_policy._resolve_host_ips", return_value=set()):
+                with self.assertRaises(ValueError):
+                    ScanRequest(target="example.com")
+                restored = ScanJob.from_dict(data)
+        self.assertEqual(restored.config.target, "example.com")
+        self.assertEqual(restored.status, "completed")
+        self.assertEqual(restored.org_id, "acme")
+
+    def test_reload_keeps_private_target_after_saas_enabled(self):
+        from api.jobs.manager import ScanJob
+        with patch("api.scan_policy.saas_scan_restrictions_enabled", return_value=False):
+            data = self._completed_record(target="10.0.0.5")
+        with patch.dict(os.environ, {"NETLOGIC_SAAS": "1"}, clear=False):
+            with self.assertRaises(ValueError):
+                ScanRequest(target="10.0.0.5")
+            restored = ScanJob.from_dict(data)
+        self.assertEqual(restored.config.target, "10.0.0.5")
+
+    def test_reload_keeps_desktop_ollama_url_under_saas(self):
+        from api.jobs.manager import ScanJob
+        with patch("api.scan_policy.saas_scan_restrictions_enabled", return_value=False):
+            data = self._completed_record(
+                target="example.com",
+                ai_base_url="http://127.0.0.1:11434/v1",
+            )
+        with patch.dict(os.environ, {"NETLOGIC_SAAS": "1"}, clear=False):
+            with self.assertRaises(ValueError):
+                ScanRequest(target="8.8.8.8", ai_base_url="http://127.0.0.1:11434/v1")
+            restored = ScanJob.from_dict(data)
+        self.assertEqual(restored.config.ai_base_url, "http://127.0.0.1:11434/v1")
+
+
 class TestJwtRevocation(unittest.TestCase):
     def setUp(self):
         from api.auth import jwt_handler as j

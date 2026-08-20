@@ -135,7 +135,9 @@ class ScanJob:
         """Re-hydrate a job from disk storage."""
         job = cls(
             job_id=data["job_id"],
-            config=ScanRequest(**data["config"]),
+            config=ScanRequest.model_validate(
+                data["config"], context={"trusted_persisted": True}
+            ),
             org_id=data.get("org_id", ""),
             assigned_agent_id=data.get("assigned_agent_id"),
             dispatch_attempts=data.get("dispatch_attempts", 0),
