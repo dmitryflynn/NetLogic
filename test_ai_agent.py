@@ -142,11 +142,18 @@ def test_http_rejects_mutating_methods():
     rt = ToolRuntime(host="ex.com", http_fn=http_fn)
     r = rt.execute("http_request", {"method": "POST", "path": "/api", "body": "a=1"})
     assert r.ok is False
-    assert "free-form" in (r.error or r.summary).lower() or "forbidden" in (r.error or "").lower()
+    blob = f"{r.error} {r.summary}".lower()
+    assert "method" in blob or "free-form" in blob or "forbidden" in blob
+    # Bare POST/PUT/DELETE without a template must fail closed — never silently GET.
+    r_post = rt.execute("http_request", {"method": "POST", "path": "/api"})
+    r_put = rt.execute("http_request", {"method": "PUT", "path": "/api"})
+    r_del = rt.execute("http_request", {"method": "DELETE", "path": "/users/1"})
+    assert not r_post.ok and "method" in (r_post.error or r_post.summary).lower()
+    assert not r_put.ok and not r_del.ok
     # Force via _do_http without allow_post
     resp = rt._do_http("POST", "/x", {}, "data", 80, False, 2.0)
     assert "not allowed" in (resp.get("error") or "")
-    assert not any(m == "POST" for m, _ in calls)
+    assert calls == []
 
 
 def test_http_body_template_allows_curated_post():
@@ -173,9 +180,13 @@ def test_tier_a_tools_in_catalog():
         "jwt_inspect", "graphql_introspect", "api_discover", "s3_or_storage_probe",
         "subdomain_probe", "ssh_banner_timing", "ssl_cert_chain",
         "cve_probe", "sqli_boolean", "sqli_time", "ssrf_canary", "idor_diff",
-        "file_disclosure", "smuggling_desync",
+        "file_disclosure",
     ):
         assert n in names, n
+    assert "smuggling_desync" not in names
+    assert "crash_probe" not in names
+    crash_names = {t["name"] for t in ToolRuntime(host="ex.com", allow_crash_probes=True).catalog()}
+    assert "smuggling_desync" in crash_names and "crash_probe" in crash_names
 
 
 def test_param_reflect_and_cors():
@@ -708,3 +719,36 @@ def test_merge_agent_upgrades_investigation():
     out = merge_agent_into_investigations(invs, agent_art)
     assert out[0]["conclusion"] == "EXPLOITABLE"
     assert out[0]["adjudicated_by_ai"] is True
+
+
+def test_depth_mode_does_not_count_disabled_tools_as_high_value():
+    """Calling gated tools while they are off must not satisfy the depth budget."""
+    seq = {"n": 0}
+
+    def completer(system, user):
+        seq["n"] += 1
+        if seq["n"] <= 3:
+            return json.dumps({
+                "thought": "try gated tools",
+                "calls": [
+                    {"tool": "http_proof", "args": {"path": "/x"}},
+                    {"tool": "crash_probe", "args": {"cve_id": "CVE-2021-31166"}},
+                    {"tool": "exploit_request", "args": {"method": "GET", "path": "/"}},
+                ],
+                "stop": False,
+            })
+        return json.dumps({
+            "thought": "stop",
+            "calls": [{"tool": "stop", "args": {"summary": "done"}}],
+            "stop": True,
+        })
+
+    agent = InvestigationAgent(
+        completer, depth_mode=True, max_steps=20, max_requests=50,
+        min_high_value=2, min_steps_before_stop=1,
+        allow_crash_probes=False, allow_freeform_proof=False, allow_exploit_requests=False,
+    )
+    agent.max_steps = 6
+    res = agent.run(target="ex.com", host="ex.com", http_fn=_fake_http)
+    assert res.high_value_used == 0
+    assert any(t.get("stop_refused") for t in res.turns)
