@@ -1,6 +1,8 @@
 """Verifier / re-probe HTTP plans share ToolRuntime sanitizer rails."""
 from __future__ import annotations
 
+import json
+
 from src.directors.reprobe import _parse_probe_plans
 from src.reasoning.agent.sanitize import sanitize_http_plan
 from src.verifier.planner import generate_plans_for_cves
@@ -120,6 +122,52 @@ def test_builtin_safe_get_plan_survives():
     assert plans[0]["method"] == "GET"
     assert plans[0]["port"] == 8080
     assert plans[0]["tls"] is True
+
+
+def test_parse_http_response_accepts_lf_only():
+    from src.verifier.runner import _parse_http_response
+
+    status, headers, body = _parse_http_response(
+        b"HTTP/1.0 200 OK\nServer: nginx\nContent-Type: text/plain\n\nhello"
+    )
+    assert status == 200
+    assert headers.get("server") == "nginx"
+    assert body == "hello"
+
+
+def test_build_http_request_strips_crlf_from_host():
+    from src.verifier.runner import _build_http_request
+
+    payload = _build_http_request("GET", "/", "ex.com\r\nX-Injected: 1", {"Accept": "text/plain"})
+    assert b"X-Injected" not in payload
+    assert b"Host: ex.com" in payload
+    assert b"\r\nHost:" in payload
+
+
+def test_reverify_drops_smuggling_plans():
+    from src.verifier.planner import reverify_with_context
+
+    plans = reverify_with_context(
+        ["CVE-TEST"],
+        [],
+        complete=lambda _s, _u: json.dumps([{
+            "cve_id": "CVE-TEST",
+            "method": "GET",
+            "path": "/",
+            "headers": {"Transfer-Encoding": "chunked"},
+            "port": 80,
+        }]),
+    )
+    assert plans == []
+
+
+def test_builtin_mod_lua_post_root_is_dropped():
+    """POST / is not on the proof allowlist; sanitizer must fail closed."""
+    plans = generate_plans_for_cves(
+        [{"id": "CVE-2021-44790", "cvss_score": 9.8, "description": "mod_lua"}],
+        service="http", product="Apache", version="2.4", port=80,
+    )
+    assert plans == []
 
 
 def test_reprobe_parser_drops_put_and_keeps_get():

@@ -24,12 +24,27 @@ class VerificationResult:
     error: str = ""
 
 
+def _safe_http_token(value: str) -> str:
+    """First line only — CR/LF/NUL must not concatenate into Host or headers."""
+    return str(value or "").split("\r", 1)[0].split("\n", 1)[0].split("\x00", 1)[0]
+
+
 def _build_http_request(method: str, path: str, host: str, headers: Optional[dict[str, str]] = None,
                         body: Optional[str] = None) -> bytes:
+    method = "".join(ch for ch in _safe_http_token((method or "GET").upper()) if ch.isalnum()) or "GET"
+    path = _safe_http_token(path or "/") or "/"
+    if not path.startswith("/"):
+        path = "/" + path
+    host_raw = _safe_http_token(host).strip()[:253]
+    host = "".join(ch for ch in host_raw if ch.isalnum() or ch in ".-_[]:") or "invalid"
     req = f"{method} {path} HTTP/1.0\r\nHost: {host}\r\n"
     if headers:
         for k, v in headers.items():
-            req += f"{k}: {v}\r\n"
+            key = _safe_http_token(k).strip()
+            val = _safe_http_token(v)
+            if not key:
+                continue
+            req += f"{key}: {val}\r\n"
     if body:
         req += f"Content-Length: {len(body.encode())}\r\n"
     req += "Connection: close\r\n\r\n"
@@ -45,9 +60,13 @@ def _parse_http_response(raw: bytes) -> tuple[Optional[int], dict[str, str], str
         text = raw.decode("latin-1", errors="replace")
     status = None
     headers: dict[str, str] = {}
-    body = ""
 
-    lines = text.split("\r\n")
+    # LF-only and mixed line endings are common; treat them like CRLF.
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    head, sep, body = normalized.partition("\n\n")
+    if not sep:
+        body = ""
+    lines = head.split("\n")
     for i, line in enumerate(lines):
         if i == 0 and line.startswith("HTTP/"):
             parts = line.split(" ", 2)
@@ -59,9 +78,6 @@ def _parse_http_response(raw: bytes) -> tuple[Optional[int], dict[str, str], str
         elif ":" in line and i > 0:
             k, _, v = line.partition(":")
             headers[k.strip().lower()] = v.strip()
-        elif line == "" and i > 0:
-            body = "\r\n".join(lines[i + 1:])
-            break
 
     return status, headers, body
 

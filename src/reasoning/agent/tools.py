@@ -343,8 +343,6 @@ class ToolRuntime:
              "args": "path, cookies_a{}, cookies_b{},port?,tls? — compare two sessions same object"},
             {"name": "file_disclosure", "risk": "safe_active",
              "args": "port?,tls?,max_paths? — fixed sensitive paths + content markers"},
-            {"name": "smuggling_desync", "risk": "intrusive",
-             "args": "path? — CL.TE observation only; requires allow_crash_probes (proxy risk)"},
             # Tier D — report / HackerOne bookkeeping (no network or low-risk)
             {"name": "record_poc", "risk": "none",
              "args": "observation_id?,finding_id?,title?,notes? — build curl PoC from obs"},
@@ -377,6 +375,10 @@ class ToolRuntime:
             {"name": "stop", "risk": "none", "args": "summary?"},
         ]
         if self.allow_crash_probes:
+            tools.append({
+                "name": "smuggling_desync", "risk": "intrusive",
+                "args": "path? — CL.TE observation only; requires allow_crash_probes (proxy risk)",
+            })
             tools.append({
                 "name": "crash_probe", "risk": "intrusive",
                 "args": f"cve_id one of {sorted(_CRASH_PROBES)} — MAY crash target (still non-write)",
@@ -543,7 +545,17 @@ class ToolRuntime:
             headers.setdefault("Content-Type", tpl["content_type"])
             allow_post = True
         else:
-            method = san.safe_method(args.get("method") or "GET") or "GET"
+            raw_method = args.get("method")
+            if raw_method in (None, ""):
+                method = "GET"
+            else:
+                method = san.safe_method(raw_method)
+                if method is None:
+                    return ToolResult(
+                        False, oid, "http_request",
+                        "method not allowed — use GET|HEAD|OPTIONS or body_template",
+                        error="method not allowed", network=False,
+                    )
             # Explicit free-form body is rejected (do not silently strip into a write).
             if args.get("body") not in (None, ""):
                 return ToolResult(
