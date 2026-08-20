@@ -71,6 +71,12 @@ def _apply_settings(role: str, payload: "AISettingsIn", request: Request, org_id
         )
 
     base_url = payload.base_url.strip() if payload.base_url is not None else None
+    if base_url:
+        from api.scan_policy import normalize_llm_base_url  # noqa: PLC0415
+        try:
+            base_url = normalize_llm_base_url(base_url)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if provider == "custom":
         existing = org_settings_store.get(org_id, role)
         if not (base_url or (existing or {}).get("base_url")):
@@ -102,6 +108,12 @@ def _run_test(role: str, org_id: str) -> dict:
         raise HTTPException(status_code=429, detail="Too many test requests. Slow down.")
     from src.ai_analyst import analyze, config_for_org  # noqa: PLC0415
     cfg = config_for_org(org_id, role).resolve()
+    if cfg.base_url:
+        from api.scan_policy import normalize_llm_base_url  # noqa: PLC0415
+        try:
+            normalize_llm_base_url(cfg.base_url)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
     usable, reason = cfg.is_usable()
     if not usable:
         return {"ok": False, "error": reason}

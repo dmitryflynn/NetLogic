@@ -11,12 +11,16 @@ import ipaddress
 import os
 import socket
 
-# Hostnames blocked in SaaS mode (loopback aliases + cloud metadata).
-_BLOCKED_HOSTNAMES = frozenset({
+_METADATA_HOSTNAMES = frozenset({
     "metadata.google.internal",
     "metadata.goog",
     "metadata",
     "instance-data",
+})
+
+# Hostnames blocked in SaaS mode (loopback aliases + cloud metadata).
+_BLOCKED_HOSTNAMES = frozenset({
+    *_METADATA_HOSTNAMES,
     "localhost",
     "localhost.localdomain",
     "ip6-localhost",
@@ -52,7 +56,17 @@ def saas_scan_restrictions_enabled() -> bool:
     return db.is_enabled()
 
 
+def _canonical_ip(
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """Treat IPv4-mapped IPv6 (:ffff:x.x.x.x) as the embedded IPv4 address."""
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        return addr.ipv4_mapped
+    return addr
+
+
 def _is_restricted_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    addr = _canonical_ip(addr)
     if (
         addr.is_private
         or addr.is_loopback
@@ -149,3 +163,76 @@ def validate_scan_target(target: str) -> None:
             f"Scan target {target!r} resolves to restricted address(es) "
             f"({', '.join(sorted(restricted)[:5])}) and is not permitted in hosted mode."
         )
+
+
+def normalize_llm_base_url(url: str) -> str:
+    """Validate a tenant-supplied LLM base URL and return it stripped.
+
+    Desktop: HTTPS anywhere that is not link-local/metadata; HTTP only to
+    loopback or RFC1918 (local Ollama) — never 169.254.x.x / cloud metadata.
+    Hosted: HTTPS only, and the host must pass ``validate_scan_target`` so the
+    API process cannot be used as an SSRF relay against IMDS or the VPC.
+    """
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if not (url.startswith("https://") or url.startswith("http://")):
+        raise ValueError("URL must start with http:// or https://")
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"URL scheme {parsed.scheme!r} is not permitted")
+    host = (parsed.hostname or "").strip().strip("[]")
+    if not host:
+        raise ValueError("URL is missing a host")
+
+    # Cloud metadata / link-local is never a legitimate LLM endpoint — block
+    # even on desktop so a GUI running on a cloud VM cannot be pointed at IMDS.
+    meta_err = _metadata_or_link_local_error(host)
+    if meta_err:
+        raise ValueError(meta_err)
+
+    if saas_scan_restrictions_enabled():
+        if parsed.scheme != "https":
+            raise ValueError(
+                "HTTP LLM base URLs are not permitted in hosted mode; use https://"
+            )
+        validate_scan_target(host)
+        return url.rstrip("/")
+
+    if parsed.scheme == "https":
+        return url.rstrip("/")
+
+    # Desktop HTTP: loopback and RFC1918 only (local/LAN Ollama). Hostnames
+    # other than localhost must be an IP — no DNS-rebinding HTTP endpoints.
+    if host not in ("localhost", "127.0.0.1", "::1"):
+        try:
+            addr = _canonical_ip(ipaddress.ip_address(host))
+        except ValueError as exc:
+            raise ValueError(
+                "HTTP LLM base URL must be an IP address in a private range "
+                "or localhost; use https:// for hostnames"
+            ) from exc
+        if not (addr.is_loopback or (addr.is_private and not addr.is_link_local)):
+            raise ValueError(
+                "HTTP LLM base URL must point to localhost, 127.0.0.1, "
+                "or a private IP (e.g. 10.x.x.x, 172.16-31.x.x, 192.168.x.x)"
+            )
+    return url.rstrip("/")
+
+
+def _metadata_or_link_local_error(host: str) -> str | None:
+    """Return an error if *host* is cloud metadata or IPv4/IPv6 link-local."""
+    host_lower = (host or "").strip().lower().rstrip(".")
+    labels = host_lower.split(".")
+    if host_lower in _METADATA_HOSTNAMES or (labels and labels[0] in _METADATA_HOSTNAMES):
+        return f"LLM base URL host {host!r} is not permitted (cloud metadata)."
+    try:
+        addr = _canonical_ip(ipaddress.ip_address(host))
+    except ValueError:
+        return None
+    if addr.is_link_local or addr in ipaddress.ip_network("169.254.0.0/16"):
+        return f"LLM base URL host {host!r} is not permitted (link-local / metadata range)."
+    return None
