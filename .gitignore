@@ -63,6 +63,7 @@ desktop.ini
 *.md
 !README.md
 !SECURITY.md
+!AGENTS.md
 
 # ─── Pytest cache ────────────────────────────────────────────────────────────
 .pytest_cache/
