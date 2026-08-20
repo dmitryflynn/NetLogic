@@ -25,7 +25,7 @@ export default function License() {
   }
 
   return (
-    <div className="min-h-screen site-bg relative flex items-center justify-center px-6">
+    <div className="min-h-screen overflow-x-hidden site-bg relative flex items-center justify-center px-6">
       <div className="site-grid pointer-events-none absolute inset-0" />
       <div className="site-noise pointer-events-none absolute inset-0" />
       <div className="radar" aria-hidden>
@@ -48,7 +48,7 @@ export default function License() {
             href="https://netlogic.studio/#pricing"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-accent hover:underline"
+            className="text-accent underline underline-offset-2 hover:text-text-bright"
           >
             Get a license →
           </a>

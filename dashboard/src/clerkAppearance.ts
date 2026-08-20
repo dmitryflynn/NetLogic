@@ -39,8 +39,24 @@ export const clerkAppearance = {
       borderColor: '#20343b',
       color: '#eaf3f5',
     },
+    formFieldLabel: {
+      color: '#81939b',
+      fontSize: '13px',
+    },
     footerActionLink: {
       color: '#62e5dc',
+      fontSize: '13px',
+    },
+    footerAction: {
+      fontSize: '13px',
+    },
+    footer: {
+      fontSize: '13px',
+    },
+    badge: {
+      fontSize: '12px',
+      letterSpacing: '0.04em',
+      padding: '4px 8px',
     },
   },
 } as const

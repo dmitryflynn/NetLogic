@@ -14,9 +14,10 @@ import { Brand } from '../components/Brand'
  */
 export default function SignUpPage() {
   const [agreed, setAgreed] = useState(false)
+  const [showSignUp, setShowSignUp] = useState(false)
 
   return (
-    <div className="min-h-full overflow-hidden site-bg relative flex flex-col items-center justify-center gap-8 py-12 px-6">
+    <div className="min-h-full overflow-x-hidden site-bg relative flex flex-col items-center justify-center gap-8 py-12 px-6">
       <div className="site-grid pointer-events-none absolute inset-0" />
       <div className="site-noise pointer-events-none absolute inset-0" />
       <div className="radar" aria-hidden>
@@ -31,7 +32,7 @@ export default function SignUpPage() {
         <Brand size="md" subtitle />
       </div>
 
-      {!agreed ? (
+      {!showSignUp ? (
         <div className="relative z-10 glass-strong p-7 max-w-md w-full space-y-5 rounded-2xl">
           <p className="font-display text-xl font-bold text-text-bright">Before you create an account</p>
           <label className="flex items-start gap-3 text-[14px] text-text-dim cursor-pointer select-none leading-relaxed">
@@ -53,10 +54,17 @@ export default function SignUpPage() {
             type="button"
             className="btn btn-primary w-full"
             disabled={!agreed}
-            onClick={() => setAgreed(true)}
+            aria-disabled={!agreed}
+            title={!agreed ? 'Agree to the terms to continue' : undefined}
+            onClick={() => setShowSignUp(true)}
           >
             Continue to sign up
           </button>
+          {!agreed && (
+            <p className="text-center text-[12px] text-text-dim font-mono">
+              Check the box above to enable continue
+            </p>
+          )}
         </div>
       ) : (
         <div className="relative z-10 glass-strong rounded-2xl p-2 w-full max-w-[420px]">
@@ -75,7 +83,11 @@ export default function SignUpPage() {
         </div>
       )}
 
-      <p className="relative z-10 text-center text-text-dim text-[12px]">Authorized use only</p>
+      <p className="relative z-10 text-center text-[14px]">
+        <Link to="/terms" className="text-accent hover:underline underline-offset-2">terms</Link>
+        <span className="text-text-dim"> · </span>
+        <Link to="/privacy" className="text-accent hover:underline underline-offset-2">privacy</Link>
+      </p>
     </div>
   )
 }
