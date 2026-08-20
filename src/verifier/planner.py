@@ -335,5 +335,11 @@ def reverify_with_context(
         }
         if obj.get("headers"):
             plan["headers"] = obj["headers"]
-        plans.append(plan)
+        if obj.get("body"):
+            plan["body"] = obj["body"]
+        clean, reason = _sanitize_plan(plan, int(plan.get("port") or 80))
+        if clean is None:
+            log.debug("Dropped reverify plan for %s: %s", plan.get("cve_id"), reason)
+            continue
+        plans.append(clean)
     return plans

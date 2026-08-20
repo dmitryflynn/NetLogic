@@ -128,6 +128,8 @@ _ALWAYS_HIGH_VALUE = frozenset({
     "file_disclosure", "smuggling_desync",
     # Tier C
     "http_proof",
+    # Tier E
+    "exploit_request",
     # Tier D
     "record_poc", "scope_check", "severity_suggest", "submit_readiness",
 })
@@ -444,7 +446,9 @@ class InvestigationAgent:
                     tech = str(args.get("tech") or args.get("name") or "").lower()
                     if tech:
                         confirmed_techs.add(tech.split()[0] if tech else tech)
-                if hv:
+                # Count real attempts (ok or on-wire). Disabled/unknown/sanitize-fail
+                # stay network=False and must not satisfy depth-mode stop budgets.
+                if hv and (tr.ok or tr.network):
                     result.high_value_used += 1
                     turn_high += 1
                 if tr.network:
