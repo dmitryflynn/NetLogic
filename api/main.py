@@ -276,6 +276,24 @@ def create_app() -> FastAPI:
     # ── Security headers ──────────────────────────────────────────────────────
     app.add_middleware(SecurityHeadersMiddleware)
 
+    # ── CORS origins (parsed before origin-check + CORSMiddleware) ────────────
+    # SECURITY: Default to empty list (CORS disabled). Never allow `*` together
+    # with credentials — Starlette would reflect any Origin.
+    raw_origins = os.environ.get("NETLOGIC_CORS_ORIGINS", "")
+    if not raw_origins.strip():
+        import logging
+        logging.warning("NETLOGIC_CORS_ORIGINS not set - CORS disabled for security")
+        allowed_origins = []
+    else:
+        allowed_origins = []
+        for o in raw_origins.split(","):
+            o = o.strip()
+            if not o or o == "*" or "*" in o:
+                import logging
+                logging.warning("Ignoring wildcard CORS origin %r (never with credentials)", o)
+                continue
+            allowed_origins.append(o)
+
     # ── Origin check (CSRF defense-in-depth) ───────────────────────────────────
     # Reject state-changing requests whose Origin header does not match the
     # configured CORS origins. This is defense-in-depth: the real protection
@@ -299,20 +317,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(OriginCheckMiddleware)
 
-    # ── CORS ──────────────────────────────────────────────────────────────────
-    # SECURITY: Default to empty list (CORS disabled) instead of wildcard
-    # Wildcard CORS enables CSRF attacks and data exposure
-    raw_origins = os.environ.get("NETLOGIC_CORS_ORIGINS", "")
-
-    # Log warning if CORS not properly configured in production
-    if not raw_origins.strip():
-        import logging
-        logging.warning("NETLOGIC_CORS_ORIGINS not set - CORS disabled for security")
-        allowed_origins = []
-    else:
-        allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
-
-    # Only allow credentials with specific origins (never with wildcard)
+    # Only allow credentials with specific (non-wildcard) origins
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,

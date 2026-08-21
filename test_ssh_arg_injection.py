@@ -71,3 +71,25 @@ def test_scan_request_accepts_legitimate_ssh_user():
     from api.models.scan_request import ScanRequest
     req = ScanRequest(target="example.com", ssh_user="ubuntu", ssh_key="/home/me/.ssh/id_rsa")
     assert req.ssh_user == "ubuntu"
+
+
+def test_key_only_ssh_has_env_and_ignores_user_config(monkeypatch, tmp_path):
+    captured = {}
+
+    class _Proc:
+        returncode = 1
+        stderr = "Permission denied"
+        stdout = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env")
+        return _Proc()
+
+    monkeypatch.setattr("src.authenticated.subprocess.run", fake_run)
+    r = ssh_enumerate("10.0.0.5", "root", key_path=str(tmp_path / "id_rsa"))
+    assert captured["env"] is not None
+    assert r.error
+    assert "-F" in captured["cmd"]
+    assert "ProxyCommand=none" in captured["cmd"]
+    assert "ProxyJump=none" in captured["cmd"]

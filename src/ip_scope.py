@@ -13,15 +13,37 @@ from functools import lru_cache
 from typing import Iterable
 
 
+def _as_ip(value: str):
+    v = (value or "").strip()
+    if v.startswith("[") and v.endswith("]"):
+        v = v[1:-1]
+    # Hostname:port — not IPv6 (those have >1 colon) and not already an IP.
+    if v.count(":") == 1:
+        left, _, right = v.partition(":")
+        if right.isdigit():
+            v = left
+    try:
+        return ipaddress.ip_address(v)
+    except ValueError:
+        return None
+
+
 def host_matches_scope(host: str, scope_item: str) -> bool:
     """True if *host* is *scope_item* or a subdomain of it (label-bounded).
 
     ``example.com`` is NOT in scope for ``ample.com`` (suffix trap).
     ``sub.example.com`` IS in scope for ``example.com``.
+    Literal IPs match only as the same address — ``evil.10.0.0.5`` is not ``10.0.0.5``.
     """
     h = (host or "").strip().lower().rstrip(".")
     s = (scope_item or "").strip().lower().rstrip(".")
     if not h or not s:
+        return False
+    sip = _as_ip(s)
+    hip = _as_ip(h)
+    if sip is not None:
+        return hip is not None and hip == sip
+    if hip is not None:
         return False
     if h.count(":") == 1:
         h = h.split(":", 1)[0]

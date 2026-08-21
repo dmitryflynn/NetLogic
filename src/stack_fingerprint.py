@@ -582,27 +582,31 @@ def wordpress_deep_scan(target: str, scheme: str = "https", port: int = 443) -> 
     """Extra checks specifically for WordPress sites."""
     findings = []
     checks = [
-        ("/wp-login.php",         "WordPress login page exposed"),
-        ("/wp-json/wp/v2/users",  "WordPress REST API user enumeration"),
-        ("/xmlrpc.php",           "WordPress XML-RPC enabled (brute force vector)"),
-        ("/.env",                 "Environment file exposed"),
-        ("/wp-config.php.bak",    "WordPress config backup exposed"),
-        ("/readme.html",          "WordPress readme.html exposes version"),
+        ("/wp-login.php",         "WordPress login page exposed", ("wp-login", "user_login")),
+        ("/wp-json/wp/v2/users",  "WordPress REST API user enumeration", ('"slug"', '"id"')),
+        ("/xmlrpc.php",           "WordPress XML-RPC enabled (brute force vector)", ("XML-RPC", "XMLRPC")),
+        ("/.env",                 "Environment file exposed", ("APP_KEY=", "DB_PASSWORD=", "SECRET_KEY=")),
+        ("/wp-config.php.bak",    "WordPress config backup exposed", ("DB_NAME", "DB_PASSWORD", "<?php")),
+        ("/readme.html",          "WordPress readme.html exposes version", ("WordPress",)),
     ]
     host = _host_for_url(target)
-    for path, description in checks:
+    for path, description, markers in checks:
         url = _make_url(scheme, host, port, path)
         _, body, status = _fetch(url, timeout=5)
-        if status in (200, 301, 302):
-            sev_note = "⚠ HIGH RISK" if "config" in path or ".env" in path else "ℹ INFO"
-            findings.append(TechFinding(
-                category="CMS",
-                name=f"WordPress: {description}",
-                confidence="HIGH" if status == 200 else "MEDIUM",
-                evidence=f"HTTP {status} at {path}",
-                notes=sev_note,
-                cves=["CVE-2017-5487"] if "users" in path else [],
-            ))
+        if status not in (200, 301, 302):
+            continue
+        blob = body or ""
+        if not any(m.lower() in blob.lower() for m in markers):
+            continue
+        sev_note = "⚠ HIGH RISK" if "config" in path or ".env" in path else "ℹ INFO"
+        findings.append(TechFinding(
+            category="CMS",
+            name=f"WordPress: {description}",
+            confidence="HIGH" if status == 200 else "MEDIUM",
+            evidence=f"HTTP {status} at {path}",
+            notes=sev_note,
+            cves=["CVE-2017-5487"] if "users" in path else [],
+        ))
     return findings
 
 

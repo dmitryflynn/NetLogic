@@ -80,9 +80,11 @@ PROVIDER_FINGERPRINTS = {
     "Amazon CloudFront": {
         "cname": r"cloudfront\.net",
         "fingerprints": [
-            "ERROR: The request could not be satisfied",
+            "UnknownDistribution",
+            "NoSuchDistribution",
+            "Code: NotFound",
         ],
-        "status": [403],
+        "status": [403, 404],
     },
     "Netlify": {
         "cname": r"netlify\.app|netlify\.com",
@@ -190,7 +192,8 @@ PROVIDER_FINGERPRINTS = {
     "Webflow": {
         "cname": r"webflow\.io",
         "fingerprints": [
-            "The page you are looking for doesn't exist or has been moved",
+            "This Webflow site is not published",
+            "is not a registered Webflow site",
         ],
         "status": [404],
     },
@@ -306,13 +309,19 @@ def check_nxdomain(hostname: str) -> bool:
 # ─── HTTP Fingerprint Check ───────────────────────────────────────────────────────
 
 def fetch_body(url: str, timeout: float = 6.0) -> tuple[str, int]:
-    """Fetch page body and status code, ignoring TLS errors."""
+    """Fetch page body and status code, ignoring TLS errors. Redirects are not followed."""
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+            return None
+
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "NetLogic/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=ctx))
+        with opener.open(req, timeout=timeout) as resp:
             body = resp.read(65536).decode("utf-8", errors="replace")
             return body, resp.status
     except urllib.error.HTTPError as e:

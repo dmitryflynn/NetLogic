@@ -35,6 +35,7 @@ class CertInfo:
     not_after: Optional[str]
     days_until_expiry: Optional[int]
     san_domains: list[str] = field(default_factory=list)
+    san_ips: list[str] = field(default_factory=list)
     is_self_signed: bool = False
     is_expired: bool = False
     is_wildcard: bool = False
@@ -269,11 +270,14 @@ def parse_cert(raw: dict, der: Optional[bytes], chain_valid: bool, host: str) ->
     iss_cn  = _get(issuer,  "commonName")
     iss_org = _get(issuer,  "organizationName")
 
-    # SANs
+    # SANs — DNS names and IP addresses (iPAddress) both matter for mismatch checks.
     sans = []
+    san_ips = []
     for typ, val in raw.get("subjectAltName", []):
         if typ == "DNS":
             sans.append(val)
+        elif typ in ("IP Address", "iPAddress", "IP"):
+            san_ips.append(str(val).strip())
 
     # Expiry — parsed timezone-aware (notAfter/notBefore are GMT) so the
     # comparison is correct regardless of the scanning host's local timezone.
@@ -281,16 +285,11 @@ def parse_cert(raw: dict, der: Optional[bytes], chain_valid: bool, host: str) ->
     not_before_str = raw.get("notBefore", "")
     days_left, is_expired = compute_expiry(not_after_str)
 
-    # Self-signed / untrusted:
-    # • If chain_valid=False — the system CA store rejected it; flag as untrusted.
-    # • If we have parsed fields and the full subject matches the full issuer —
-    #   explicitly self-signed (CN alone is too coarse and can collide).
-    # Guard against the None==None false positive when raw was empty (CERT_NONE).
-    if not chain_valid and der:
+    # Self-signed only when subject matches issuer. An untrusted chain (expired,
+    # incomplete intermediates, transient verify failure) is NOT self-signed.
+    if subject and issuer and subject == issuer:
         is_self = True
-    elif subject and issuer and subject == issuer:
-        is_self = True
-    elif cn is not None and iss_cn is not None and cn == iss_cn:
+    elif cn is not None and iss_cn is not None and cn == iss_cn and (not iss_org or iss_org == org):
         is_self = True
     else:
         is_self = False
@@ -312,6 +311,7 @@ def parse_cert(raw: dict, der: Optional[bytes], chain_valid: bool, host: str) ->
         not_after=not_after_str,
         days_until_expiry=days_left,
         san_domains=sans[:20],
+        san_ips=san_ips[:20],
         is_self_signed=is_self,
         is_expired=is_expired,
         is_wildcard=is_wild,
@@ -319,7 +319,58 @@ def parse_cert(raw: dict, der: Optional[bytes], chain_valid: bool, host: str) ->
     )
 
 
-# ─── Known Vulnerability Heuristics ─────────────────────────────────────────────
+def cert_covers_host(cert: CertInfo, host: str) -> bool:
+    """True if *host* is named on the cert (exact DNS, one-level wildcard, or IP SAN)."""
+    h = (host or "").strip().lower().rstrip(".")
+    if not h or not cert:
+        return False
+    import ipaddress  # noqa: PLC0415
+    try:
+        addr = ipaddress.ip_address(h)
+        for raw in cert.san_ips:
+            try:
+                if ipaddress.ip_address(raw.strip()) == addr:
+                    return True
+            except ValueError:
+                continue
+        return False
+    except ValueError:
+        pass
+    names = [*(s.lower().rstrip(".") for s in cert.san_domains), (cert.subject_cn or "").lower().rstrip(".")]
+    for n in names:
+        if not n:
+            continue
+        if n == h:
+            return True
+        if n.startswith("*.") and h.endswith(n[1:]) and "." not in h[:-len(n[1:])]:
+            return True
+    return False
+
+
+def _cert_dict_from_der(der: Optional[bytes]) -> dict:
+    """Decode DER into the dict shape getpeercert() returns, without trusting the chain."""
+    if not der:
+        return {}
+    import os  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+    try:
+        pem = ssl.DER_cert_to_PEM_cert(der)
+    except Exception:
+        return {}
+    path = None
+    try:
+        fd, path = tempfile.mkstemp(suffix=".pem")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(pem)
+        return ssl._ssl._test_decode_cert(path) or {}
+    except Exception:
+        return {}
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 def check_poodle(deprecated: list[str]) -> Optional[TLSFinding]:
     """POODLE: SSLv3 or TLS 1.0 with CBC ciphers."""
@@ -447,9 +498,11 @@ def analyze_tls(host: str, port: int = 443, timeout: float = 5.0) -> TLSResult:
         chain_valid = True
         tls2.close()
     except ssl.SSLCertVerificationError:
-        chain_valid = False           # untrusted / self-signed / expired
+        chain_valid = False
+        cert_raw = _cert_dict_from_der(der)
     except Exception:
         chain_valid = False
+        cert_raw = _cert_dict_from_der(der)
 
     result.cert = parse_cert(cert_raw, der, chain_valid, host)
 
@@ -506,21 +559,21 @@ def analyze_tls(host: str, port: int = 443, timeout: float = 5.0) -> TLSResult:
                 detail=f"Certificate is signed by itself (issuer: {cert.issuer_cn}). "
                        "No trusted CA validation — vulnerable to trivial MITM."
             ))
+        elif not chain_valid:
+            result.findings.append(TLSFinding(
+                severity="HIGH", cvss=7.4,
+                title="Untrusted Certificate Chain",
+                detail="The certificate was not accepted by the system CA store "
+                       "(expired, incomplete chain, or unknown issuer). Not necessarily self-signed."
+            ))
 
-        # Hostname mismatch check
-        if cert.san_domains and host not in cert.san_domains:
-            # Check wildcard coverage
-            covered = any(
-                s.startswith("*.") and
-                host.endswith(s[1:]) and
-                "." not in host[:-len(s[1:])]
-                for s in cert.san_domains
-            )
-            if not covered and host not in (cert.subject_cn or ""):
+        # Hostname mismatch check — exact DNS / one-level wildcard / IP SAN.
+        if not cert_covers_host(cert, host):
+            if cert.san_domains or cert.san_ips or cert.subject_cn:
                 result.findings.append(TLSFinding(
                     severity="HIGH", cvss=7.4,
                     title="Certificate Hostname Mismatch",
-                    detail=f"Certificate SANs {cert.san_domains[:3]} do not cover '{host}'. "
+                    detail=f"Certificate SANs {cert.san_domains[:3]} {cert.san_ips[:3]} do not cover '{host}'. "
                            "Browsers will show security warnings."
                 ))
 
