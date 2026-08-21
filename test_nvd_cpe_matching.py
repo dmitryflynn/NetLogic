@@ -110,3 +110,68 @@ def test_parse_nvd_item_captures_exact_cpe_version():
     assert any(r.get("exact") and r.get("start") == "2.4.49" for r in cve.version_ranges)
     assert version_is_affected("2.4.49", cve, detected_product="apache")
     assert not version_is_affected("2.4.48", cve, detected_product="apache")
+
+
+def test_smb_does_not_match_samba_cve_ranges():
+    # Windows SMB fingerprints as "smb"; SambaCry ranges must not apply.
+    cve = _cve_with_ranges([
+        {"start": "4.0.0", "end": "4.6.4", "end_including": False, "cpe_product": "samba"},
+    ])
+    assert not version_is_affected("4.6.0", cve, detected_product="smb")
+    assert version_is_affected("4.6.0", cve, detected_product="samba")
+
+
+def test_wildcard_cpe_matches_any_detected_version():
+    item = {
+        "cve": {
+            "id": "CVE-WILD",
+            "descriptions": [{"lang": "en", "value": "all nginx versions"}],
+            "metrics": {"cvssMetricV31": [{
+                "cvssData": {"baseScore": 7.5, "vectorString": "CVSS:3.1/AV:N"},
+                "baseSeverity": "HIGH",
+            }]},
+            "configurations": [{
+                "nodes": [{
+                    "cpeMatch": [{
+                        "vulnerable": True,
+                        "criteria": "cpe:2.3:a:f5:nginx:*:*:*:*:*:*:*:*",
+                    }],
+                }],
+            }],
+        }
+    }
+    cve = _parse_nvd_item(item)
+    assert any(r.get("any_version") for r in cve.version_ranges)
+    assert version_is_affected("1.24.0", cve, detected_product="nginx")
+
+
+def test_big_ip_matches_module_cpe_products():
+    cve = _cve_with_ranges([
+        {"start": "16.1.0", "end": "16.1.2", "end_including": True,
+         "cpe_product": "big-ip_local_traffic_manager"},
+    ])
+    assert version_is_affected("16.1.1", cve, detected_product="big-ip")
+
+
+def test_parse_nvd_prefers_primary_cvss_metric():
+    item = {
+        "cve": {
+            "id": "CVE-CVSS",
+            "descriptions": [{"lang": "en", "value": "x"}],
+            "metrics": {"cvssMetricV31": [
+                {
+                    "type": "Secondary",
+                    "cvssData": {"baseScore": 2.0, "vectorString": "CVSS:3.1/AV:L"},
+                    "baseSeverity": "LOW",
+                },
+                {
+                    "type": "Primary",
+                    "cvssData": {"baseScore": 9.8, "vectorString": "CVSS:3.1/AV:N"},
+                    "baseSeverity": "CRITICAL",
+                },
+            ]},
+        }
+    }
+    cve = _parse_nvd_item(item)
+    assert cve.cvss_score == 9.8
+    assert cve.severity == "CRITICAL"

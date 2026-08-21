@@ -205,23 +205,22 @@ def reclaim_stale_jobs(org_id: str = "") -> int:
         if agent is not None:
             agent_registry.mark_done(job.assigned_agent_id, job.job_id)
 
-        if job.dispatch_attempts >= MAX_DISPATCH_ATTEMPTS:
-            job.status = "failed"
-            job.error = (f"No healthy agent available after {job.dispatch_attempts} "
-                         "attempt(s) — last assigned agent went offline.")
-            job.completed_at = time.time()
-            job.push_event({"type": "error", "message": job.error})
-            job.push_sentinel()
-            job_manager.persist_job(job)
+        outcome = job_manager.reclaim_stranded(
+            job.job_id, max_attempts=MAX_DISPATCH_ATTEMPTS,
+        )
+        if outcome == "skip":
+            continue
+        live = job_manager.get(job.job_id)
+        if live is None:
+            continue
+        if outcome == "failed":
+            live.push_event({"type": "error", "message": live.error})
+            live.push_sentinel()
+            job_manager.persist_job(live)
         else:
-            job.assigned_agent_id = None
-            job.status = "queued"
-            job.started_at = None
-            job.progress = 0.0
-            job._waiting_noted = False
-            job.push_event({"type": "info",
-                            "message": "Assigned agent went offline — requeuing for another agent."})
-            job_manager.persist_job(job)
+            live.push_event({"type": "info",
+                             "message": "Assigned agent went offline — requeuing for another agent."})
+            job_manager.persist_job(live)
         reclaimed += 1
 
     if reclaimed:

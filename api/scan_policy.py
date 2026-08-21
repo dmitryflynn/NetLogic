@@ -18,6 +18,9 @@ _METADATA_HOSTNAMES = frozenset({
     "instance-data",
 })
 
+# AWS IMDSv2 IPv6 (not link-local; ULA).
+_AWS_IMDS_V6 = ipaddress.ip_address("fd00:ec2::254")
+
 # Hostnames blocked in SaaS mode (loopback aliases + cloud metadata).
 _BLOCKED_HOSTNAMES = frozenset({
     *_METADATA_HOSTNAMES,
@@ -229,10 +232,25 @@ def _metadata_or_link_local_error(host: str) -> str | None:
     labels = host_lower.split(".")
     if host_lower in _METADATA_HOSTNAMES or (labels and labels[0] in _METADATA_HOSTNAMES):
         return f"LLM base URL host {host!r} is not permitted (cloud metadata)."
+    addr = None
     try:
         addr = _canonical_ip(ipaddress.ip_address(host))
     except ValueError:
+        # Decimal/hex IPv4 encodings (2852039166 → 169.254.169.254)
+        if host_lower.isdigit():
+            try:
+                addr = _canonical_ip(ipaddress.ip_address(int(host_lower)))
+            except (ValueError, OverflowError):
+                addr = None
+        elif host_lower.startswith("0x"):
+            try:
+                addr = _canonical_ip(ipaddress.ip_address(int(host_lower, 16)))
+            except (ValueError, OverflowError):
+                addr = None
+    if addr is None:
         return None
+    if addr == _AWS_IMDS_V6:
+        return f"LLM base URL host {host!r} is not permitted (cloud metadata)."
     if addr.is_link_local or addr in ipaddress.ip_network("169.254.0.0/16"):
         return f"LLM base URL host {host!r} is not permitted (link-local / metadata range)."
     return None

@@ -45,11 +45,24 @@ class SubnetProbeResult:
     scan_duration_s: float = 0.0
 
 
-def _is_private(ip: str) -> bool:
+_RFC1918 = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+
+# Cap AI-directed cartesian products (hosts × ports) so a prompt cannot
+# explode into tens of thousands of connect()s.
+_MAX_PROBE_PAIRS = 256
+
+
+def _is_rfc1918(ip: str) -> bool:
+    """True only for RFC1918 — not loopback, link-local, or CGNAT."""
     try:
-        return ipaddress.ip_address(ip).is_private
+        addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
+    return any(addr in net for net in _RFC1918)
 
 
 def _subnet_of(target_ip: str, prefix: int = 24) -> Optional[str]:
@@ -89,7 +102,7 @@ def probe_subnet(target_ip: str, timeout: float = 1.0, max_workers: int = 100) -
     start = time.time()
     result = SubnetProbeResult(target_ip=target_ip)
 
-    if not target_ip or not _is_private(target_ip):
+    if not target_ip or not _is_rfc1918(target_ip):
         return result
 
     net_str = _subnet_of(target_ip)
@@ -128,15 +141,51 @@ def probe_subnet(target_ip: str, timeout: float = 1.0, max_workers: int = 100) -
 
 
 def probe_targets(targets: list[str], ports: list[int],
-                  timeout: float = 1.0, max_workers: int = 100) -> list[ProbedHost]:
+                  timeout: float = 1.0, max_workers: int = 100,
+                  allowed_net: Optional[str] = None, threads: Optional[int] = None) -> list[ProbedHost]:
     """Probe specific *targets* on specific *ports* — used by AI-directed probing.
 
     Skips the live-host sweep; tests each target:port pair directly.
-    Returns all open (host, port) pairs discovered.
+    Only RFC1918 (or *allowed_net*) addresses are probed, and the cartesian
+    product is capped at ``_MAX_PROBE_PAIRS``.
     """
+    if threads is not None:
+        max_workers = threads
+    if isinstance(targets, str):
+        targets = [targets]
     if not targets or not ports:
         return []
-    all_args = [(h, p, timeout) for h in targets for p in ports]
+    nets: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = list(_RFC1918)
+    if allowed_net:
+        try:
+            nets = [ipaddress.ip_network(allowed_net, strict=False)]
+        except ValueError:
+            nets = list(_RFC1918)
+    filtered: list[str] = []
+    seen: set[str] = set()
+    for h in targets:
+        host = str(h or "").strip()
+        if not host or host in seen:
+            continue
+        try:
+            addr = ipaddress.ip_address(host)
+        except ValueError:
+            continue
+        if not any(addr in net for net in nets):
+            continue
+        seen.add(host)
+        filtered.append(host)
+    ports_clean: list[int] = []
+    for p in ports:
+        try:
+            pi = int(p)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= pi <= 65535 and pi not in ports_clean:
+            ports_clean.append(pi)
+    all_args = [(h, p, timeout) for h in filtered for p in ports_clean][:_MAX_PROBE_PAIRS]
+    if not all_args:
+        return []
     found: list[ProbedHost] = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         fut_map = {pool.submit(_probe_port, a): a for a in all_args}

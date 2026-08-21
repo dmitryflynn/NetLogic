@@ -27,6 +27,7 @@ from fastapi.responses import StreamingResponse
 
 from api.auth.dependencies import require_org
 from api.auth.rate_limit import jobs_limiter, jobs_control_limiter
+from api.agents.registry import agent_registry
 from api.jobs.executor import submit_scan
 from api.jobs.manager import ScanJob, job_manager
 from api.middleware.audit import audit_log
@@ -232,18 +233,21 @@ async def cancel_job(
     """
     if not jobs_control_limiter.allow(org_id):
         raise HTTPException(status_code=429, detail="Too many control requests. Slow down.")
-    job = _get_or_404(job_id, org_id)
-    if job.status in ("completed", "failed", "cancelled"):
+    job, changed = job_manager.try_set_terminal(
+        job_id, "cancelled", org_id=org_id, error="Cancelled by user request.",
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not changed:
         return {"job_id": job_id, "status": job.status, "cancelled": False,
-                "detail": "Job already in terminal state."}
+                "detail": "Job already in a terminal state."}
 
-    job.status = "cancelled"
     job.completed_at = time.time()
-    job.error = "Cancelled by user request."
-
-    # Signal the scan thread to unwind at its next event emission. Without this
-    # the scan would run to completion and overwrite the 'cancelled' status.
+    # Cooperative cancel for in-process scans; remote agents learn via heartbeat
+    # `cancel_job_ids` and a 409 on further event/complete posts.
     job._stop_flag.set()
+    if job.assigned_agent_id:
+        agent_registry.mark_done(job.assigned_agent_id, job_id)
 
     job.push_event({"type": "error", "message": job.error})
     job.push_sentinel()

@@ -241,8 +241,8 @@ class ScanRequest(BaseModel):
         # (argument injection). A real username or key path never needs a leading
         # '-' or embedded whitespace/control characters — reject those outright.
         v = (v or "").strip()
-        if v and (v[0] == "-" or any(c.isspace() or ord(c) < 0x20 for c in v)):
-            raise ValueError("must not start with '-' or contain whitespace/control characters")
+        if v and (v[0] == "-" or "@" in v or any(c.isspace() or ord(c) < 0x20 for c in v)):
+            raise ValueError("must not start with '-' or contain '@', whitespace, or control characters")
         return v
 
     @field_validator("ai_base_url")

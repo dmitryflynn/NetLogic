@@ -399,7 +399,7 @@ class DeepCoordinator:
         if not self._sensor_enabled("subnet_probe", do_probe):
             return
         target_ip = getattr(self.host_result, "ip", None) or self.target
-        from src.network_prober import probe_subnet, probe_targets
+        from src.network_prober import probe_subnet, probe_targets, _subnet_of
         from src.directors.subnet_director import build_subnet_directive
 
         directive = None
@@ -436,9 +436,12 @@ class DeepCoordinator:
                 if ai_targets and ai_ports:
                     all_ports = list(set(sum(ai_ports.values(), [])))
                     if all_ports:
-                        found = probe_targets(ai_targets, all_ports,
-                                              timeout=min(self._g("timeout", 2.0), 2.0),
-                                              max_workers=self._g("threads", 100))
+                        found = probe_targets(
+                            ai_targets, all_ports,
+                            timeout=min(self._g("timeout", 2.0), 2.0),
+                            max_workers=self._g("threads", 100),
+                            allowed_net=_subnet_of(str(target_ip)),
+                        )
                         probed_hosts = [(h.ip, h.port) for h in found]
                         self._emit("log", {"text": f"Subnet probe: {len(found)} open ports on "
                                                   f"{len(set(h.ip for h in found))} AI-selected hosts",

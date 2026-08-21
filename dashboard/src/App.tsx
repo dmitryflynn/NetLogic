@@ -23,7 +23,7 @@ interface LicenseStatus {
 }
 
 function RequireLicense({ children }: { children: React.ReactNode }) {
-  const { data, isLoading } = useQuery<LicenseStatus>({
+    const { data, isLoading, isError } = useQuery<LicenseStatus>({
     queryKey: ['license'],
     queryFn:  () => api.get<LicenseStatus>('/license'),
     staleTime: 60_000,
@@ -42,7 +42,10 @@ function RequireLicense({ children }: { children: React.ReactNode }) {
       </div>
     )
   }
-  if (data && !data.licensed) return <Navigate to="/license" replace />
+  if (isError || !data) {
+    return <Navigate to="/license" replace />
+  }
+  if (!data.licensed) return <Navigate to="/license" replace />
   return <>{children}</>
 }
 

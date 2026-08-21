@@ -28,18 +28,11 @@ CORE_MAX_TIER = RiskTier.SAFE_ACTIVE
 
 def _in_scope(target: str, scope: list[str]) -> bool:
     """Mirror execution_kernel.validate_scope at the host level (CFAA boundary)."""
-    host = (target or "").strip().lower()
-    if host.count(":") == 1:
-        host = host.split(":", 1)[0]
+    from src.ip_scope import host_matches_scope  # noqa: PLC0415
+
     if not scope:
         return False
-    for s in scope:
-        s = (s or "").strip().lower()
-        if s.count(":") == 1:
-            s = s.split(":", 1)[0]
-        if host == s or host.endswith("." + s):
-            return True
-    return False
+    return any(host_matches_scope(target, s) for s in scope)
 
 
 @dataclass(frozen=True)

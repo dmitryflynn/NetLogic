@@ -364,6 +364,13 @@ def test_ssrf_canary_requires_host_and_injects():
     assert "abc.oastify.com" in (seen.get("path") or "")
 
 
+def test_ssrf_canary_rejects_localhost_metadata_and_decimal_ip():
+    rt = ToolRuntime(host="ex.com")
+    for host in ("localhost", "127.0.0.1", "metadata.google.internal", "2852039166"):
+        r = rt.execute("ssrf_canary", {"path": "/", "canary_host": host})
+        assert not r.ok, host
+
+
 def test_smuggling_requires_crash_flag():
     rt = ToolRuntime(host="ex.com", allow_crash_probes=False)
     r = rt.execute("smuggling_desync", {"path": "/"})

@@ -102,6 +102,16 @@ class TestLlmBaseUrlSsrf(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     ScanRequest(target="example.com", ai_base_url=url)
 
+    def test_desktop_blocks_decimal_and_ipv6_imds(self):
+        with patch("api.scan_policy.saas_scan_restrictions_enabled", return_value=False):
+            for url in (
+                "http://2852039166/",           # 169.254.169.254
+                "http://0xa9fea9fe/",
+                "http://[fd00:ec2::254]/",
+            ):
+                with self.assertRaises(ValueError):
+                    ScanRequest(target="example.com", ai_base_url=url)
+
     def test_saas_blocks_http_and_internal_https(self):
         with patch.dict(os.environ, {"NETLOGIC_SAAS": "1"}, clear=False):
             for url in (

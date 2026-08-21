@@ -178,7 +178,11 @@ _CPE_PRODUCT_ALIASES: dict[str, set[str]] = {
     "dovecot":       {"dovecot"},
     "sendmail":      {"sendmail"},
     "samba":         {"samba"},
-    "smb":           {"samba"},
+    "smb":           {"smb"},
+    "big-ip":        {"big-ip", "big-ip_local_traffic_manager",
+                      "big-ip_access_policy_manager",
+                      "big-ip_application_security_manager",
+                      "big-ip_global_traffic_manager"},
     "wordpress":     {"wordpress"},
     "drupal":        {"drupal"},
     "joomla":        {"joomla", "joomla\\!"},
@@ -248,7 +252,11 @@ def _range_product_matches(range_product: Optional[str], detected_product: Optio
 
     aliases = _cpe_aliases_for(dp)
     if aliases is not None:
-        return rp in aliases
+        if rp in aliases:
+            return True
+        if dp == "big-ip" and rp.startswith("big-ip"):
+            return True
+        return False
 
     # Unknown product: require a shared distinctive token, not a substring.
     rp_tokens = {t for t in re.split(r"[^a-z0-9]+", rp) if t}
@@ -430,8 +438,12 @@ def _parse_nvd_item(item: dict) -> NVDCve:
         metrics = {}
     for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
         entries = metrics.get(key)
-        if isinstance(entries, list) and entries and isinstance(entries[0], dict):
-            m = entries[0]
+        if isinstance(entries, list) and entries:
+            typed = [e for e in entries if isinstance(e, dict)]
+            if not typed:
+                continue
+            primary = [e for e in typed if str(e.get("type") or "").lower() == "primary"]
+            m = (primary or typed)[0]
             cd = m.get("cvssData") if isinstance(m.get("cvssData"), dict) else {}
             score    = _safe_float(cd.get("baseScore", 0))
             severity = str(m.get("baseSeverity") or cd.get("baseSeverity") or "UNKNOWN").upper()
@@ -513,11 +525,15 @@ def _parse_nvd_item(item: dict) -> NVDCve:
                         if ver_end is None:
                             ver_end = r_end
                             ver_end_inc = r_end_inc
-                    elif cpe_version and cpe_version not in ("*", "-"):
-                        # Exact-version pin (e.g. Apache 2.4.49 path traversal RCE).
-                        # Recorded as a closed [v, v] range so it matches ONLY that
-                        # version — recovers single-version CVEs the range-only parser
-                        # dropped, with zero added false-positive surface.
+                    elif cpe_version in ("*", "-", ""):
+                        version_ranges.append({
+                            "start": None,
+                            "end": None,
+                            "end_including": False,
+                            "cpe_product": cpe_product,
+                            "any_version": True,
+                        })
+                    elif cpe_version:
                         version_ranges.append({
                             "start": cpe_version,
                             "end": cpe_version,
@@ -721,6 +737,8 @@ def version_is_affected(detected_version: str, cve: NVDCve, detected_product: Op
         if not matching_ranges and detected_product:
             return False
         for version_range in matching_ranges or cve.version_ranges:
+            if version_range.get("any_version"):
+                return True
             if _version_in_range(
                 detected_version,
                 version_range.get("start"),
@@ -769,6 +787,9 @@ PRODUCT_KEYWORD_MAP = {
     "postfix":      "postfix",
     "dovecot":      "dovecot",
     "samba":        "samba",
+    "smb":          "windows smb",
+    "microsoft-ds": "windows smb",
+    "netbios-ssn":  "windows smb",
     "openssl":      "openssl",
     "wordpress":    "wordpress",
     "drupal":       "drupal",
@@ -788,9 +809,9 @@ PRODUCT_KEYWORD_MAP = {
     "openvpn":      "openvpn",
     "libssl":       "openssl",
     "libcrypto":    "openssl",
-    "smb":          "samba",
-    "microsoft-ds": "samba",
-    "netbios-ssn":  "samba",
+    "smb":          "windows smb",
+    "microsoft-ds": "windows smb",
+    "netbios-ssn":  "windows smb",
     "rdp":          "remote desktop",
     "ms-wbt-server":"remote desktop",
     "telnet":       "telnet",

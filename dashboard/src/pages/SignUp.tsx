@@ -35,21 +35,27 @@ export default function SignUpPage() {
       {!showSignUp ? (
         <div className="relative z-10 glass-strong p-7 max-w-md w-full space-y-5 rounded-2xl">
           <p className="font-display text-xl font-bold text-text-bright">Before you create an account</p>
-          <label className="flex items-start gap-3 text-[14px] text-text-dim cursor-pointer select-none leading-relaxed">
+          <div className="flex items-start gap-3 text-[14px] text-text-dim leading-relaxed">
             <input
               type="checkbox"
+              id="signup-consent"
               checked={agreed}
               onChange={(e) => setAgreed(e.target.checked)}
               className="accent-accent mt-1"
             />
-            <span>
-              I have read and agree to the{' '}
-              <Link to="/terms" className="text-accent hover:underline">Terms of Service</Link>{' '}
-              and{' '}
-              <Link to="/privacy" className="text-accent hover:underline">Privacy Policy</Link>,
-              and I confirm I will only scan systems I own or am authorized to test.
-            </span>
-          </label>
+            <div>
+              <label htmlFor="signup-consent" className="cursor-pointer select-none">
+                I have read and agree to the Terms of Service and Privacy Policy,
+                and I confirm I will only scan systems I own or am authorized to test.
+              </label>
+              <p className="mt-2">
+                Read the{' '}
+                <Link to="/terms" className="text-accent hover:underline">Terms of Service</Link>
+                {' '}and{' '}
+                <Link to="/privacy" className="text-accent hover:underline">Privacy Policy</Link>.
+              </p>
+            </div>
+          </div>
           <button
             type="button"
             className="btn btn-primary w-full"

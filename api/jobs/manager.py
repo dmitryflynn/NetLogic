@@ -397,6 +397,73 @@ class JobManager:
             job.status = "running"
             return job
 
+    def try_set_terminal(self, job_id: str, status: str, org_id: str = "",
+                         error: str = "") -> tuple[Optional["ScanJob"], bool]:
+        """Atomically move a non-terminal job to cancelled/completed/failed.
+
+        Returns (job, changed). If the job is already terminal, changed is False
+        and status is left as-is (cancel cannot resurrect, complete cannot un-cancel).
+        """
+        if status not in ("cancelled", "completed", "failed"):
+            raise ValueError(status)
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None, False
+            if org_id and job.org_id != org_id:
+                return None, False
+            if job.status in ("completed", "failed", "cancelled"):
+                return job, False
+            job.status = status
+            if error:
+                job.error = error
+            if status == "cancelled":
+                job._stop_flag.set()
+            return job, True
+
+    def cancel_ids_for_agent(self, agent_id: str) -> list[str]:
+        """Job ids assigned to this agent that are already cancelled.
+
+        Remote agents poll this via heartbeat so they can unwind work the
+        in-process `_stop_flag` would have stopped locally.
+        """
+        if not agent_id:
+            return []
+        with self._lock:
+            return [
+                j.job_id for j in self._jobs.values()
+                if j.assigned_agent_id == agent_id and j.status == "cancelled"
+            ]
+
+    def reclaim_stranded(self, job_id: str, *, max_attempts: int) -> str:
+        """Requeue or fail a job stranded on an offline agent.
+
+        Returns 'requeued', 'failed', or 'skip' (missing / already terminal /
+        no longer assigned). Never resurrects a cancelled/completed job.
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return "skip"
+            if job.status not in ("queued", "running"):
+                return "skip"
+            if not job.assigned_agent_id:
+                return "skip"
+            if job.dispatch_attempts >= max_attempts:
+                job.status = "failed"
+                job.error = (
+                    f"No healthy agent available after {job.dispatch_attempts} "
+                    "attempt(s) — last assigned agent went offline."
+                )
+                job.completed_at = time.time()
+                return "failed"
+            job.assigned_agent_id = None
+            job.status = "queued"
+            job.started_at = None
+            job.progress = 0.0
+            job._waiting_noted = False
+            return "requeued"
+
     def get(self, job_id: str, org_id: str = "") -> Optional[ScanJob]:
         """Return the job if it exists and belongs to org_id (or org_id is unset)."""
         with self._lock:
