@@ -11,7 +11,7 @@ import ipaddress
 import re
 from typing import Optional
 
-from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, ValidationInfo, field_validator, model_validator
 
 # RFC 1123 label: 1-63 chars, starts/ends with alnum, may contain hyphens.
 _LABEL_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$")
@@ -247,9 +247,14 @@ class ScanRequest(BaseModel):
 
     @field_validator("ai_base_url")
     @classmethod
-    def _validate_ai_base_url(cls, v: str) -> str:
+    def _validate_ai_base_url(cls, v: str, info: ValidationInfo) -> str:
+        raw = (v or "").strip()
+        # Rehydrating a stored job must not depend on live DNS / current SaaS
+        # policy — those checks belong on *new* submissions only.
+        if info.context and info.context.get("trusted_persisted"):
+            return raw.rstrip("/")
         from api.scan_policy import normalize_llm_base_url  # noqa: PLC0415
-        return normalize_llm_base_url(v or "")
+        return normalize_llm_base_url(raw)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Validators
@@ -350,7 +355,12 @@ class ScanRequest(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_saas_scan_target(self) -> "ScanRequest":
+    def _validate_saas_scan_target(self, info: ValidationInfo) -> "ScanRequest":
+        # ScanJob.from_dict reconstructs config from durable storage. Live DNS
+        # here would 404 completed history after cache eviction or a DNS blip,
+        # and would drop LAN scans if SaaS restrictions were enabled later.
+        if info.context and info.context.get("trusted_persisted"):
+            return self
         from api.scan_policy import validate_scan_target  # noqa: PLC0415
         validate_scan_target(self.target)
         return self
