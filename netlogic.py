@@ -160,13 +160,13 @@ def resolve_ports(ports_arg):
     if ports_arg == "quick":  return COMMON_PORTS
     if ports_arg == "full":   return EXTENDED_PORTS
     if ports_arg.startswith("custom="):
-        port_list = [int(p) for p in ports_arg[7:].split(",") if p.strip().isdigit()]
+        port_list = [int(p) for p in ports_arg[7:].split(",") if p.strip().isdigit() and 1 <= int(p) <= 65535]
         if not port_list:
             print(f"[!] No valid ports in --ports: {ports_arg}", file=sys.stderr)
             sys.exit(1)
         return port_list
     try:
-        port_list = [int(p) for p in ports_arg.split(",") if p.strip().isdigit()]
+        port_list = [int(p) for p in ports_arg.split(",") if p.strip().isdigit() and 1 <= int(p) <= 65535]
         if not port_list:
             print(f"[!] No valid ports in --ports: {ports_arg}", file=sys.stderr)
             sys.exit(1)
@@ -597,7 +597,11 @@ def run_multi(targets, args):
 def run_cidr(cidr, args):
     ports = resolve_ports(args.ports)
     print(f"[*] CIDR scan: {cidr}…")
-    results = scan_cidr(cidr, ports=ports, max_workers=args.threads, timeout=args.timeout)
+    try:
+        results = scan_cidr(cidr, ports=ports, max_workers=args.threads, timeout=args.timeout)
+    except ValueError as exc:
+        print(f"[!] Invalid CIDR: {exc}")
+        return
     print(f"[+] {len(results)} live host(s) found.\n")
     for hr in results:
         vm = correlate(hr.ports)
@@ -693,7 +697,11 @@ def run_gui():
             pass
 
     for k, v in data.items():
-        os.environ.setdefault(k, v)
+        existing = os.environ.get(k)
+        if existing in (None, "", "changeme-in-production", "changeme",
+                        "change-me-use-a-long-random-string-here",
+                        "admin-changeme", "change-me-admin-key"):
+            os.environ[k] = v
 
     api_key = data["NETLOGIC_API_KEY"]
     os.environ["NETLOGIC_API_KEYS"] = f"{api_key}:default"
@@ -723,7 +731,7 @@ def run_gui():
             print("[netlogic] Warning: npm not found — install Node.js for the dashboard.")
 
     port = int(os.environ.get("NETLOGIC_PORT", "8000"))
-    host = os.environ.get("NETLOGIC_HOST", "0.0.0.0")
+    host = os.environ.get("NETLOGIC_HOST", "127.0.0.1")
     url  = f"http://localhost:{port}"
 
     print()

@@ -62,10 +62,11 @@ _FRAMEWORK_PROBES: dict[str, ValidationProbe] = {
     "apache": ValidationProbe("confirm_tech:apache", "/", ("server: apache",), "apache"),
     "iis": ValidationProbe("confirm_tech:iis", "/", ("server: microsoft-iis",), "iis"),
     # ── app frameworks ──
-    # Express/Node: X-Powered-By (when present) OR a socket.io engine.io handshake (Node/Express+socket.io).
+    # Express/Node: X-Powered-By (when present) OR a socket.io engine.io handshake
+    # (the upgrades array — not a generic `"sid":` JSON field).
     "express": ValidationProbe(
         "confirm_tech:express", "/socket.io/?EIO=4&transport=polling",
-        ('"upgrades":["websocket"]', '"sid":', "x-powered-by: express"), "express"),
+        ('"upgrades":["websocket"]', "x-powered-by: express"), "express"),
     "aspnet": ValidationProbe(
         "confirm_tech:aspnet", "/",
         ("x-aspnet-version", "x-powered-by: asp.net", "asp.net_sessionid", "__viewstate"), "aspnet"),
@@ -89,7 +90,7 @@ _FRAMEWORK_PROBES: dict[str, ValidationProbe] = {
     "kubernetes": ValidationProbe(
         "confirm_tech:kubernetes", "/", ("kubernetes dashboard", "kubernetesui"), "kubernetes"),
     "graphql": ValidationProbe(
-        "confirm_tech:graphql", "/graphql", ("graphiql", "must provide query", '"errors"'), "graphql"),
+        "confirm_tech:graphql", "/graphql", ("graphiql", "must provide query"), "graphql"),
 }
 
 # Common AI/operator phrasings that should resolve to a probe key (e.g. the LLM says "Ruby on Rails"
@@ -142,15 +143,24 @@ def _default_http_get(url: str, timeout: float = 5.0):
     import ssl  # noqa: PLC0415
     import urllib.error  # noqa: PLC0415
     import urllib.request  # noqa: PLC0415
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+            return None  # stay on the in-scope origin; 3xx is handled as HTTPError
+
     req = urllib.request.Request(url, method="GET", headers={"User-Agent": "NetLogic/validation"})
     ctx = None
     if url.lower().startswith("https:"):
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
+    handlers: list = [_NoRedirect]
+    if ctx is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=ctx))
+    opener = urllib.request.build_opener(*handlers)
     try:
         # noqa: S310 — scheme fixed to http/https by SafeActiveExecutor
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        with opener.open(req, timeout=timeout) as resp:
             body = resp.read(65536).decode("utf-8", "replace")
             headers = "\n".join(f"{k}: {v}" for k, v in resp.headers.items())
             return resp.status, f"{headers}\n\n{body}"
@@ -221,19 +231,23 @@ _ABSTRACT_CONFIRMS_RE = re.compile(
 _MAX_AI_PROBES = 8
 _MAX_PATH = 256
 _MAX_MARKER = 200
+_MIN_MARKER = 6
 
 
 def _safe_path(path) -> str | None:
     """Total gate for an AI-proposed path: a benign RELATIVE URL path only. Rejects absolute URLs
-    (SSRF), protocol-relative (`//host`), control/whitespace, and over-long input. Returns the clean
-    path or None. The executor still only ever prefixes the in-scope host:port, so a request can never
-    leave the authorized target regardless."""
+    (SSRF), protocol-relative (`//host` including in query strings / percent-encoding),
+    control/whitespace, and over-long input. Returns the clean path or None."""
     if not isinstance(path, str):
         return None
     p = path.strip()
     if not p.startswith("/") or p.startswith("//"):
         return None
     if "://" in p or "@" in p or "\\" in p:
+        return None
+    # Open-redirect bait: protocol-relative or encoded `://` anywhere in the path/query.
+    lowered = p.lower()
+    if "//" in p[1:] or "%2f%2f" in lowered or "%3a%2f" in lowered:
         return None
     if any(ord(c) < 0x20 or c == " " for c in p):
         return None
@@ -281,7 +295,11 @@ def design_ai_probes(completer, state, *, max_probes: int = _MAX_AI_PROBES) -> l
             continue
         if _ABSTRACT_CONFIRMS_RE.match(confirms):
             continue  # not a tech presence check — skip
-        markers = tuple(str(m)[:_MAX_MARKER] for m in raw_markers[:8] if isinstance(m, str) and m.strip())
+        markers = tuple(
+            str(m).strip()[:_MAX_MARKER]
+            for m in raw_markers[:8]
+            if isinstance(m, str) and len(m.strip()) >= _MIN_MARKER
+        )
         if not markers:
             continue
         aid = f"ai_confirm:{confirms}:{path}"[:200]

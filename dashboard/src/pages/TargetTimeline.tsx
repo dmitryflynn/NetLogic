@@ -187,7 +187,7 @@ export default function TargetTimeline() {
 
   const scans = data?.scans ?? []
   const completedScans = scans.filter((s) => s.status === 'completed')
-  const running = scans.filter((s) => s.status !== 'completed')
+  const running = scans.filter((s) => s.status === 'queued' || s.status === 'running')
   const latest = completedScans[completedScans.length - 1]
   const prev = completedScans[completedScans.length - 2]
 

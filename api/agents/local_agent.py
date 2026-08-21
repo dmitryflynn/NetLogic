@@ -79,8 +79,18 @@ def _worker_loop(agent_id: str, org_id: str) -> None:
             try_dispatch_queued(org_id=org_id)
 
             job_ids = agent_registry.get_pending_tasks(agent_id)
+            leftover: list[str] = []
             for job_id in job_ids:
-                _run_job(agent_id, job_id, org_id)
+                if not _run_job(agent_id, job_id, org_id):
+                    leftover.append(job_id)
+            if leftover:
+                from api.jobs.manager import job_manager  # noqa: PLC0415
+                still = []
+                for jid in leftover:
+                    job = job_manager.get(jid, org_id=org_id)
+                    if job is not None and job.status == "queued" and job.assigned_agent_id == agent_id:
+                        still.append(jid)
+                agent_registry.restore_pending_tasks(agent_id, still)
 
         except Exception as exc:
             _log.warning("Worker error: %s", exc)
@@ -90,18 +100,15 @@ def _worker_loop(agent_id: str, org_id: str) -> None:
 
 # ── Scan execution ────────────────────────────────────────────────────────────
 
-def _run_job(agent_id: str, job_id: str, org_id: str) -> None:
+def _run_job(agent_id: str, job_id: str, org_id: str) -> bool:
     from api.agents.registry import agent_registry  # noqa: PLC0415
     from api.jobs.manager import job_manager  # noqa: PLC0415
 
     agent = agent_registry.get(agent_id)
-    job   = job_manager.get(job_id, org_id=org_id)
-    if not job or not agent or job.status != "queued":
-        return
-
-    job.status           = "running"
-    job.started_at       = time.time()
-    job.assigned_agent_id = agent_id
+    job = job_manager.try_claim(job_id, org_id=org_id, agent_id=agent_id)
+    if not job or not agent:
+        return False
+    job.started_at = time.time()
     agent_registry.mark_active(agent_id, job_id)
 
     try:
@@ -109,14 +116,14 @@ def _run_job(agent_id: str, job_id: str, org_id: str) -> None:
         from src.scanner   import COMMON_PORTS, EXTENDED_PORTS  # noqa: PLC0415
     except ImportError as exc:
         _finish(job, agent, error=f"Scan engine unavailable: {exc}")
-        return
+        return True
 
     cfg = job.config
 
     if cfg.ports == "full":
         ports = EXTENDED_PORTS
     elif cfg.ports.startswith("custom="):
-        ports = [int(p) for p in cfg.ports[7:].split(",") if p.strip().isdigit()]
+        ports = [int(p) for p in cfg.ports[7:].split(",") if p.strip().isdigit() and 1 <= int(p) <= 65535]
     else:
         ports = COMMON_PORTS
 
@@ -215,7 +222,7 @@ def _run_job(agent_id: str, job_id: str, org_id: str) -> None:
                 job.status = "cancelled"
                 job.error = job.error or "Cancelled by user request."
             _finish(job, agent)
-            return
+            return True
     except JobCancelled:
         # Cooperative cancel via push_event after cancel/delete set _stop_flag.
         # cancel_job() already set terminal status; delete_job() may not have.
@@ -224,13 +231,14 @@ def _run_job(agent_id: str, job_id: str, org_id: str) -> None:
             job.status = "cancelled"
             job.error = job.error or "Cancelled by user request."
         _finish(job, agent)
-        return
+        return True
     except Exception as exc:
         _log.exception("Scan failed for job %s", job_id)
         _finish(job, agent, error=str(exc))
-        return
+        return True
 
     _finish(job, agent)
+    return True
 
 
 def _finish(job, agent, error: Optional[str] = None) -> None:

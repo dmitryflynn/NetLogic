@@ -311,60 +311,73 @@ class JobManager:
                 with open(path, "r", encoding="utf-8") as fh:
                     data = json.load(fh)
                     job = ScanJob.from_dict(data)
+                    if self.store and self.store._safe_path(job.job_id) is None:
+                        continue
                     self._jobs[job.job_id] = job
             except Exception:
                 continue
+
+        interrupted = [
+            j for j in self._jobs.values()
+            if j.error == "Scan interrupted by server restart."
+        ]
+        for j in interrupted:
+            self.persist_job(j)
         
         # Cleanup any jobs that are over the TTL or MAX_JOBS limit after reload
         self._maybe_evict()
 
     def persist_job(self, job: ScanJob) -> None:
         """Trigger an asynchronous save of the job state."""
-        # Do not resurrect a job that has been deleted from the registry.
         with self._lock:
             if job.job_id not in self._jobs:
                 return
-
-        # Postgres backend: durable upsert. Prefer the captured/running loop so
-        # the blocking DB write happens off the event loop; fall back to a sync
-        # write when no loop is available (CLI/tests), same 3-case logic as JSON.
-        if self._pg and self._pg_store is not None:
             record = job.to_dict()
+            jid = job.job_id
+
+        def _still_present() -> bool:
+            with self._lock:
+                return jid in self._jobs
+
+        if self._pg and self._pg_store is not None:
             if job._loop:
                 try:
-                    job._loop.call_soon_threadsafe(
-                        lambda: asyncio.create_task(self._pg_store.save_scan(job.job_id, record))
-                    )
+                    def _pg_async():
+                        if _still_present():
+                            asyncio.create_task(self._pg_store.save_scan(jid, record))
+                    job._loop.call_soon_threadsafe(_pg_async)
                     return
                 except RuntimeError:
                     pass
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self._pg_store.save_scan(job.job_id, record))
+                if _still_present():
+                    loop.create_task(self._pg_store.save_scan(jid, record))
             except RuntimeError:
-                self._pg_store.save_sync(record)
+                if _still_present():
+                    self._pg_store.save_sync(record)
             return
 
         if self.store:
-            # 1. Background thread: schedule on captured loop
+            path = self.store._safe_path(jid)
+            if path is None:
+                return
             if job._loop:
                 try:
-                    job._loop.call_soon_threadsafe(
-                        lambda: asyncio.create_task(self.store.save_scan(job.job_id, job.to_dict()))
-                    )
+                    def _json_async():
+                        if _still_present():
+                            asyncio.create_task(self.store.save_scan(jid, record))
+                    job._loop.call_soon_threadsafe(_json_async)
                     return
                 except RuntimeError:
-                    pass # Loop closing
-            
-            # 2. Main thread with loop: schedule task
+                    pass
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self.store.save_scan(job.job_id, job.to_dict()))
+                if _still_present():
+                    loop.create_task(self.store.save_scan(jid, record))
             except RuntimeError:
-                # 3. No loop running: perform synchronous write fallback
-                # (prevents coroutine-never-awaited warnings in tests/scripts)
-                path = os.path.join(self.store.directory, f"{job.job_id}.json")
-                self.store._write(path, job.to_dict())
+                if _still_present():
+                    self.store._write(path, record)
 
     # ── Create ────────────────────────────────────────────────────────────────
 
@@ -380,7 +393,7 @@ class JobManager:
 
     # ── Query ─────────────────────────────────────────────────────────────────
 
-    def try_claim(self, job_id: str, org_id: str = "") -> Optional[ScanJob]:
+    def try_claim(self, job_id: str, org_id: str = "", agent_id: str = "") -> Optional[ScanJob]:
         """Atomically transition a queued job to running, else None.
 
         Prevents the cancelled-job race: check + assign happen under the lock so
@@ -393,6 +406,8 @@ class JobManager:
             if org_id and job.org_id != org_id:
                 return None
             if job.status != "queued":
+                return None
+            if agent_id and job.assigned_agent_id and job.assigned_agent_id != agent_id:
                 return None
             job.status = "running"
             return job
@@ -560,9 +575,9 @@ class JobManager:
                 self._pg_store.delete_sync(job_id)   # explicit user delete only
             return True
 
-        # JSON backend: remove the on-disk record.
-        path = os.path.join(SCANS_DIR, f"{job_id}.json")
-        if os.path.exists(path):
+        # JSON backend: remove the on-disk record (never follow a malicious job_id).
+        path = self.store._safe_path(job_id) if self.store else None
+        if path and os.path.exists(path):
             try:
                 os.unlink(path)
             except OSError:

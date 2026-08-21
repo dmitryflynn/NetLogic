@@ -341,6 +341,12 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
                           ("model", "ai_model"), ("base_url", "ai_base_url")):
             val = _g(args, key)
             if val:
+                if key == "ai_base_url":
+                    from api.scan_policy import normalize_llm_base_url  # noqa: PLC0415
+                    try:
+                        val = normalize_llm_base_url(str(val))
+                    except ValueError:
+                        val = ""
                 setattr(_ai_vcfg, attr, val)
         _ai_vcfg.resolve()
         try:

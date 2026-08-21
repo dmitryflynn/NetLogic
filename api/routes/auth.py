@@ -20,6 +20,8 @@ REST surface
 
 from __future__ import annotations
 
+import hashlib
+
 import re
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
@@ -115,7 +117,11 @@ async def get_token(request: Request, body: TokenRequest) -> dict:
         raise HTTPException(status_code=401, detail="Invalid API key.")
     # sub carries a non-secret key HINT, never the raw API key — a leaked JWT must
     # not expose the long-lived credential it was minted from.
-    token = create_token(org_id=org_id, sub=f"apikey:{_key_hint(body.api_key)}")
+    token = create_token(
+        org_id=org_id,
+        sub=f"apikey:{_key_hint(body.api_key)}",
+        key_fp=hashlib.sha256(body.api_key.encode("utf-8")).hexdigest(),
+    )
     audit_log("token_exchange_ok", ip=ip, org_id=org_id)
     return {
         "token": token,

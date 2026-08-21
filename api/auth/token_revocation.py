@@ -78,9 +78,11 @@ def is_token_revoked(jti: Optional[str], exp: Optional[float | int] = None) -> b
                 (jti,),
             ).fetchone()
             return row is not None
-    except Exception as exc:  # noqa: BLE001 — fail open on DB outage (logged)
+    except Exception as exc:  # noqa: BLE001
         log.warning("token revocation lookup failed: %s", exc)
-        return False
+        # Fail closed when a denylist exists but cannot be queried — otherwise a
+        # DB blip undoes emergency revocation on other workers.
+        return True
 
 
 def reset_for_tests() -> None:

@@ -285,6 +285,9 @@ async def delete_job(
     if job.status in ("queued", "running"):
         job._stop_flag.set()
         job.push_sentinel()
+    if job.assigned_agent_id:
+        from api.agents.registry import agent_registry  # noqa: PLC0415
+        agent_registry.mark_done(job.assigned_agent_id, job_id)
 
     job_manager.delete(job_id)
     return Response(status_code=204)

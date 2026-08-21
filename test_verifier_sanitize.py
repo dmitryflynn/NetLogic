@@ -179,3 +179,59 @@ def test_reprobe_parser_drops_put_and_keeps_get():
     assert len(plans) == 1
     assert plans[0]["method"] == "GET"
     assert plans[0]["path"] == "/login"
+
+
+def test_run_test_empty_expected_status_does_not_confirm(monkeypatch):
+    def fake_send(host, port, payload, timeout=5.0, use_tls=False):
+        return b"HTTP/1.0 200 OK\r\n\r\nok", 1.0, ""
+
+    monkeypatch.setattr("src.verifier.runner._tcp_send_recv", fake_send)
+    result = run_test({
+        "cve_id": "CVE-TEST",
+        "method": "GET",
+        "path": "/",
+        "expected_status": [],
+        "port": 80,
+    }, "scanme.example")
+    assert result.success is False
+    assert "not confirmed" in result.evidence.lower() or "expected_status" in result.evidence.lower()
+
+
+def test_run_test_ignores_generic_body_patterns(monkeypatch):
+    def fake_send(host, port, payload, timeout=5.0, use_tls=False):
+        return b"HTTP/1.0 403 Forbidden\r\n\r\nerror forbidden", 1.0, ""
+
+    monkeypatch.setattr("src.verifier.runner._tcp_send_recv", fake_send)
+    result = run_test({
+        "cve_id": "CVE-TEST",
+        "method": "GET",
+        "path": "/.htaccess",
+        "expected_status": [403],
+        "expected_body_patterns": ["error", "forbidden", "htaccess"],
+        "port": 80,
+    }, "scanme.example")
+    assert result.success is False
+
+
+def test_run_test_coerces_status_and_patterns(monkeypatch):
+    def fake_send(host, port, payload, timeout=5.0, use_tls=False):
+        return b"HTTP/1.0 200 OK\r\n\r\napache server-status", 1.0, ""
+
+    monkeypatch.setattr("src.verifier.runner._tcp_send_recv", fake_send)
+    result = run_test({
+        "cve_id": "CVE-TEST",
+        "method": "GET",
+        "path": "/server-status",
+        "expected_status": ["200"],
+        "expected_body_patterns": "not-a-list",
+        "port": 80,
+    }, "scanme.example")
+    assert result.success is True
+
+
+def test_ssh_builtin_plan_is_not_emitted():
+    plans = generate_plans_for_cves(
+        [{"id": "CVE-2023-38408", "cvss_score": 9.8, "description": "openssh agent"}],
+        service="ssh", product="OpenSSH", version="9.3", port=22,
+    )
+    assert plans == []

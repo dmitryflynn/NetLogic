@@ -340,6 +340,23 @@ class AgentRegistry:
             agent.pending_tasks.append(job_id)
             return True
 
+    def restore_pending_tasks(self, agent_id: str, job_ids: list[str]) -> None:
+        """Re-queue jobs that were drained but not claimed (still queued for this agent)."""
+        if not job_ids:
+            return
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if not agent or agent.disabled:
+                return
+            existing = set(agent.pending_tasks)
+            for jid in job_ids:
+                if not jid or jid in existing:
+                    continue
+                if len(agent.pending_tasks) >= AGENT_PENDING_CAP:
+                    break
+                agent.pending_tasks.append(jid)
+                existing.add(jid)
+
     def get_pending_tasks(self, agent_id: str) -> list[str]:
         """Atomically drain and return the agent's pending task queue."""
         with self._lock:

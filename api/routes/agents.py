@@ -178,8 +178,9 @@ async def get_pending_tasks(
 
     job_ids = agent_registry.get_pending_tasks(agent_id)
     tasks = []
+    leftover: list[str] = []
     for job_id in job_ids:
-        job = job_manager.try_claim(job_id, org_id=agent.org_id)
+        job = job_manager.try_claim(job_id, org_id=agent.org_id, agent_id=agent_id)
         if job:
             job.started_at = time.time()
             # Move the job into the agent's active set so capacity/load tracking
@@ -189,6 +190,15 @@ async def get_pending_tasks(
                 "job_id": job.job_id,
                 "config": job.config.task_dump(),
             })
+        else:
+            leftover.append(job_id)
+    if leftover:
+        still = []
+        for jid in leftover:
+            job = job_manager.get(jid, org_id=agent.org_id)
+            if job is not None and job.status == "queued" and job.assigned_agent_id == agent_id:
+                still.append(jid)
+        agent_registry.restore_pending_tasks(agent_id, still)
     return tasks
 
 

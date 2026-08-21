@@ -530,14 +530,20 @@ export function useStreamScan(jobId: string | null) {
     async function connect(): Promise<void> {
       const ctrl = new AbortController()
       abortRef.current = ctrl
+      let skipReplay = 0
 
       // On reconnect, resync from persisted job events to avoid duplicating the SSE replay.
       if (retriesRef.current > 0 && jobId) {
         try {
           const snap = await api.get<JobDetail>(`/jobs/${jobId}`)
-          if (snap.events?.length) setEvents(snap.events)
+          if (cancelled) return
+          if (snap.events?.length) {
+            setEvents(snap.events)
+            skipReplay = snap.events.filter((e) => e.type !== 'ping').length
+          }
         } catch { /* best-effort */ }
       }
+      if (cancelled) return
 
       // Add a 15s connection timeout to prevent hanging forever
       const timeoutId = setTimeout(() => ctrl.abort(), 15_000)
@@ -546,7 +552,21 @@ export function useStreamScan(jobId: string | null) {
         const res = await streamFetch(`/jobs/${jobId}/stream`, ctrl.signal)
         clearTimeout(timeoutId)
 
-        if (!res.ok || !res.body) { setDone(true); setStreaming(false); return }
+        if (!res.ok) {
+          terminated = true
+          setDone(true); setStreaming(false); return
+        }
+        if (!res.body) { setDone(true); setStreaming(false); return }
+
+        const ingest = (ev: ScanEvent): boolean => {
+          if (ev.type === 'ping') return false
+          if (skipReplay > 0) {
+            skipReplay--
+            return ev.type === 'done' || ev.type === 'error'
+          }
+          setEvents((prev) => [...prev, ev])
+          return ev.type === 'done' || ev.type === 'error'
+        }
 
         const reader = res.body.getReader()
         const dec = new TextDecoder()
@@ -562,8 +582,7 @@ export function useStreamScan(jobId: string | null) {
                 try {
                   const ev: ScanEvent = JSON.parse(line.slice(5).trim())
                   if (ev.type !== 'ping') {
-                    setEvents((prev) => [...prev, ev])
-                    if (ev.type === 'done' || ev.type === 'error') {
+                    if (ingest(ev)) {
                       setDone(true)
                       setStreaming(false)
                       terminated = true
@@ -592,8 +611,7 @@ export function useStreamScan(jobId: string | null) {
             try {
               const ev: ScanEvent = JSON.parse(line.slice(5).trim())
               if (ev.type === 'ping') continue
-              setEvents((prev) => [...prev, ev])
-              if (ev.type === 'done' || ev.type === 'error') {
+              if (ingest(ev)) {
                 setDone(true)
                 setStreaming(false)
                 terminated = true
@@ -606,7 +624,7 @@ export function useStreamScan(jobId: string | null) {
         if ((e as Error).name === 'AbortError') return
         console.error('SSE error', e)
       } finally {
-        // Don't reconnect if we received a terminal event or user aborted.
+        // Don't reconnect after a terminal event, HTTP error, or user abort.
         if (!terminated && !cancelled && retriesRef.current < 5) {
           retriesRef.current++
           const delay = Math.min(1000 * Math.pow(2, retriesRef.current), 15_000)

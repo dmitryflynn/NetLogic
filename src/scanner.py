@@ -615,9 +615,11 @@ def scan_host(target: str, ports: list[int] = None, max_workers: int = 100,
 
 def scan_cidr(cidr: str, **kwargs) -> list[HostResult]:
     """Scan every host in a CIDR block to discover network structure and devices."""
+    if "/" not in (cidr or ""):
+        raise ValueError("CIDR target must include a prefix length (e.g. 10.0.0.0/24)")
     # Resolve hostname to IP first in case the user provided a domain
     base_target = cidr.split('/')[0]
-    mask = cidr.split('/')[1] if '/' in cidr else "24"
+    mask = cidr.split('/')[1]
     
     ip, _ = resolve_target(base_target)
     cidr = f"{ip}/{mask}"
