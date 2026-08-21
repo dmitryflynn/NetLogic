@@ -159,11 +159,19 @@ def test_parse_cert_self_signed_subject_equals_issuer():
     assert info.is_self_signed is True
 
 
-def test_parse_cert_untrusted_chain_flagged_self_signed():
-    # chain_valid False with DER present -> treated as untrusted/self-signed.
+def test_parse_cert_untrusted_chain_not_self_signed():
     cert = _cert(cn="example.com", iss_cn="DigiCert CA")
     info = tls.parse_cert(cert, der=b"x", chain_valid=False, host="example.com")
-    assert info.is_self_signed is True
+    assert info.is_self_signed is False
+
+
+def test_parse_cert_ip_sans():
+    c = _cert(sans=["example.com"])
+    c["subjectAltName"] = (("DNS", "example.com"), ("IP Address", "203.0.113.10"))
+    info = tls.parse_cert(c, der=b"x", chain_valid=True, host="203.0.113.10")
+    assert "203.0.113.10" in info.san_ips
+    assert tls.cert_covers_host(info, "203.0.113.10")
+    assert not tls.cert_covers_host(info, "example.com.evil")
 
 
 def test_parse_cert_ca_signed_not_self_signed():

@@ -680,6 +680,8 @@ class ReconDirector:
         try:
             return step.run(ctx) or []
         except Exception as exc:
+            from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+            reraise_if_cancelled(exc)
             log.warning("sensor step %s failed (%s)", step.name, exc)
             return []
 

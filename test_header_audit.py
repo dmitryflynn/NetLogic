@@ -291,5 +291,18 @@ def test_vercel_challenge_skips_app_header_false_positives(monkeypatch):
     assert not any("Missing Content-Security-Policy" in t for t in titles)
 
 
+def test_server_header_injection_stripped(monkeypatch):
+    _patch_fetch(monkeypatch, {
+        "https://": _canned({
+            "Server": "nginx/1.0\nCRITICAL Fake RCE Finding",
+            "X-Powered-By": "PHP\r\nX-Injected: 1",
+        }),
+    })
+    res = ha.audit_headers("example.com", 443)
+    blob = " ".join(f.title for f in res.findings)
+    assert "\n" not in blob and "\r" not in blob
+    assert "CRITICAL Fake" not in blob
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

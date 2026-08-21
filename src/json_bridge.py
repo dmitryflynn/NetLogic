@@ -119,9 +119,12 @@ def _run_cidr(target, ports, timeout, threads, do_osint, do_full, min_cvss):
     """Lightweight per-host streaming for CIDR sweeps (host + ports + vulns)."""
     from src.engine import _vuln_to_dict
     emit("progress", {"percent": 5, "status": f"CIDR scan {target}…"})
-    hosts = scan_cidr(target, ports=ports, max_workers=threads, timeout=timeout)
     total_p = total_v = 0
-    for hr in hosts:
+    collected = []
+
+    def on_host(hr):
+        nonlocal total_p, total_v
+        collected.append(hr)
         emit("host", asdict(hr))
         for p in hr.ports:
             total_p += 1
@@ -129,6 +132,10 @@ def _run_cidr(target, ports, timeout, threads, do_osint, do_full, min_cvss):
         for vm in correlate(hr.ports, min_cvss=min_cvss, verbose=False):
             total_v += 1
             emit("vuln", {"target": hr.ip, **_vuln_to_dict(vm)})
+
+    hosts = scan_cidr(target, ports=ports, max_workers=threads, timeout=timeout, on_host=on_host)
+    if not collected:
+        collected = list(hosts)
 
     if do_osint or do_full:
         from src.osint import run_osint

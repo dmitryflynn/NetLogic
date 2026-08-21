@@ -230,3 +230,13 @@ def test_match_fingerprints_positive():
 
 def test_match_fingerprints_unknown_provider():
     assert match_fingerprints("anything", 404, "NoSuchProvider") is False
+
+
+def test_cloudfront_generic_403_is_not_takeover():
+    assert match_fingerprints(
+        "ERROR: The request could not be satisfied", 403, "Amazon CloudFront") is False
+
+
+def test_webflow_generic_404_is_not_takeover():
+    assert match_fingerprints(
+        "The page you are looking for doesn't exist or has been moved", 404, "Webflow") is False

@@ -155,8 +155,13 @@ def ssh_enumerate(host: str, user: str, key_path: Optional[str] = None,
 
     base = [
         "ssh",
+        "-F", os.devnull,
         "-o", "BatchMode=yes" if not password else "BatchMode=no",
         "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ProxyCommand=none",
+        "-o", "ProxyJump=none",
+        "-o", "LocalCommand=none",
+        "-o", "PermitLocalCommand=no",
         "-o", f"ConnectTimeout={max(5, timeout - 5)}",
         "-p", str(port),
     ]
@@ -164,6 +169,7 @@ def ssh_enumerate(host: str, user: str, key_path: Optional[str] = None,
         base += ["-i", key_path]
     cmd = base + [f"{user}@{host}", _ENUM_CMD]
 
+    env = os.environ
     if password:
         if not shutil.which("sshpass"):
             result.error = "Password auth requires 'sshpass' (not found). Use key-based auth (--ssh-key)."

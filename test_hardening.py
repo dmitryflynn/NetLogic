@@ -218,6 +218,19 @@ def test_cors_never_wildcard_with_credentials(monkeypatch):
     importlib.reload(main)
 
 
+def test_cors_wildcard_does_not_reflect_with_credentials(monkeypatch):
+    monkeypatch.setenv("NETLOGIC_CORS_ORIGINS", "*")
+    monkeypatch.delenv("NETLOGIC_ENV", raising=False)
+    import api.main as main
+    importlib.reload(main)
+    app = main.create_app()
+    with TestClient(app) as c:
+        r = c.get("/health", headers={"Origin": "https://evil.example"})
+        assert r.headers.get("access-control-allow-origin") not in ("https://evil.example", "*")
+        assert r.headers.get("access-control-allow-credentials") != "true"
+    importlib.reload(main)
+
+
 # ───────────────────────── Production secret validation ──────────────────────
 
 def test_prod_secret_validation_raises_on_weak(monkeypatch):

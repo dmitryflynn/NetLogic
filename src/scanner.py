@@ -569,8 +569,9 @@ def scan_host(target: str, ports: list[int] = None, max_workers: int = 100,
                 if on_open_port is not None:
                     try:
                         on_open_port(port_result)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+                        reraise_if_cancelled(exc)
 
     # UDP protocol fingerprinting (DNS, NTP, SNMP, NetBIOS, SSDP/UPnP). Probed in
     # parallel so broader UDP coverage doesn't serialize a timeout per port.
@@ -639,15 +640,26 @@ def scan_cidr(cidr: str, **kwargs) -> list[HostResult]:
     outer = min(16, max(1, len(hosts)))
 
     results = []
+    on_host = kwargs.pop("on_host", None)
     with concurrent.futures.ThreadPoolExecutor(max_workers=outer) as executor:
         futures = {executor.submit(scan_host, h, **kwargs): h for h in hosts}
         for future in concurrent.futures.as_completed(futures):
             try:
                 r = future.result()
-            except Exception:
+            except Exception as exc:
+                from src.cancel import is_job_cancelled  # noqa: PLC0415
+                if is_job_cancelled(exc):
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    raise
                 continue   # a single host failing must not abort the whole sweep
             if r.ports:   # only include live hosts
                 results.append(r)
+                if on_host is not None:
+                    try:
+                        on_host(r)
+                    except Exception as exc:
+                        from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+                        reraise_if_cancelled(exc)
     return results
 
 

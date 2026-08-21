@@ -112,15 +112,20 @@ def _siem_worker(q: "queue.Queue") -> None:
         session = requests.Session()
 
         def _post(url, body):
-            session.post(url, json=body, timeout=5)
+            session.post(url, json=body, timeout=5, allow_redirects=False)
     except Exception:
         import urllib.request  # noqa: PLC0415
 
         def _post(url, body):
+            class _NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+                    return None
+
             req = urllib.request.Request(
                 url, data=json.dumps(body, default=str).encode(),
                 headers={"Content-Type": "application/json"}, method="POST")
-            urllib.request.urlopen(req, timeout=5).close()
+            opener = urllib.request.build_opener(_NoRedirect)
+            opener.open(req, timeout=5).close()
 
     while True:
         record, endpoint = q.get()

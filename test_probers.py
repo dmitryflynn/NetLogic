@@ -133,6 +133,22 @@ def test_docker_api_detected_vs_random_200(monkeypatch):
     # A 200 page with no Docker keys must not flag.
     monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, "<html>hello</html>"))
     assert sp.check_docker_noauth("h", 2375) is None
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, '{"Version":"1.2.3","name":"my-api"}'))
+    assert sp.check_docker_noauth("h", 2375) is None
+
+
+def test_k8s_html_docs_not_anonymous_api(monkeypatch):
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, "<html>API v1 documentation</html>"))
+    assert sp.check_kubernetes_noauth("h", 6443) is None
+
+
+def test_etcd_health_is_not_kv_access(monkeypatch):
+    def fake(host, port, path, **k):
+        if path == "/health":
+            return 200, {}, '{"health":"true"}'
+        return 404, {}, ""
+    monkeypatch.setattr(sp, "_http_get", fake)
+    assert sp.check_etcd_noauth("h", 2379) is None
 
 
 def test_vault_uninitialized_vs_sealed(monkeypatch):
@@ -517,6 +533,48 @@ def test_probe_web_vulnerabilities_survives_all_none(monkeypatch):
     assert res.target == "h"
     assert res.confirmed == []
     assert res.probes_run >= 1
+
+
+def test_engine_subnet_consumes_probe_result():
+    from types import SimpleNamespace
+    from src.engine import _run_subnet
+    from src.network_prober import ProbedHost, SubnetProbeResult
+
+    class Ctx:
+        completer = None
+        art = {}
+        def emit(self, *a, **k):
+            return None
+
+    def fake_probe_subnet(ip, timeout=1.0):
+        return SubnetProbeResult(target_ip=ip, hosts=[ProbedHost("10.0.0.2", 80)])
+
+    def fake_directive(*a, **k):
+        return {"action": "standard", "targets": [], "ports_per_target": {}}
+
+    probed = []
+    _run_subnet(
+        Ctx(), SimpleNamespace(ip="10.0.0.1"), [],
+        [SimpleNamespace(port=80, service="http")],
+        "10.0.0.1", 1.0, 2, fake_probe_subnet, lambda *a, **k: [],
+        fake_directive, probed,
+    )
+    assert probed == [ProbedHost("10.0.0.2", 80)]
+
+
+def test_director_reraises_job_cancelled():
+    from src.reasoning.director import ReconDirector
+
+    class JobCancelled(Exception):
+        pass
+
+    class Step:
+        name = "x"
+        def run(self, ctx):
+            raise JobCancelled()
+
+    with pytest.raises(JobCancelled):
+        ReconDirector._run_step(Step(), None)
 
 
 if __name__ == "__main__":

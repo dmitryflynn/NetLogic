@@ -265,23 +265,24 @@ def check_docker_noauth(host: str, port: int = 2375, timeout: float = 4.0) -> Op
     if not result:
         return None
     status, _, body = result
-    if status == 200 and ("ApiVersion" in body or "Version" in body):
-        engine_ver = api_ver = ""
-        try:
-            data = json.loads(body)
-            engine_ver = data.get("Version", "")
-            api_ver = data.get("ApiVersion", "")
-        except Exception:
-            pass
-        return ServiceFinding(
-            service="docker-api", port=port, severity="CRITICAL",
-            title="Docker API — Unauthenticated TCP Exposure",
-            detail=(f"Docker Engine {engine_ver} (API {api_ver}) TCP socket is exposed without TLS or auth. "
-                    "Full container lifecycle control. Trivial host escape via privileged container mount."),
-            evidence="GET /version returned Docker engine version without credentials",
-            remediation="Never expose Docker API on TCP without mutual TLS; use Unix socket (/var/run/docker.sock) only."
-        )
-    return None
+    if status != 200:
+        return None
+    try:
+        data = json.loads(body)
+    except Exception:
+        return None
+    if not isinstance(data, dict) or "ApiVersion" not in data:
+        return None
+    engine_ver = str(data.get("Version", "") or "")
+    api_ver = str(data.get("ApiVersion", "") or "")
+    return ServiceFinding(
+        service="docker-api", port=port, severity="CRITICAL",
+        title="Docker API — Unauthenticated TCP Exposure",
+        detail=(f"Docker Engine {engine_ver} (API {api_ver}) TCP socket is exposed without TLS or auth. "
+                "Full container lifecycle control. Trivial host escape via privileged container mount."),
+        evidence="GET /version returned Docker engine version without credentials",
+        remediation="Never expose Docker API on TCP without mutual TLS; use Unix socket (/var/run/docker.sock) only."
+    )
 
 
 def check_kubernetes_noauth(host: str, port: int = 6443, timeout: float = 4.0) -> Optional[ServiceFinding]:
@@ -293,7 +294,16 @@ def check_kubernetes_noauth(host: str, port: int = 6443, timeout: float = 4.0) -
         status, _, body = result
         if status == 401 or status == 403:
             return None  # Auth enforced
-        if status == 200 and ("serverAddressByClientCIDRs" in body or "versions" in body or "v1" in body):
+        if status == 200 and ("serverAddressByClientCIDRs" in body or '"kind":"APIVersions"' in body.replace(" ", "")
+                              or '"versions"' in body):
+            try:
+                data = json.loads(body)
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            if "serverAddressByClientCIDRs" not in data and "versions" not in data:
+                continue
             return ServiceFinding(
                 service="k8s-api", port=port, severity="CRITICAL",
                 title="Kubernetes API — Anonymous Access Enabled",
@@ -307,7 +317,7 @@ def check_kubernetes_noauth(host: str, port: int = 6443, timeout: float = 4.0) -
 
 def check_etcd_noauth(host: str, port: int = 2379, timeout: float = 4.0) -> Optional[ServiceFinding]:
     """etcd: holds Kubernetes secrets, certificates, and all cluster state."""
-    for path in ("/v2/keys", "/v3/cluster/member/list", "/health"):
+    for path in ("/v2/keys", "/v3/cluster/member/list"):
         result = _http_get(host, port, path, timeout=timeout)
         if not result:
             continue
@@ -315,6 +325,11 @@ def check_etcd_noauth(host: str, port: int = 2379, timeout: float = 4.0) -> Opti
         if status == 401:
             return None
         if status == 200 and body.strip():
+            blob = body.lstrip()
+            if path.startswith("/v2") and '"node"' not in blob and '"action"' not in blob:
+                continue
+            if path.startswith("/v3") and "member" not in blob.lower() and "peerURLs" not in blob:
+                continue
             return ServiceFinding(
                 service="etcd", port=port, severity="CRITICAL",
                 title="etcd — Unauthenticated Key-Value Access",

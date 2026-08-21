@@ -24,6 +24,13 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+def _safe_text(value: str, max_len: int = 80) -> str:
+    """Strip CR/LF/controls so untrusted header values cannot inject findings."""
+    first = str(value or "").split("\n", 1)[0].split("\r", 1)[0]
+    cleaned = "".join(ch if 32 <= ord(ch) < 127 else " " for ch in first)
+    return " ".join(cleaned.split())[:max_len]
+
+
 # ─── Data Models ────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -272,7 +279,7 @@ def check_xcto(headers: dict) -> Optional[HeaderFinding]:
 
 
 def check_referrer_policy(headers: dict) -> Optional[HeaderFinding]:
-    val = headers.get("referrer-policy", "")
+    val = _safe_text(headers.get("referrer-policy", ""), 64)
     if not val:
         return HeaderFinding(
             severity="LOW", cvss=3.1,
@@ -363,8 +370,8 @@ def check_cors(headers: dict) -> Optional[HeaderFinding]:
 
 def check_server_disclosure(headers: dict) -> list[HeaderFinding]:
     findings = []
-    server = headers.get("server", "")
-    powered = headers.get("x-powered-by", "")
+    server = _safe_text(headers.get("server", ""))
+    powered = _safe_text(headers.get("x-powered-by", ""))
 
     if server and re.search(r"\d", server):
         findings.append(HeaderFinding(
@@ -438,7 +445,7 @@ def check_cookies(headers: dict) -> list[HeaderFinding]:
         cookie = cookie.strip()
         if not cookie:
             continue
-        name = cookie.split("=")[0].strip()
+        name = _safe_text(cookie.split("=", 1)[0].strip(), 40)
         lower = cookie.lower()
 
         issues = []

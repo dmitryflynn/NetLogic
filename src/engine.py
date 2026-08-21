@@ -430,6 +430,14 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
             if not _step.is_passive and _step.applies(_ctx):
                 _step.run(_ctx)
 
+    # Rebuild reachability after subnet_probe may have filled _probed_hosts.
+    try:
+        from src.reachability_prober import hosts_ports_from_artifacts, build_reachability  # noqa: PLC0415
+        _run_reachability(_ctx, _probed_hosts, hosts_ports_from_artifacts, build_reachability)
+    except Exception as e:  # noqa: BLE001
+        from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+        reraise_if_cancelled(e)
+
     # ── Active validation (opt-in via --active-validate; requires --reason) ──
     # Confirm the engine's hypotheses with NON-DESTRUCTIVE safe_active checks (benign GETs) routed
     # through the ActionGate: scope-gated, audited, capped at safe_active. INTRUSIVE/EXPLOIT stay
@@ -853,7 +861,10 @@ def _run_cve_verifier(ctx, host_result, vuln_matches, target, run_verifier_fn):
                        "exploit_available": c.exploit_available,
                        "references": getattr(c, "references", [])} for c in cves],
                 complete=ctx.completer, cfg=ctx.extras.get("ai_vcfg"))
-        except Exception:
+        except Exception as e:
+            from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+            reraise_if_cancelled(e)
+            ctx.emit("log", {"text": f"CVE verifier: {e}", "level": "warn"})
             sigs = []
         for s in sigs:
             allsigs.append(s)
@@ -891,19 +902,45 @@ def _run_probes(ctx, target, ports_open, timeout, probe_services, probe_web_vuln
 def _run_subnet(ctx, host_result, vuln_matches, ports_open, target, timeout, threads,
                 probe_subnet, probe_targets, build_subnet_directive, probed_hosts):
     try:
-        directive = build_subnet_directive(host_result, vuln_matches)
-        if not directive:
+        from src.network_prober import _subnet_of  # noqa: PLC0415
+        target_ip = getattr(host_result, "ip", None) or target
+        port_dicts = []
+        for p in ports_open or []:
+            port_dicts.append({
+                "port": getattr(p, "port", 0),
+                "service": getattr(p, "service", ""),
+            })
+        directive = build_subnet_directive(
+            target_ip, port_dicts, vuln_matches=vuln_matches,
+            complete=ctx.completer,
+        ) or {}
+        action = directive.get("action", "standard")
+        if action == "skip":
+            ctx.art["subnet_probe"] = list(probed_hosts)
             return
         ctx.emit("progress", {"percent": 94, "status": "Subnet probe…"}, message="Probing subnet for related hosts…")
-        snet = directive.get("subnet", "")
-        ports = directive.get("ports", [p.port for p in ports_open[:5]])
-        for ip in probe_subnet(snet, timeout=timeout):
-            discovered = probe_targets(ip, ports, timeout=max(timeout, 3.0), threads=threads)
-            for hp in discovered:
+        ai_targets = directive.get("targets") or []
+        ai_ports = directive.get("ports_per_target") or {}
+        if ai_targets and ai_ports:
+            all_ports = list({int(x) for vals in ai_ports.values() for x in vals})
+            if all_ports:
+                found = probe_targets(
+                    ai_targets, all_ports,
+                    timeout=max(timeout, 3.0), threads=threads,
+                    allowed_net=_subnet_of(str(target_ip)),
+                )
+                for hp in found:
+                    probed_hosts.append(hp)
+        else:
+            sr = probe_subnet(str(target_ip), timeout=timeout)
+            for hp in getattr(sr, "hosts", None) or []:
                 probed_hosts.append(hp)
-        ctx.art["subnet_probe"] = probed_hosts
+        ctx.art["subnet_probe"] = list(probed_hosts)
     except Exception as e:
+        from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+        reraise_if_cancelled(e)
         ctx.emit("log", {"text": f"Subnet probe: {e}", "level": "warn"})
+        ctx.art.setdefault("subnet_probe", list(probed_hosts))
 
 
 def _run_service_enum(ctx, target, ports_open, timeout, enumerate_services):

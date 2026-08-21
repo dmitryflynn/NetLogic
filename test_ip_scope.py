@@ -20,6 +20,15 @@ def test_host_matches_scope_is_label_bounded():
     assert not host_matches_scope("ample.com", "example.com")
 
 
+def test_host_matches_scope_ip_is_not_a_dns_suffix():
+    assert host_matches_scope("10.0.0.5", "10.0.0.5")
+    assert host_matches_scope("10.0.0.5:443", "10.0.0.5")
+    assert not host_matches_scope("evil.10.0.0.5", "10.0.0.5")
+    assert not host_matches_scope("evil.2001:db8::1", "2001:db8::1")
+    assert host_matches_scope("2001:db8::1", "2001:db8::1")
+    assert host_matches_scope("[2001:db8::1]", "2001:db8::1")
+
+
 def test_private_ip_detection():
     assert is_private_or_local("192.168.0.1")
     assert is_private_or_local("10.0.0.5")
