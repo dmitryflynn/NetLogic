@@ -331,6 +331,7 @@ export interface Agent {
   registered_at: number
   last_heartbeat: number | null
   current_job_id: string | null
+  owned: boolean
   token: string
 }
 

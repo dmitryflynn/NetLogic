@@ -46,6 +46,34 @@ class TestAgentRegistry(unittest.TestCase):
         self.assertIsInstance(secret, str)
         self.assertEqual(len(agent_id), 36)  # UUID format
 
+    def test_plaintext_token_is_not_persisted(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as td:
+            path = str(Path(td) / "agents.json")
+            reg = AgentRegistry(persist_path=path)
+            agent_id, secret = reg.register(
+                hostname="h", capabilities=[], version="1", tags={},
+            )
+            on_disk = json.loads(Path(path).read_text())
+            blob = json.dumps(on_disk)
+            self.assertNotIn(secret, blob)
+            self.assertTrue(all("token_plaintext" not in rec for rec in on_disk))
+            # Reload must still verify the hash, without restoring plaintext.
+            reg2 = AgentRegistry(persist_path=path)
+            agent = reg2.get(agent_id)
+            self.assertTrue(agent.verify_token(secret))
+            # Stale files that still carry token_plaintext are rewritten without it.
+            Path(path).write_text(json.dumps([{
+                **on_disk[0], "token_plaintext": secret,
+            }]))
+            AgentRegistry(persist_path=path)
+            wiped = json.loads(Path(path).read_text())
+            self.assertNotIn(secret, json.dumps(wiped))
+            self.assertTrue(all("token_plaintext" not in rec for rec in wiped))
+
     def test_registered_agent_retrievable(self):
         agent_id, _ = self._register()
         agent = self.registry.get(agent_id)

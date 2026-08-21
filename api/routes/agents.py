@@ -308,14 +308,12 @@ async def list_agents(
 ) -> list[dict]:
     """Return status for the caller's agents plus shared/global (built-in) agents.
 
-    Shared agents (org_id="") are shown read-only — their token is redacted so a
-    tenant can see the fleet's capacity without being able to impersonate an agent
-    it doesn't own.
+    Shared agents (org_id="") are shown read-only so a tenant can see fleet
+    capacity without impersonating an agent it doesn't own. Agent bearer tokens
+    are never included here — they are returned only from POST /register.
     """
-    return [
-        _agent_summary(a, reveal_token=(a.org_id == org_id))
-        for a in agent_registry.list_visible(org_id)
-    ]
+    return [_agent_summary(a, owned=(a.org_id == org_id))
+            for a in agent_registry.list_visible(org_id)]
 
 
 # ── GET /agents/{id} ─────────────────────────────────────────────────────────
@@ -334,7 +332,7 @@ async def get_agent(
     agent = agent_registry.get(agent_id, org_id=org_id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
-    return _agent_summary(agent, reveal_token=True)
+    return _agent_summary(agent, owned=True)
 
 
 # ── DELETE /agents/{id} ───────────────────────────────────────────────────────
@@ -379,7 +377,7 @@ async def activate_agent(
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     agent_registry.set_disabled(agent_id, disabled=False)
     audit_log("agent_activated", agent_id=agent_id, org_id=org_id)
-    return _agent_summary(agent, reveal_token=True)
+    return _agent_summary(agent, owned=True)
 
 
 # ── POST /agents/{id}/deactivate ──────────────────────────────────────────────
@@ -400,13 +398,13 @@ async def deactivate_agent(
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     agent_registry.set_disabled(agent_id, disabled=True)
     audit_log("agent_deactivated", agent_id=agent_id, org_id=org_id)
-    return _agent_summary(agent, reveal_token=True)
+    return _agent_summary(agent, owned=True)
 
 
 # ── Shared helper ─────────────────────────────────────────────────────────────
 
 
-def _agent_summary(agent: Agent, reveal_token: bool = False) -> dict:
+def _agent_summary(agent: Agent, owned: bool = False) -> dict:
     return {
         "agent_id":       agent.agent_id,
         "org_id":         agent.org_id,
@@ -422,5 +420,6 @@ def _agent_summary(agent: Agent, reveal_token: bool = False) -> dict:
         "registered_at":  agent.registered_at,
         "last_heartbeat": agent.last_heartbeat,
         "current_job_id": agent.current_job_id,
-        "token":          agent.token_plaintext if reveal_token else "",
+        "owned":          owned,
+        "token":          "",  # never echoed after register
     }
