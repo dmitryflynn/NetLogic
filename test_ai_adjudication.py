@@ -119,6 +119,42 @@ def test_adjudicator_ignores_cves_it_wasnt_given():
     assert FindingAdjudicator(rogue).decide(s) == []
 
 
+def test_duplicate_cve_rows_collapse_and_conflicts_stay_leads():
+    s = _state_with_stuck_cves()
+
+    def dupes(system, user):
+        return json.dumps([
+            {"cve": "CVE-2023-38408", "verdict": "likely_exploitable",
+             "confidence": 0.9, "rationale": "banner match"},
+            {"cve": "CVE-2023-38408", "verdict": "ruled_out",
+             "confidence": 0.9, "rationale": "local privilege escalation — requires shell"},
+        ])
+
+    decisions = FindingAdjudicator(dupes).decide(s)
+    assert len(decisions) == 1
+    assert decisions[0]["verdict"] == "needs_active_check"
+    _apply(s, decisions)
+    ex = next(i for i in group_investigations(s) if i.kind == "exploitability")
+    assert ex.conclusion == "UNVERIFIED"
+
+
+def test_duplicate_same_verdict_keeps_one_row():
+    s = _state_with_stuck_cves()
+
+    def twice(system, user):
+        return json.dumps([
+            {"cve": "CVE-2023-38408", "verdict": "ruled_out",
+             "confidence": 0.4, "rationale": "local privilege escalation — requires shell"},
+            {"cve": "CVE-2023-38408", "verdict": "ruled_out",
+             "confidence": 0.95, "rationale": "requires authenticated local shell — not remotely reachable"},
+        ])
+
+    decisions = FindingAdjudicator(twice).decide(s)
+    assert len(decisions) == 1
+    assert decisions[0]["verdict"] == "ruled_out"
+    assert decisions[0]["confidence"] == 0.95
+
+
 def test_transcript_note_records_the_ai_judgement():
     t = InvestigationTranscript()
     t.record_note(agent="finding_adjudicator", summary="CVE-2023-38408 → ruled_out",
@@ -127,3 +163,12 @@ def test_transcript_note_records_the_ai_judgement():
     assert d["summary"]["accepted"] == 1
     assert d["entries"][0]["agent"] == "finding_adjudicator"
     assert d["entries"][0]["outcome"] == "refuted"
+
+
+def test_transcript_redacts_password_assignment():
+    t = InvestigationTranscript()
+    t.record_note(agent="finding_adjudicator", summary="CVE-1 → ruled_out",
+                  rationale="seen DB_PASSWORD=supersecretvalue in banner", outcome="unresolved")
+    blob = t.to_dict()["entries"][0]["rationale"]
+    assert "supersecretvalue" not in blob
+    assert "[redacted]" in blob

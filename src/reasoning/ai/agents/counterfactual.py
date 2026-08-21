@@ -21,6 +21,7 @@ from src.reasoning.ai.agents.base import Completer, call_completer
 from src.reasoning.ai.coordinator import AgentTask
 from src.reasoning.ai.normalize import decode_total
 from src.reasoning.ai.proposals import ProposalKind
+from src.reasoning.ai.sanitize import sanitize_ai_text
 from src.reasoning.state import ReasoningState
 
 _SYSTEM = (
@@ -54,7 +55,10 @@ def _observed_evidence(state, *, limit: int = 12) -> list[str]:
     lines: list[str] = []
     for kind in ("technology", "cve", "service"):
         for n in state.world.graph.nodes(kind):
-            snippet = next((str(o.evidence)[:160] for o in n.observations() if o.evidence), n.key)
+            snippet = next(
+                (sanitize_ai_text(str(o.evidence), max_len=160) for o in n.observations() if o.evidence),
+                n.key,
+            )
             lines.append(f"{kind}:{n.key}: {snippet}")
             if len(lines) >= limit:
                 return lines

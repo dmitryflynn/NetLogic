@@ -27,6 +27,7 @@ import re
 
 from src.reasoning.ai.agents.base import Completer, call_completer
 from src.reasoning.ai.normalize import decode_total
+from src.reasoning.ai.sanitize import sanitize_ai_text
 from src.reasoning.state import ReasoningState
 
 # Soft policy guard: models love "Ubuntu backports" as a free ruled_out. Those
@@ -84,7 +85,10 @@ def _observed_evidence(state: ReasoningState, *, limit: int = 14) -> list[str]:
     lines: list[str] = []
     for kind in ("service", "technology", "cve"):
         for n in state.world.graph.nodes(kind):
-            snippet = next((str(o.evidence)[:180] for o in n.observations() if o.evidence), n.key)
+            snippet = next(
+                (sanitize_ai_text(str(o.evidence), max_len=180) for o in n.observations() if o.evidence),
+                n.key,
+            )
             lines.append(f"{kind}:{n.key}: {snippet}")
             if len(lines) >= limit:
                 return lines
@@ -120,7 +124,10 @@ class FindingAdjudicator:
         if not isinstance(items, list):
             return []
 
-        decisions: list[dict] = []
+        # One decision per CVE after policy demotion. Duplicate/conflicting rows
+        # otherwise apply in order and can refute then re-elevate (or vice versa).
+        by_cve_row: dict[str, dict] = {}
+        verdicts_seen: dict[str, set[str]] = {}
         for it in items:
             if not isinstance(it, dict):
                 continue
@@ -130,7 +137,7 @@ class FindingAdjudicator:
                 continue
             if verdict not in ("ruled_out", "likely_exploitable", "needs_active_check"):
                 continue
-            rationale = str(it.get("rationale", ""))[:280]
+            rationale = sanitize_ai_text(str(it.get("rationale", "")), max_len=280)
             # Policy: no free "backport" refutations without package-level evidence.
             if (
                 verdict == "ruled_out"
@@ -146,11 +153,24 @@ class FindingAdjudicator:
                 conf = float(it.get("confidence", 0.5))
             except (TypeError, ValueError):
                 conf = 0.5
-            decisions.append({
-                "cve": cve,
-                "hypothesis_label": by_cve[cve],
-                "verdict": verdict,
-                "confidence": max(0.0, min(1.0, conf)),
-                "rationale": rationale,
-            })
+            conf = max(0.0, min(1.0, conf))
+            verdicts_seen.setdefault(cve, set()).add(verdict)
+            prev = by_cve_row.get(cve)
+            if prev is None or conf >= prev["confidence"]:
+                by_cve_row[cve] = {
+                    "cve": cve,
+                    "hypothesis_label": by_cve[cve],
+                    "verdict": verdict,
+                    "confidence": conf,
+                    "rationale": rationale,
+                }
+        decisions: list[dict] = []
+        for cve, row in by_cve_row.items():
+            if len(verdicts_seen.get(cve, ())) > 1:
+                row = dict(row)
+                row["verdict"] = "needs_active_check"
+                row["rationale"] = (
+                    row["rationale"] + " [policy: conflicting adjudicator rows]"
+                ).strip()[:280]
+            decisions.append(row)
         return decisions

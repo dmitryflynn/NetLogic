@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass, field
 
 from src.reasoning.ai.proposals import Proposal
+from src.reasoning.ai.sanitize import sanitize_ai_text
 from src.reasoning.ai.verifier import VerifyDecision
 
 
@@ -82,8 +83,10 @@ class InvestigationTranscript:
     def record(self, decision: VerifyDecision, *, trigger: str = "", seeded_as: str = "") -> TranscriptEntry:
         p = decision.proposal
         entry = TranscriptEntry(
-            proposal_id=p.id, agent=p.agent, kind=p.kind.value, summary=_summarize(p),
-            rationale=getattr(p.payload, "rationale", ""), trigger=trigger,
+            proposal_id=p.id, agent=p.agent, kind=p.kind.value,
+            summary=sanitize_ai_text(_summarize(p)),
+            rationale=sanitize_ai_text(getattr(p.payload, "rationale", "")),
+            trigger=sanitize_ai_text(trigger),
             accepted=decision.accepted, uncertainty=p.uncertainty.value,
             stage_failed=decision.stage_failed, seeded_as=seeded_as,
             economics=p.economics.to_dict())
@@ -98,7 +101,8 @@ class InvestigationTranscript:
         accepted entry — the replay should show the AI's judgement calls, not just its proposals."""
         entry = TranscriptEntry(
             proposal_id=f"note:{agent}:{len(self._entries)}", agent=agent, kind="adjudication",
-            summary=summary, rationale=rationale, trigger=agent, accepted=True,
+            summary=sanitize_ai_text(summary), rationale=sanitize_ai_text(rationale),
+            trigger=agent, accepted=True,
             uncertainty="unknown", seeded_as="", outcome=outcome)
         self._entries.append(entry)
         self._by_id[entry.proposal_id] = entry

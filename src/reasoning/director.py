@@ -520,12 +520,17 @@ class ReconDirector:
             from src.reasoning.objective import Objective, ObjectiveSource  # noqa: PLC0415
 
             known = frozenset(o.name for o in state.investigation.objectives.all())
+            known_obs = frozenset(
+                o.obs_id for n in state.world.graph.nodes() for o in n.observations()
+            )
             tasks = HypothesisGenerator(completer).generate(state)
             tasks += CounterfactualReasoner(completer).generate(state)
             if not tasks:
                 return None
             coordinator = AICoordinator()
-            accepted = coordinator.run(tasks, ctx=VerifierContext(known_objectives=known))
+            accepted = coordinator.run(
+                tasks, ctx=VerifierContext(known_objectives=known, known_observation_ids=known_obs),
+            )
         except Exception as exc:  # noqa: BLE001 — any cognitive-layer failure contributes nothing
             log.warning("cognitive layer skipped (%s)", exc)
             return None
@@ -563,8 +568,14 @@ class ReconDirector:
             c2_tasks = InvestigationDesigner(completer).generate(state)
             if c2_tasks:
                 c2_known = frozenset(o.name for o in state.investigation.objectives.all())
+                c2_obs = frozenset(
+                    o.obs_id for n in state.world.graph.nodes() for o in n.observations()
+                )
                 c2_coord = AICoordinator()
-                for d in c2_coord.run(c2_tasks, ctx=VerifierContext(known_objectives=c2_known)):
+                for d in c2_coord.run(
+                    c2_tasks,
+                    ctx=VerifierContext(known_objectives=c2_known, known_observation_ids=c2_obs),
+                ):
                     obj = state.investigation.objectives.get(d.proposal.payload.goal_name)
                     req = getattr(d.proposal.payload, "required_evidence", ())
                     if obj is not None and req:
@@ -607,6 +618,7 @@ class ReconDirector:
             return
         try:
             from src.reasoning.ai.agents import FindingAdjudicator  # noqa: PLC0415
+            from src.reasoning.ai.sanitize import sanitize_ai_text  # noqa: PLC0415
             decisions = FindingAdjudicator(completer).decide(state)
         except Exception as exc:  # noqa: BLE001 — adjudication never breaks the scan
             log.warning("ai adjudication skipped (%s)", exc)
@@ -621,7 +633,7 @@ class ReconDirector:
             if hyp is None or hyp.status != "active":
                 continue
             verdict = d["verdict"]
-            rationale = d["rationale"]
+            rationale = sanitize_ai_text(d["rationale"])
             if verdict == "ruled_out":
                 state.investigation.hypotheses.resolve(hyp.id, "refuted")
             elif verdict == "likely_exploitable":

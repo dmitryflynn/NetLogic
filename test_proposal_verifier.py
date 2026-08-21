@@ -79,6 +79,14 @@ def test_hypothesis_without_evidence_is_possible_not_confirmed():
     assert d.accepted and d.proposal.uncertainty == UncertaintyState.POSSIBLE
 
 
+def test_cited_observation_ids_fail_closed_without_known_set():
+    p = _p(ProposalKind.HYPOTHESIS, HypothesisPayload(objective="o", candidates={"a": 1.0}),
+          obs_ids=("fabricated-obs",))
+    d = VP.verify(p, VerifierContext())
+    assert not d.accepted and d.stage_failed == "evidence"
+    assert d.proposal.uncertainty != UncertaintyState.LIKELY
+
+
 def test_hypothesis_with_real_evidence_is_likely_not_confirmed():
     p = _p(ProposalKind.HYPOTHESIS, HypothesisPayload(objective="o", candidates={"a": 1.0}),
           obs_ids=("obs-1",))

@@ -48,11 +48,14 @@ def _scan_for_forbidden_keys(obj) -> Optional[str]:
 
 @dataclass(frozen=True)
 class VerifierContext:
-    """Read-only facts the verifier checks a proposal against. Every field is optional — an
-    absent context makes the corresponding check a no-op, so unit tests aren't forced to
-    fabricate a full world just to exercise one stage. Production callers should supply all of
-    them (the AICoordinator does)."""
-    known_observation_ids: Optional[frozenset] = None
+    """Read-only facts the verifier checks a proposal against.
+
+    Most fields are optional so a unit test can exercise one stage. Cited
+    ``supporting_observation_ids`` are the exception: if they are present and
+    ``known_observation_ids`` is None, evidence verification fails closed.
+    Production callers should supply the known set (the director does).
+    """
+    known_observation_ids: Optional[frozenset] = None  # None = unknown set (fail closed if cited)
     known_objectives: Optional[frozenset] = None
     action_library: Optional[object] = None                      # .get(action_id) -> Action | None
     benchmark_check: Optional[Callable[[KnowledgePayload], bool]] = None
@@ -133,10 +136,14 @@ def _semantic_stage(p: Proposal, ctx: VerifierContext) -> StageResult:
 # ── Stage 3: Evidence ────────────────────────────────────────────────────────────────
 
 def _evidence_stage(p: Proposal, ctx: VerifierContext) -> StageResult:
-    # No phantom evidence: every cited observation id must be real, if we know what's real.
-    if p.provenance.supporting_observation_ids and ctx.known_observation_ids is not None:
-        missing = [oid for oid in p.provenance.supporting_observation_ids
-                  if oid not in ctx.known_observation_ids]
+    # Cited observation ids must be validated. If the caller did not supply the
+    # known set, fail closed — otherwise fabricated ids skip this stage and
+    # `_resolve_uncertainty` would still grant LIKELY.
+    cited = p.provenance.supporting_observation_ids
+    if cited:
+        if ctx.known_observation_ids is None:
+            return StageResult(False, ("cited observation ids with no known_observation_ids context",))
+        missing = [oid for oid in cited if oid not in ctx.known_observation_ids]
         if missing:
             return StageResult(False, (f"cites unknown observation(s): {missing[:3]}",))
     if isinstance(p.payload, KnowledgePayload):
