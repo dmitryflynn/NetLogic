@@ -213,7 +213,7 @@ export default function Agents() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  {a.token ? (
+                  {a.owned ? (
                     <>
                       <button
                         onClick={() => toggle.mutate({ id: a.agent_id, active: a.disabled })}

@@ -9,7 +9,8 @@ Tracks all registered remote scan agents.  Each agent:
 
 Design notes
 ────────────
-• token_hash — SHA-256 of the plaintext secret; plaintext is never retained.
+• token_hash — SHA-256 of the plaintext secret; plaintext is never retained
+  (returned once from register, never written to agents.json).
 • status is computed dynamically from last_heartbeat so there is no stale state.
 • verify_token uses hmac.compare_digest for constant-time comparison (no timing attacks).
 • Persistence — agent metadata is written to a JSON file on register/deregister.
@@ -61,7 +62,6 @@ class Agent:
     version: str
     tags: dict[str, str]
     token_hash: str              # SHA-256 hex of the secret
-    token_plaintext: str = ""   # stored in local agents.json so UI can display it
     org_id: str = ""             # owning organisation — empty string = no tenant
     concurrency: int = 1         # max simultaneous scans this agent will run
     disabled: bool = False       # manually deactivated — won't receive jobs
@@ -134,7 +134,6 @@ class Agent:
             "version":         self.version,
             "tags":            self.tags,
             "token_hash":      self.token_hash,
-            "token_plaintext": self.token_plaintext,
             "org_id":          self.org_id,
             "concurrency":     self.concurrency,
             "disabled":        self.disabled,
@@ -151,7 +150,6 @@ class Agent:
             version         = data.get("version", ""),
             tags            = data.get("tags", {}),
             token_hash      = data["token_hash"],
-            token_plaintext = data.get("token_plaintext", ""),
             org_id          = data.get("org_id", ""),
             concurrency     = int(data.get("concurrency", 1) or 1),
             disabled        = data.get("disabled", False),
@@ -187,10 +185,15 @@ class AgentRegistry:
         try:
             with open(self._persist_path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
+            dirty = False
             for record in data:
+                if record.get("token_plaintext"):
+                    dirty = True
                 agent = Agent.from_dict(record)
                 self._agents[agent.agent_id] = agent
             _log.info("Loaded %d agent(s) from %s", len(self._agents), self._persist_path)
+            if dirty:
+                self._save()  # drop any leftover plaintext secrets from older builds
         except Exception as exc:
             _log.warning("Could not load agents file: %s", exc)
 
@@ -246,7 +249,6 @@ class AgentRegistry:
                 version=version,
                 tags=tags,
                 token_hash=token_hash,
-                token_plaintext=secret,
                 org_id=org_id,
                 concurrency=max(1, int(concurrency or 1)),
                 registered_at=now,
