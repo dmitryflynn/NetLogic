@@ -47,3 +47,9 @@ def test_scan_cidr_enumeration_is_capped(monkeypatch):
     hosts = [str(h) for h in itertools.islice(net.hosts(), scanner.MAX_CIDR_HOSTS)]
     captured["n"] = len(hosts)
     assert captured["n"] == 256          # never the full 16M
+
+
+def test_scan_cidr_requires_prefix():
+    from src.scanner import scan_cidr
+    with pytest.raises(ValueError, match="prefix"):
+        scan_cidr("10.0.0.1")

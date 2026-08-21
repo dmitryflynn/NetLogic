@@ -37,7 +37,7 @@ from api.jobs.manager import ScanJob, job_manager
 
 # Prevent double-assignment race: only one thread may run try_dispatch_queued
 # at a time.  The lock is non-reentrant so callers must not hold it already.
-_dispatch_lock = threading.Lock()
+_dispatch_lock = threading.RLock()
 
 # A job reclaimed from this many dead agents is failed instead of requeued again,
 # so a request that no agent can ever satisfy doesn't loop forever.
@@ -102,27 +102,28 @@ def try_dispatch_queued(org_id: str = "") -> int:
 
 def _assign_to_agent(job: ScanJob, agent_id: str) -> bool:
     """Assign to a specific (pinned) agent, failing the job if it's unavailable."""
-    if job.assigned_agent_id:
-        return True  # already assigned — idempotency guard
-    agent = agent_registry.get(agent_id, org_id=job.org_id)
-    if agent is None or agent.status in ("offline", "disabled"):
-        reason = "disabled" if (agent and agent.disabled) else "offline or not registered"
-        job.status = "failed"
-        job.error = f"Agent '{agent_id[:8]}…' is {reason}."
-        job.completed_at = time.time()
-        job.push_event({"type": "error", "message": job.error})
-        job.push_sentinel()
-        return False
-    if not agent_registry.assign_task(agent_id, job.job_id):
-        job.status = "failed"
-        job.error = f"Agent '{agent_id[:8]}…' rejected the task (disabled or at capacity)."
-        job.completed_at = time.time()
-        job.push_event({"type": "error", "message": job.error})
-        job.push_sentinel()
-        return False
-    job.assigned_agent_id = agent_id
-    job.dispatch_attempts += 1
-    return True
+    with _dispatch_lock:
+        if job.assigned_agent_id:
+            return True  # already assigned — idempotency guard
+        agent = agent_registry.get(agent_id, org_id=job.org_id)
+        if agent is None or agent.status in ("offline", "disabled"):
+            reason = "disabled" if (agent and agent.disabled) else "offline or not registered"
+            job.status = "failed"
+            job.error = f"Agent '{agent_id[:8]}…' is {reason}."
+            job.completed_at = time.time()
+            job.push_event({"type": "error", "message": job.error})
+            job.push_sentinel()
+            return False
+        if not agent_registry.assign_task(agent_id, job.job_id):
+            job.status = "failed"
+            job.error = f"Agent '{agent_id[:8]}…' rejected the task (disabled or at capacity)."
+            job.completed_at = time.time()
+            job.push_event({"type": "error", "message": job.error})
+            job.push_sentinel()
+            return False
+        job.assigned_agent_id = agent_id
+        job.dispatch_attempts += 1
+        return True
 
 
 def _eligible_agents(job: ScanJob) -> list:

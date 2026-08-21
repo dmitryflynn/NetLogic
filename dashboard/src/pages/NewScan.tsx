@@ -110,8 +110,12 @@ export default function NewScan() {
         return
       }
       for (const p of parts) {
-        const n = parseInt(p, 10)
-        if (isNaN(n) || n < 1 || n > 65535) {
+        if (!/^\d+$/.test(p)) {
+          setErr(`Invalid port "${p}" — must be 1–65535.`)
+          return
+        }
+        const n = Number(p)
+        if (!Number.isInteger(n) || n < 1 || n > 65535) {
           setErr(`Invalid port "${p}" — must be 1–65535.`)
           return
         }
@@ -466,14 +470,14 @@ export default function NewScan() {
           >
             <option value="">Auto-assign to any available agent</option>
             {agents
-              .filter((a) => a.status === 'online' || a.status === 'busy')
+              .filter((a) => a.owned && (a.status === 'online' || a.status === 'busy'))
               .map((a) => (
                 <option key={a.agent_id} value={a.agent_id}>
                   {a.hostname} ({a.status})
                 </option>
               ))}
           </select>
-          {agents.filter((a) => a.status === 'online' || a.status === 'busy').length === 0 && (
+          {agents.filter((a) => a.owned && (a.status === 'online' || a.status === 'busy')).length === 0 && (
             <p className="text-[11px] text-high">
               No agents online — job will queue until one registers and heartbeats in.
             </p>

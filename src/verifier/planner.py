@@ -63,7 +63,7 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
     "CVE-2021-40438": [
         {"cve_id": "CVE-2021-40438", "method": "GET",
          "path": "/?unix:///var/run/example.socket|http://127.0.0.1:80/",
-         "expected_status": [400, 502], "expected_body_patterns": ["proxy", "request", "error"],
+         "expected_status": [400, 502], "expected_body_patterns": ["proxy", "Bad Gateway"],
          "port": 80, "tls": False, "evidence_hint": "mod_proxy SSRF — expect 502 Bad Gateway with proxy error"},
     ],
     "CVE-2021-44790": [
@@ -76,20 +76,20 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
     "CVE-2023-25690": [
         {"cve_id": "CVE-2023-25690", "method": "GET",
          "path": "/ HTTP/1.1\r\nHost: vulnerable\r\n\r\nGET /?unix://", "tls": False,
-         "expected_status": [400, 502], "expected_body_patterns": ["error", "request", "proxy"],
+         "expected_status": [400, 502], "expected_body_patterns": ["proxy", "Bad Gateway"],
          "port": 80, "evidence_hint": "HTTP request smuggling via mod_proxy"},
     ],
     "CVE-2022-22720": [
         {"cve_id": "CVE-2022-22720", "method": "GET",
          "path": "/", "headers": {"Transfer-Encoding": "chunked", "Content-Length": "5"},
-         "expected_status": [400, 502], "expected_body_patterns": ["error", "request"],
+         "expected_status": [400, 502], "expected_body_patterns": ["Bad Gateway"],
          "port": 80, "tls": False, "evidence_hint": "HTTP request smuggling via unclosed connections"},
     ],
     "CVE-2019-0211": [
         {"cve_id": "CVE-2019-0211", "method": "GET",
          "path": "/server-status",
          "expected_status": [200, 403],
-         "expected_body_patterns": ["apache", "server", "status"],
+         "expected_body_patterns": ["apache", "server-status"],
          "port": 80, "tls": False, "evidence_hint": "CARPE DIEM — check if mod_status exposes server-status"},
     ],
     "CVE-2024-38475": [
@@ -101,13 +101,13 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
     "CVE-2024-38476": [
         {"cve_id": "CVE-2024-38476", "method": "GET",
          "path": "/.htaccess", "expected_status": [200, 403],
-         "expected_body_patterns": ["denied", "forbidden", "htaccess"],
+         "expected_body_patterns": ["htaccess"],
          "port": 80, "tls": False, "evidence_hint": "information disclosure via core"},
     ],
     "CVE-2024-38477": [
         {"cve_id": "CVE-2024-38477", "method": "GET",
          "path": "/.htpasswd", "expected_status": [200, 403],
-         "expected_body_patterns": ["denied", "forbidden"],
+         "expected_body_patterns": ["htpasswd"],
          "port": 80, "tls": False, "evidence_hint": "null pointer dereference in mod_proxy"},
     ],
     "CVE-2021-39275": [
@@ -119,7 +119,7 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
     "CVE-2021-26691": [
         {"cve_id": "CVE-2021-26691", "method": "GET",
          "path": "/", "headers": {"Session": "malicious"},
-         "expected_status": [500, 400], "expected_body_patterns": ["error", "Internal"],
+         "expected_status": [500, 400], "expected_body_patterns": ["Internal Server Error"],
          "port": 80, "tls": False, "evidence_hint": "mod_session heap overflow via crafted Session header"},
     ],
     "CVE-2022-22721": [
@@ -133,16 +133,10 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
         {"cve_id": "CVE-2019-0217", "method": "GET",
          "path": "/", "headers": {"Authorization": "Digest "},
          "expected_status": [400, 401, 500],
-         "expected_body_patterns": ["error", "digest", "Unauthorized"],
+         "expected_body_patterns": ["digest", "WWW-Authenticate"],
          "port": 80, "tls": False, "evidence_hint": "race condition in mod_auth_digest"},
     ],
-    # SSH CVEs (can't test via HTTP, but can try banner manipulation)
-    "CVE-2023-38408": [
-        {"cve_id": "CVE-2023-38408", "protocol": "ssh",
-         "method": "GET", "path": "/", "tls": False,
-         "expected_status": [], "expected_body_patterns": [],
-         "port": 22, "evidence_hint": "OpenSSH agent RCE — requires SSH agent forwarding, not testable via HTTP"},
-    ],
+    # SSH CVEs cannot be verified with an HTTP GET — skip (no HTTP plan).
 }
 
 
@@ -178,6 +172,9 @@ def generate_plans_for_cves(cves: list[dict], service: str, product: str, versio
         builtin = _find_builtin(cve_id)
         if builtin:
             for bp in builtin:
+                if str(bp.get("protocol") or "http").lower() == "ssh":
+                    log.debug("Skipping non-HTTP builtin plan for %s", cve_id)
+                    continue
                 p = dict(bp)
                 p["port"] = port
                 p["tls"] = use_tls

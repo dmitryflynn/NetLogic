@@ -157,6 +157,13 @@ class ApiKeyStore:
                 return True
             return False
 
+    def has_fingerprint(self, fp: str) -> bool:
+        """True if a non-revoked key with this SHA-256 hex still exists."""
+        if not fp:
+            return False
+        with self._lock:
+            return fp in self._store
+
     def list_keys(self) -> list[dict]:
         """Return all keys with the key masked (first 8 + '…') for safe display."""
         with self._lock:
@@ -228,6 +235,17 @@ class PgApiKeyStore:
                 (self._hash(key),),
             )
             return cur.rowcount > 0
+
+    def has_fingerprint(self, fp: str) -> bool:
+        if not fp:
+            return False
+        from api import db  # noqa: PLC0415
+        with db.connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM api_keys WHERE key_hash = %s AND revoked_at IS NULL",
+                (fp,),
+            ).fetchone()
+        return row is not None
 
     def list_keys(self) -> list[dict]:
         from api import db  # noqa: PLC0415

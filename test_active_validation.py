@@ -283,3 +283,86 @@ def test_adjudicator_orders_by_priority():
     res = ActiveValidationRunner(executor=SafeActiveExecutor(http_get=lambda u: (200, "")),
                                  adjudicator=ProbeAdjudicator(_adj(verdicts))).validate(s, enabled=True)
     assert res[0].confirms == "nginx"                                      # higher-priority first
+
+
+def test_safe_path_rejects_open_redirect_bait():
+    from src.reasoning.active_validation import _safe_path, design_ai_probes
+    assert _safe_path("/r?next=//evil.com") is None
+    assert _safe_path("/r?next=http:%2f%2fevil.com") is None
+    assert _safe_path("/ok") == "/ok"
+
+    def bait(system, user):
+        return _json.dumps([
+            {"path": "/r?next=//evil.com", "markers": ["nginx-marker"], "confirms": "nginx"},
+            {"path": "/", "markers": ["server: nginx"], "confirms": "nginx"},
+        ])
+    probes = design_ai_probes(bait, _ai_state())
+    assert [p.path for p in probes] == ["/"]
+
+
+def test_ai_probe_markers_must_be_specific():
+    from src.reasoning.active_validation import design_ai_probes
+
+    def cassette(system, user):
+        return _json.dumps([
+            {"path": "/", "markers": ["a"], "confirms": "express"},
+            {"path": "/", "markers": ["x-powered-by: express"], "confirms": "express"},
+        ])
+    probes = design_ai_probes(cassette, _ai_state())
+    assert len(probes) == 1
+    assert probes[0].markers == ("x-powered-by: express",)
+
+
+def test_builtin_markers_are_not_generic_json():
+    from src.reasoning.active_validation import _FRAMEWORK_PROBES
+    assert '"sid":' not in _FRAMEWORK_PROBES["express"].markers
+    assert '"errors"' not in _FRAMEWORK_PROBES["graphql"].markers
+    blob_generic = '{"errors":[{"message":"not found"}],"sid":"abc"}'.lower()
+    assert not any(m.lower() in blob_generic for m in _FRAMEWORK_PROBES["graphql"].markers)
+    assert not any(m.lower() in blob_generic for m in _FRAMEWORK_PROBES["express"].markers)
+
+
+def test_default_http_get_does_not_follow_redirects():
+    """Confirmation evidence must come from the in-scope origin, not a 302 target."""
+    import http.server
+    import threading
+    from src.reasoning.active_validation import ValidationProbe, SafeActiveExecutor, _default_http_get
+
+    class Origin(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{off_port}/")
+            self.send_header("Server", "in-scope")
+            self.end_headers()
+        def log_message(self, *_a):
+            return
+
+    class Off(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Server", "nginx")
+            self.end_headers()
+            self.wfile.write(b"off-scope")
+        def log_message(self, *_a):
+            return
+
+    origin = http.server.HTTPServer(("127.0.0.1", 0), Origin)
+    off = http.server.HTTPServer(("127.0.0.1", 0), Off)
+    off_port = off.server_address[1]
+    threads = [
+        threading.Thread(target=origin.serve_forever, daemon=True),
+        threading.Thread(target=off.serve_forever, daemon=True),
+    ]
+    for t in threads:
+        t.start()
+    try:
+        origin_port = origin.server_address[1]
+        status, text = _default_http_get(f"http://127.0.0.1:{origin_port}/")
+        assert status == 302
+        assert "nginx" not in (text or "").lower()
+        probe = ValidationProbe("confirm_tech:nginx", "/", ("server: nginx",), "nginx")
+        outcome, _ = SafeActiveExecutor().execute(
+            probe, f"127.0.0.1:{origin_port}", scope=["127.0.0.1"])
+        assert outcome.authorized and not outcome.succeeded
+    finally:
+        origin.shutdown(); off.shutdown()

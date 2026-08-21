@@ -125,6 +125,11 @@ def _check_literal_target(target: str) -> str | None:
 
     try:
         net = ipaddress.ip_network(target, strict=False)
+        if isinstance(net, ipaddress.IPv6Network) and net.network_address.ipv4_mapped:
+            v4plen = max(0, min(32, net.prefixlen - 96))
+            net = ipaddress.ip_network(
+                f"{net.network_address.ipv4_mapped}/{v4plen}", strict=False,
+            )
         if _network_overlaps_restricted(net):
             return (
                 f"Scan target {target!r} overlaps a restricted network range and is "
@@ -152,6 +157,19 @@ def validate_scan_target(target: str) -> None:
     err = _check_literal_target(target)
     if err:
         raise ValueError(err)
+
+    # IPs and CIDRs are fully decided by the literal check — do not DNS-resolve
+    # a network string (that always fails and would block every hosted CIDR).
+    try:
+        ipaddress.ip_address(target)
+        return
+    except ValueError:
+        pass
+    try:
+        ipaddress.ip_network(target, strict=False)
+        return
+    except ValueError:
+        pass
 
     # Hostname: reject if DNS fails (fail-closed) or resolves to restricted addresses.
     ips = _resolve_host_ips(target)

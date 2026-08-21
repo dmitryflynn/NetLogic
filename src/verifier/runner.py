@@ -29,6 +29,51 @@ def _safe_http_token(value: str) -> str:
     return str(value or "").split("\r", 1)[0].split("\n", 1)[0].split("\x00", 1)[0]
 
 
+# Too-generic body tokens that match almost any error page or JSON blob.
+_GENERIC_BODY_PATTERNS = frozenset({
+    "error", "errors", "forbidden", "denied", "request", "status", "server",
+    "unauthorized", "internal", "ok", "true", "false",
+})
+
+
+def _coerce_expected_status(raw) -> list[int]:
+    """Only concrete HTTP status codes count. Empty/invalid → no confirmation."""
+    if raw is None:
+        return []
+    if isinstance(raw, (int, float)):
+        items = [raw]
+    elif isinstance(raw, str):
+        items = [raw]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        return []
+    out: list[int] = []
+    for item in items:
+        try:
+            code = int(item)
+        except (TypeError, ValueError):
+            continue
+        if 100 <= code <= 599:
+            out.append(code)
+    return out
+
+
+def _coerce_expected_patterns(raw) -> list[str]:
+    """Keep only non-empty, specific substring patterns."""
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        s = item.strip()
+        if len(s) < 4 or s.lower() in _GENERIC_BODY_PATTERNS:
+            continue
+        out.append(s)
+    return out
+
+
 def _build_http_request(method: str, path: str, host: str, headers: Optional[dict[str, str]] = None,
                         body: Optional[str] = None) -> bytes:
     method = "".join(ch for ch in _safe_http_token((method or "GET").upper()) if ch.isalnum()) or "GET"
@@ -173,24 +218,20 @@ def run_test(plan: dict, host: str) -> VerificationResult:
         ev += f" ({resp_headers['content-length']}b)"
     result.evidence = ev
 
-    # Check expected status
-    expected_statuses = plan.get("expected_status") or []
-    expected_patterns = plan.get("expected_body_patterns") or []
+    expected_statuses = _coerce_expected_status(plan.get("expected_status"))
+    expected_patterns = _coerce_expected_patterns(plan.get("expected_body_patterns"))
 
-    if expected_statuses:
-        if status in expected_statuses:
-            result.success = True
-            result.evidence += f" — hit expected status {status}"
-        else:
-            result.success = False
-            result.evidence += f" — expected status {expected_statuses}, got {status}"
+    if not expected_statuses:
+        # Fail closed: an empty/missing status list must not confirm on any response.
+        result.success = False
+        result.evidence += " — no expected_status; not confirmed"
+    elif status in expected_statuses:
+        result.success = True
+        result.evidence += f" — hit expected status {status}"
     else:
-        # No expected status specified — non-404 is suspicious
-        if status and status not in (404,):
-            result.success = True
-            result.evidence += f" — non-404 response ({status}) may indicate exposure"
+        result.success = False
+        result.evidence += f" — expected status {expected_statuses}, got {status}"
 
-    # Check body patterns
     if expected_patterns and result.success:
         body_lower = resp_body.lower()
         matched = [p for p in expected_patterns if p.lower() in body_lower]

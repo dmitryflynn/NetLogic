@@ -359,6 +359,18 @@ def test_api_key_create_revoke(monkeypatch):
     assert ak.api_key_store.revoke(key) is False
 
 
+def test_jwt_bound_to_api_key_fingerprint(monkeypatch):
+    import hashlib
+    j = _reload_jwt(monkeypatch)
+    ak = _reload_api_keys(monkeypatch, admin_key="Z" * 40)
+    key = ak.api_key_store.create("org-x")
+    fp = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    tok = j.create_token(org_id="org-x", sub="k", key_fp=fp)
+    assert j.verify_token(tok) is not None
+    assert ak.api_key_store.revoke(key) is True
+    assert j.verify_token(tok) is None
+
+
 def test_api_key_list_masks_keys(monkeypatch):
     ak = _reload_api_keys(monkeypatch, admin_key="Z" * 40, api_keys="supersecretkey123:org-a")
     listed = ak.api_key_store.list_keys()
@@ -372,6 +384,9 @@ def test_api_key_list_masks_keys(monkeypatch):
 
 def test_license_valid_nl_prefix(monkeypatch):
     monkeypatch.delenv("NETLOGIC_VALID_LICENSES", raising=False)
+    monkeypatch.delenv("NETLOGIC_ENV", raising=False)
+    monkeypatch.delenv("NETLOGIC_SAAS", raising=False)
+    monkeypatch.setattr("api.scan_policy.saas_scan_restrictions_enabled", lambda: False)
     from api.auth.license import validate_license_key as v
     assert v("NL-1234567")["valid"] is True
     assert v("nl-1234567")["valid"] is True  # case-insensitive prefix
@@ -406,6 +421,9 @@ def test_jwt_errors_do_not_leak_secret(monkeypatch):
 
 def test_license_status_masks_key(monkeypatch, tmp_path):
     monkeypatch.delenv("NETLOGIC_VALID_LICENSES", raising=False)
+    monkeypatch.delenv("NETLOGIC_ENV", raising=False)
+    monkeypatch.delenv("NETLOGIC_SAAS", raising=False)
+    monkeypatch.setattr("api.scan_policy.saas_scan_restrictions_enabled", lambda: False)
     import api.auth.license as lic
     # Redirect the on-disk secrets file so activate() never touches real ~/.netlogic.
     monkeypatch.setattr(lic, "_SECRETS_FILE", tmp_path / "secrets.json")

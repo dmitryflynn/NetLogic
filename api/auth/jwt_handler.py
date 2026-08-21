@@ -123,21 +123,21 @@ def create_token(
     org_id: str,
     sub: str,
     expiry_seconds: int = JWT_DEFAULT_EXPIRY,
+    key_fp: str = "",
 ) -> str:
     """Sign and return a JWT carrying org_id and sub."""
     now = int(time.time())
     exp = now + expiry_seconds
-    payload = _b64url_encode(
-        json.dumps(
-            {
-                "sub": sub,
-                "org_id": org_id,
-                "iat": now,
-                "exp": exp,
-                "jti": str(uuid.uuid4()),
-            }
-        ).encode()
-    )
+    claims = {
+        "sub": sub,
+        "org_id": org_id,
+        "iat": now,
+        "exp": exp,
+        "jti": str(uuid.uuid4()),
+    }
+    if key_fp:
+        claims["key_fp"] = key_fp
+    payload = _b64url_encode(json.dumps(claims).encode())
     sig = _sign(_HEADER_B64, payload)
     return f"{_HEADER_B64}.{payload}.{sig}"
 
@@ -168,6 +168,11 @@ def verify_token(token: str) -> Optional[dict]:
         from api.auth.token_revocation import is_token_revoked  # noqa: PLC0415
         if is_token_revoked(claims.get("jti"), claims.get("exp")):
             return None
+        key_fp = claims.get("key_fp")
+        if key_fp:
+            from api.auth.api_keys import api_key_store  # noqa: PLC0415
+            if not api_key_store.has_fingerprint(str(key_fp)):
+                return None
         return claims
     except Exception:  # noqa: BLE001
         return None

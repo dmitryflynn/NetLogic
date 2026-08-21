@@ -172,6 +172,14 @@ class TestAgentRegistry(unittest.TestCase):
         # Queue is now empty
         self.assertEqual(self.registry.get_pending_tasks(agent_id), [])
 
+    def test_restore_pending_tasks_requeues(self):
+        agent_id, _ = self._register(concurrency=2)
+        self.registry.assign_task(agent_id, "job-1")
+        drained = self.registry.get_pending_tasks(agent_id)
+        self.assertEqual(drained, ["job-1"])
+        self.registry.restore_pending_tasks(agent_id, drained)
+        self.assertEqual(self.registry.get_pending_tasks(agent_id), ["job-1"])
+
     def test_assign_task_to_nonexistent_agent_returns_false(self):
         self.assertFalse(self.registry.assign_task("nonexistent", "job-1"))
 
