@@ -133,6 +133,10 @@ def _rejects_option_injection(value: str) -> bool:
         return False
     if value[0] == "-":
         return True
+    # OpenSSH splits [user@]host on the last '@'. A host like
+    # evil.com@-oProxyCommand=id becomes option injection on the scanner.
+    if "@" in value:
+        return True
     return any(c.isspace() or ord(c) < 0x20 for c in value)
 
 

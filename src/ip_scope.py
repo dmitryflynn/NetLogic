@@ -13,6 +13,29 @@ from functools import lru_cache
 from typing import Iterable
 
 
+def host_matches_scope(host: str, scope_item: str) -> bool:
+    """True if *host* is *scope_item* or a subdomain of it (label-bounded).
+
+    ``example.com`` is NOT in scope for ``ample.com`` (suffix trap).
+    ``sub.example.com`` IS in scope for ``example.com``.
+    """
+    h = (host or "").strip().lower().rstrip(".")
+    s = (scope_item or "").strip().lower().rstrip(".")
+    if not h or not s:
+        return False
+    if h.count(":") == 1:
+        h = h.split(":", 1)[0]
+    if s.count(":") == 1:
+        s = s.split(":", 1)[0]
+    if h == s:
+        return True
+    h_labels = [p for p in h.split(".") if p]
+    s_labels = [p for p in s.split(".") if p]
+    if not h_labels or not s_labels or len(h_labels) < len(s_labels):
+        return False
+    return h_labels[-len(s_labels):] == s_labels
+
+
 def is_private_or_local(ip: str) -> bool:
     """True for RFC1918, loopback, link-local, CGNAT, etc. — never the public target."""
     try:

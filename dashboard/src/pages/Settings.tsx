@@ -82,7 +82,16 @@ function ProviderForm({
 
       <div>
         <label className="section-title block mb-1.5">Provider</label>
-        <select className="input w-full" value={provider} onChange={(e) => setProvider(e.target.value)}>
+        <select
+          className="input w-full"
+          value={provider}
+          onChange={(e) => {
+            const next = e.target.value
+            setProvider(next)
+            setModel('')
+            setBaseUrl('')
+          }}
+        >
           {(data?.providers ?? ['openrouter']).map((p) => (
             <option key={p} value={p}>{p}</option>
           ))}

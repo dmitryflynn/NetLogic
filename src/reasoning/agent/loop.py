@@ -117,21 +117,16 @@ _CVE_RE = re.compile(r"cve-\d{4}-\d+", re.I)
 # Tools / patterns that count as high-value (depth progress).
 _ALWAYS_HIGH_VALUE = frozenset({
     "timing_probe", "raw_tcp", "udp_probe", "ssdp_discover",
-    "dir_enum", "browser_get", "crash_probe", "chain_link",
-    "set_session",
+    "dir_enum", "browser_get", "crash_probe",
     # Tier A
     "param_reflect", "cors_probe", "header_injection_probe", "auth_flow_probe",
     "graphql_introspect", "api_discover", "s3_or_storage_probe",
-    "subdomain_probe", "ssh_banner_timing", "ssl_cert_chain", "jwt_inspect",
+    "subdomain_probe", "ssh_banner_timing", "ssl_cert_chain",
     # Tier B
     "cve_probe", "sqli_boolean", "sqli_time", "ssrf_canary", "idor_diff",
     "file_disclosure", "smuggling_desync",
-    # Tier C
-    "http_proof",
-    # Tier E
-    "exploit_request",
-    # Tier D
-    "record_poc", "scope_check", "severity_suggest", "submit_readiness",
+    # Tier C / E
+    "http_proof", "exploit_request",
 })
 
 
@@ -394,12 +389,9 @@ class InvestigationAgent:
             # Inline findings/chains from the model also accepted
             for f in (data.get("findings") or [])[:8]:
                 if isinstance(f, dict):
-                    if _is_high_value("assert_finding", f, confirmed_techs=confirmed_techs):
-                        result.high_value_used += 1
                     runtime.execute("assert_finding", f)
             for c in (data.get("chains") or [])[:8]:
                 if isinstance(c, dict):
-                    result.high_value_used += 1
                     runtime.execute("chain_link", c)
 
             turn_results: list[dict] = []
@@ -448,7 +440,7 @@ class InvestigationAgent:
                         confirmed_techs.add(tech.split()[0] if tech else tech)
                 # Count real attempts (ok or on-wire). Disabled/unknown/sanitize-fail
                 # stay network=False and must not satisfy depth-mode stop budgets.
-                if hv and (tr.ok or tr.network):
+                if hv and tr.network:
                     result.high_value_used += 1
                     turn_high += 1
                 if tr.network:

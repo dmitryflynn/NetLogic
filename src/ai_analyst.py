@@ -112,6 +112,17 @@ class AIConfig:
         if preset:
             base, model, _style = preset
             if not self.base_url:
+                try:
+                    from api.scan_policy import (  # noqa: PLC0415
+                        saas_scan_restrictions_enabled, normalize_llm_base_url,
+                    )
+                    if saas_scan_restrictions_enabled():
+                        try:
+                            normalize_llm_base_url(base)
+                        except ValueError:
+                            base = ""
+                except Exception:
+                    pass
                 self.base_url = base
             if not self.model:
                 self.model = model
@@ -219,6 +230,12 @@ def config_for_org(org_id: Optional[str], role: str = "ai") -> AIConfig:
 
     if db.is_enabled():
         return AIConfig(provider="openrouter").resolve()    # isolated: no shared fallback
+    try:
+        from api.scan_policy import saas_scan_restrictions_enabled  # noqa: PLC0415
+        if saas_scan_restrictions_enabled():
+            return AIConfig(provider="openrouter").resolve()
+    except Exception:
+        pass
     return config_from_env()                                 # single-tenant convenience
 
 
@@ -677,7 +694,7 @@ def _http_post(url: str, headers: dict, payload: dict, timeout: float) -> dict:
         return json.loads(body)
     except json.JSONDecodeError as e:
         raise RuntimeError(
-            f"Non-JSON response from {url}: HTTP {status} — {body[:500]!r}"
+            f"Non-JSON response from provider: HTTP {status}"
         ) from e
 
 
@@ -805,7 +822,9 @@ def analyze(findings: dict, cfg: AIConfig, *, messages: list[dict] | None = None
         except urllib.error.HTTPError as e:
             detail = ""
             try:
-                detail = e.read().decode("utf-8", errors="replace")[:400]
+                detail = e.read().decode("utf-8", errors="replace")[:80]
+                if any(c.isalpha() for c in detail) and ("{" in detail or "<" in detail):
+                    detail = ""
             except Exception:
                 pass
             if e.code in _RETRYABLE_STATUS:

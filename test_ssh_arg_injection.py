@@ -35,6 +35,17 @@ def test_enumerate_rejects_option_injection_in_key_path():
     assert r.error and "unsafe characters" in r.error
 
 
+def test_enumerate_rejects_at_host_option_injection():
+    r = ssh_enumerate("evil.com@-oProxyCommand=id", "root")
+    assert r.error and "unsafe characters" in r.error
+
+
+def test_scan_request_rejects_at_in_ssh_user():
+    from api.models.scan_request import ScanRequest
+    with pytest.raises(ValueError):
+        ScanRequest(target="example.com", ssh_user="root@-oProxyCommand=id")
+
+
 def test_helper_allows_legitimate_values():
     assert not _rejects_option_injection("ubuntu")
     assert not _rejects_option_injection("10.0.0.5")

@@ -35,7 +35,7 @@ class SecurityTester:
 
     def __init__(self):
         self.results: List[SecurityTestResult] = []
-        self.project_root = Path(__file__).parent.parent
+        self.project_root = Path(__file__).resolve().parent
 
     def test_environment_variables(self) -> SecurityTestResult:
         """Test that required security environment variables are set."""

@@ -2054,16 +2054,35 @@ class ToolRuntime:
                 "canary_host required (hostname you control, e.g. xyz.burpcollaborator.net)",
                 error="missing canary", network=False,
             )
-        # If canary is a literal private IP, reject (hostnames like oastify.com are OK)
+        # Literal IPs: no private/loopback/link-local/metadata, including
+        # decimal/hex encodings (2852039166 → 169.254.169.254).
         from src.ip_scope import is_private_or_local  # noqa: PLC0415
         import ipaddress  # noqa: PLC0415
+        ip_literal = None
         try:
-            ipaddress.ip_address(canary)
-            if is_private_or_local(canary):
-                return ToolResult(False, oid, "ssrf_canary", "canary_host must not be private IP",
-                                  error="private canary", network=False)
+            ip_literal = str(ipaddress.ip_address(canary))
         except ValueError:
-            pass  # hostname — fine
+            if canary.isdigit():
+                try:
+                    ip_literal = str(ipaddress.ip_address(int(canary)))
+                except (ValueError, OverflowError):
+                    ip_literal = None
+            elif canary.startswith("0x"):
+                try:
+                    ip_literal = str(ipaddress.ip_address(int(canary, 16)))
+                except (ValueError, OverflowError):
+                    ip_literal = None
+        if ip_literal and is_private_or_local(ip_literal):
+            return ToolResult(False, oid, "ssrf_canary", "canary_host must not be private IP",
+                              error="private canary", network=False)
+        labels = canary.split(".")
+        blocked_hosts = {
+            "localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback",
+            "metadata.google.internal", "metadata.goog", "metadata", "instance-data",
+        }
+        if canary in blocked_hosts or (labels and labels[0] in blocked_hosts):
+            return ToolResult(False, oid, "ssrf_canary", "canary_host must not be loopback or metadata",
+                              error="blocked canary", network=False)
         path = san.safe_path(args.get("path") or "/")
         if path is None:
             return ToolResult(False, oid, "ssrf_canary", "invalid path", error="sanitize failed")

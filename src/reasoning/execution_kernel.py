@@ -105,10 +105,12 @@ class ExecutionKernel:
 
 
 def validate_scope(plan: ProbePlan, context: dict) -> list[str]:
+    from src.ip_scope import host_matches_scope  # noqa: PLC0415
+
     scope = context.get("scope", [])
     host = plan.spec.target_host
     if scope and host:
-        in_scope = any(host == s or host.endswith("." + s) for s in scope)
+        in_scope = any(host_matches_scope(host, s) for s in scope)
         if not in_scope:
             return [f"host {host} not in scope {scope}"]
     return []

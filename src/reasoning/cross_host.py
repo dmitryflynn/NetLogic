@@ -197,11 +197,9 @@ class ScopeAuthorizer:
 def _in_scope(dest_host: str, scope: list[str]) -> bool:
     """Mirror execution_kernel.validate_scope semantics at the host level (the CFAA boundary
     remains the kernel; this is an additional gate above it)."""
+    from src.ip_scope import host_matches_scope  # noqa: PLC0415
+
     host = _host_only(dest_host)
     if not scope:
         return False
-    for s in scope:
-        s = _host_only(s)
-        if host == s or host.endswith("." + s):
-            return True
-    return False
+    return any(host_matches_scope(host, s) for s in scope)

@@ -90,3 +90,17 @@ def test_no_org_context_uses_env(monkeypatch):
     from src import ai_analyst
     cfg = ai_analyst.config_for_org("", "ai")
     assert cfg.api_key == "sk-env-DDDD4444"
+
+
+def test_config_for_org_saas_does_not_borrow_env_key(store, monkeypatch):
+    import api.db as db
+    import api.settings_store as ss
+    monkeypatch.setattr(ss, "org_settings_store", store)
+    monkeypatch.setattr(db, "is_enabled", lambda: False)
+    monkeypatch.setattr(
+        "api.scan_policy.saas_scan_restrictions_enabled", lambda: True,
+    )
+    monkeypatch.setenv("NETLOGIC_AI_API_KEY", "sk-env-SHOULD-NOT-LEAK")
+    from src import ai_analyst
+    cfg = ai_analyst.config_for_org("tenant-without-settings", "ai")
+    assert cfg.api_key != "sk-env-SHOULD-NOT-LEAK"

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from src.ip_scope import (
+    host_matches_scope,
     is_private_or_local,
     normalize_finding_id,
     reply_from_target,
@@ -9,6 +10,14 @@ from src.ip_scope import (
 )
 from src.reasoning.agent.tools import ToolRuntime
 from src.reasoning.agent.findings import merge_agent_into_investigations
+
+
+def test_host_matches_scope_is_label_bounded():
+    assert host_matches_scope("example.com", "example.com")
+    assert host_matches_scope("sub.example.com", "example.com")
+    assert not host_matches_scope("example.com", "ample.com")
+    assert not host_matches_scope("notexample.com", "example.com")
+    assert not host_matches_scope("ample.com", "example.com")
 
 
 def test_private_ip_detection():
@@ -100,3 +109,8 @@ def test_merge_agent_dedupes_and_skips_tech_inventory():
     subjects = [i["subject"] for i in out]
     assert subjects.count("ssdp_exposed") == 1
     assert not any(str(s).startswith("tech_") for s in subjects)
+
+
+def test_probe_targets_drops_public_hosts():
+    from src.network_prober import probe_targets
+    assert probe_targets(["8.8.8.8", "127.0.0.1", "169.254.1.1"], [80, 443]) == []

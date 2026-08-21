@@ -22,6 +22,8 @@ def _mk_manager(monkeypatch):
     m = JobManager.__new__(JobManager)
     m._jobs = {}
     m._lock = threading.RLock()
+    m._pg = False
+    m._pg_store = None
     from unittest.mock import MagicMock
     m.store = MagicMock()
     return m
@@ -111,3 +113,25 @@ def test_concurrent_cancel_and_delete_are_safe(monkeypatch):
 
     assert not any(th.is_alive() for th in threads), "deadlock during concurrent delete/list"
     assert not errors, f"exceptions during concurrent delete/list: {errors[:3]}"
+
+
+def test_try_set_terminal_does_not_un_cancel(monkeypatch):
+    m = _mk_manager(monkeypatch)
+    job = m.create(ScanRequest(target="127.0.0.1", ports="quick"), org_id="org-a")
+    job.status = "running"
+    job.assigned_agent_id = "agent-1"
+    first, changed = m.try_set_terminal(job.job_id, "cancelled", org_id="org-a")
+    assert changed and first.status == "cancelled"
+    _, changed2 = m.try_set_terminal(job.job_id, "completed", org_id="org-a")
+    assert not changed2
+    assert m.get(job.job_id, org_id="org-a").status == "cancelled"
+
+
+def test_reclaim_stranded_skips_cancelled(monkeypatch):
+    m = _mk_manager(monkeypatch)
+    job = m.create(ScanRequest(target="127.0.0.1", ports="quick"), org_id="org-a")
+    job.status = "cancelled"
+    job.assigned_agent_id = "agent-1"
+    assert m.reclaim_stranded(job.job_id, max_attempts=3) == "skip"
+    assert job.status == "cancelled"
+    assert job.assigned_agent_id == "agent-1"
