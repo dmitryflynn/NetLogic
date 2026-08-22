@@ -105,6 +105,12 @@ class ScanJob:
         default_factory=threading.Event, repr=False, compare=False
     )
 
+    # Serialises snapshot+write for this job so a slower in-flight persist of an
+    # older status (e.g. "running") cannot overwrite a later terminal persist.
+    _persist_lock: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
+
     # ── Periodic persistence ──────────────────────────────────────────────────
     # Persist the job every N events so a crash during a running scan doesn't
     # lose all partial results.  Counter is only bumped during running scans.
@@ -330,56 +336,63 @@ class JobManager:
         self._maybe_evict()
 
     def persist_job(self, job: ScanJob) -> None:
-        """Trigger an asynchronous save of the job state."""
+        """Trigger an asynchronous save of the latest job state.
+
+        Snapshots are taken at write time (not at schedule time) and serialised
+        per job. Otherwise a slower in-flight persist of an earlier "running"
+        snapshot can finish after the terminal persist and downgrade a completed
+        scan back to running — which ``from_dict`` then marks failed on restart.
+        """
+        jid = job.job_id
         with self._lock:
-            if job.job_id not in self._jobs:
+            if jid not in self._jobs:
                 return
-            record = job.to_dict()
-            jid = job.job_id
+            live = self._jobs[jid]
 
-        def _still_present() -> bool:
-            with self._lock:
-                return jid in self._jobs
-
-        if self._pg and self._pg_store is not None:
-            if job._loop:
-                try:
-                    def _pg_async():
-                        if _still_present():
-                            asyncio.create_task(self._pg_store.save_scan(jid, record))
-                    job._loop.call_soon_threadsafe(_pg_async)
-                    return
-                except RuntimeError:
-                    pass
-            try:
-                loop = asyncio.get_running_loop()
-                if _still_present():
-                    loop.create_task(self._pg_store.save_scan(jid, record))
-            except RuntimeError:
-                if _still_present():
+        def _write_latest() -> None:
+            with live._persist_lock:
+                with self._lock:
+                    current = self._jobs.get(jid)
+                    if current is None:
+                        return
+                    record = current.to_dict()
+                wrote_path = None
+                if self._pg and self._pg_store is not None:
                     self._pg_store.save_sync(record)
-            return
+                elif self.store:
+                    wrote_path = self.store._safe_path(jid)
+                    if wrote_path is not None:
+                        self.store._write(wrote_path, record)
+                # A delete that raced the write must not be undone by os.replace /
+                # UPSERT recreating the durable record.
+                with self._lock:
+                    if jid in self._jobs:
+                        return
+                if self._pg and self._pg_store is not None:
+                    self._pg_store.delete_sync(jid)
+                elif wrote_path and os.path.exists(wrote_path):
+                    try:
+                        os.unlink(wrote_path)
+                    except OSError:
+                        pass
 
-        if self.store:
-            path = self.store._safe_path(jid)
-            if path is None:
-                return
-            if job._loop:
-                try:
-                    def _json_async():
-                        if _still_present():
-                            asyncio.create_task(self.store.save_scan(jid, record))
-                    job._loop.call_soon_threadsafe(_json_async)
-                    return
-                except RuntimeError:
-                    pass
+        def _schedule(loop: asyncio.AbstractEventLoop) -> None:
             try:
-                loop = asyncio.get_running_loop()
-                if _still_present():
-                    loop.create_task(self.store.save_scan(jid, record))
+                loop.run_in_executor(None, _write_latest)
             except RuntimeError:
-                if _still_present():
-                    self.store._write(path, record)
+                _write_latest()
+
+        if live._loop:
+            try:
+                loop = live._loop
+                loop.call_soon_threadsafe(_schedule, loop)
+                return
+            except RuntimeError:
+                pass
+        try:
+            _schedule(asyncio.get_running_loop())
+        except RuntimeError:
+            _write_latest()
 
     # ── Create ────────────────────────────────────────────────────────────────
 
