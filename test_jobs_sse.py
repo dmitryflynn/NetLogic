@@ -23,11 +23,16 @@ where a route would otherwise dispatch).
 from __future__ import annotations
 
 import asyncio
+import json
+import tempfile
+import threading
 import time
 import unittest
+from pathlib import Path
 
 from api.jobs.manager import JobManager, ScanJob, JobCancelled, job_manager
 from api.models.scan_request import ScanRequest
+from api.storage.json_store import JsonScanStore
 
 
 def _drain_async_gen(agen):
@@ -278,6 +283,102 @@ class TestSSEGenerator(unittest.TestCase):
         finally:
             loop.close()
         self.assertTrue(any("initialisation timeout" in s for s in out))
+
+
+# ───────────────────────── persist_job stale-snapshot race ───────────────────
+
+
+class TestPersistDoesNotClobberTerminalState(unittest.TestCase):
+    """A slower in-flight persist of a 'running' snapshot must not overwrite
+    a later persist of the completed job. That overwrite would survive on disk
+    as status=running, and ScanJob.from_dict would then mark the scan failed
+    ('interrupted by server restart') — losing a finished result."""
+
+    def _isolated_manager(self, directory: str) -> JobManager:
+        mgr = JobManager.__new__(JobManager)
+        mgr._jobs = {}
+        mgr._lock = threading.RLock()
+        mgr._pg = False
+        mgr._pg_store = None
+        mgr.store = JsonScanStore(directory)
+        return mgr
+
+    def test_overlapping_async_persist_keeps_completed_status(self):
+        tmp = tempfile.mkdtemp(prefix="persist-race-")
+        mgr = self._isolated_manager(tmp)
+        job = ScanJob(
+            job_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            config=ScanRequest(target="example.com"),
+        )
+        job.status = "running"
+        mgr._jobs[job.job_id] = job
+
+        orig_write = mgr.store._write
+
+        def slow_running_write(path, record):
+            # Make the stale 'running' writer lose the race if snapshots are
+            # frozen at schedule time (the pre-fix behaviour).
+            if record.get("status") == "running":
+                time.sleep(0.25)
+            orig_write(path, record)
+
+        mgr.store._write = slow_running_write
+
+        async def scenario():
+            job._loop = asyncio.get_running_loop()
+            mgr.persist_job(job)
+            await asyncio.sleep(0.02)
+            job.status = "completed"
+            job.completed_at = time.time()
+            mgr.persist_job(job)
+            await asyncio.sleep(0.6)
+
+        asyncio.run(scenario())
+
+        path = Path(tmp) / f"{job.job_id}.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(data["status"], "completed")
+        self.assertIsNotNone(data.get("completed_at"))
+
+        restored = ScanJob.from_dict(data)
+        self.assertEqual(restored.status, "completed")
+        self.assertNotEqual(restored.error, "Scan interrupted by server restart.")
+
+    def test_delete_during_persist_does_not_resurrect(self):
+        tmp = tempfile.mkdtemp(prefix="persist-del-")
+        mgr = self._isolated_manager(tmp)
+        job = ScanJob(
+            job_id="ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb",
+            config=ScanRequest(target="example.com"),
+        )
+        job.status = "running"
+        mgr._jobs[job.job_id] = job
+
+        started = threading.Event()
+        orig_write = mgr.store._write
+
+        def slow_write(path, record):
+            started.set()
+            time.sleep(0.2)
+            orig_write(path, record)
+
+        mgr.store._write = slow_write
+
+        async def scenario():
+            job._loop = asyncio.get_running_loop()
+            mgr.persist_job(job)
+            for _ in range(50):
+                if started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            self.assertTrue(started.is_set())
+            mgr.delete(job.job_id)
+            await asyncio.sleep(0.5)
+
+        asyncio.run(scenario())
+        path = Path(tmp) / f"{job.job_id}.json"
+        self.assertFalse(path.exists(), "in-flight persist resurrected a deleted job")
+        self.assertNotIn(job.job_id, mgr._jobs)
 
 
 # ───────────────────────── JobManager eviction ───────────────────────────────
