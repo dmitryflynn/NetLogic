@@ -123,3 +123,37 @@ def test_merge_agent_dedupes_and_skips_tech_inventory():
 def test_probe_targets_drops_public_hosts():
     from src.network_prober import probe_targets
     assert probe_targets(["8.8.8.8", "127.0.0.1", "169.254.1.1"], [80, 443]) == []
+
+
+def test_probe_targets_public_allowed_net_does_not_enable_public_scans():
+    """AI-directed probes pass allowed_net=_subnet_of(target_ip). For a public
+    target that is a public /24 — it must not replace the RFC1918 gate and
+    scan neighboring hosts the operator never authorized."""
+    from src.network_prober import probe_targets, _subnet_of
+
+    public_ip = "45.33.32.156"  # scanme.nmap.org-class public address
+    neighbors = ["45.33.32.1", "45.33.32.2", "8.8.8.8"]
+    found = probe_targets(
+        neighbors, [80, 443],
+        allowed_net=_subnet_of(public_ip),
+    )
+    assert found == []
+
+
+def test_probe_targets_allowed_net_narrows_rfc1918_only(monkeypatch):
+    """On a private target, allowed_net still limits probes to that /24."""
+    from src import network_prober
+
+    monkeypatch.setattr(network_prober, "_tcp_connect", lambda host, port, timeout: True)
+
+    in_subnet = network_prober.probe_targets(
+        ["10.0.0.5", "10.0.0.9"], [22],
+        allowed_net="10.0.0.0/24",
+    )
+    assert {h.ip for h in in_subnet} == {"10.0.0.5", "10.0.0.9"}
+
+    other_rfc1918 = network_prober.probe_targets(
+        ["10.1.1.5", "172.16.0.4"], [22],
+        allowed_net="10.0.0.0/24",
+    )
+    assert other_rfc1918 == []

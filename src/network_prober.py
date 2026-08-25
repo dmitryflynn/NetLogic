@@ -146,8 +146,11 @@ def probe_targets(targets: list[str], ports: list[int],
     """Probe specific *targets* on specific *ports* — used by AI-directed probing.
 
     Skips the live-host sweep; tests each target:port pair directly.
-    Only RFC1918 (or *allowed_net*) addresses are probed, and the cartesian
-    product is capped at ``_MAX_PROBE_PAIRS``.
+    Only RFC1918 addresses are probed. ``allowed_net`` further *restricts*
+    to that subnet (the target's /24) — it must never enlarge the allowlist
+    to a public network, which is what happens if a public target's
+    ``_subnet_of()`` /24 replaces RFC1918.
+    The cartesian product is capped at ``_MAX_PROBE_PAIRS``.
     """
     if threads is not None:
         max_workers = threads
@@ -155,12 +158,12 @@ def probe_targets(targets: list[str], ports: list[int],
         targets = [targets]
     if not targets or not ports:
         return []
-    nets: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = list(_RFC1918)
+    allowed: ipaddress.IPv4Network | ipaddress.IPv6Network | None = None
     if allowed_net:
         try:
-            nets = [ipaddress.ip_network(allowed_net, strict=False)]
+            allowed = ipaddress.ip_network(allowed_net, strict=False)
         except ValueError:
-            nets = list(_RFC1918)
+            allowed = None
     filtered: list[str] = []
     seen: set[str] = set()
     for h in targets:
@@ -171,7 +174,10 @@ def probe_targets(targets: list[str], ports: list[int],
             addr = ipaddress.ip_address(host)
         except ValueError:
             continue
-        if not any(addr in net for net in nets):
+        # RFC1918 is mandatory — allowed_net may only narrow, never expand.
+        if not _is_rfc1918(host):
+            continue
+        if allowed is not None and addr not in allowed:
             continue
         seen.add(host)
         filtered.append(host)
