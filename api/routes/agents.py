@@ -39,7 +39,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from api.agents.registry import Agent, agent_registry
 from api.auth.dependencies import require_org
 from api.auth.rate_limit import events_limiter, heartbeat_limiter, register_limiter
-from api.jobs.executor import try_dispatch_queued
+from api.jobs.executor import reclaim_stale_jobs, try_dispatch_queued
 from api.jobs.manager import job_manager
 from api.middleware.audit import audit_log
 from api.models.agent import AgentRegistration, AgentTaskComplete
@@ -143,7 +143,9 @@ async def agent_heartbeat(
     if not heartbeat_limiter.allow(agent_id):
         raise HTTPException(status_code=429, detail="Heartbeat rate limit exceeded.")
     agent_registry.heartbeat(agent_id)
-    # Dispatch any queued jobs now that this agent has checked in.
+    # Reclaim work stranded on agents that have gone offline, then dispatch
+    # anything queued (including jobs just requeued) onto this check-in.
+    reclaim_stale_jobs(org_id=agent.org_id)
     try_dispatch_queued(org_id=agent.org_id)
     return {
         "status": "ok",
@@ -299,7 +301,8 @@ async def complete_task(
     job.push_sentinel()
     job_manager.persist_job(job)
 
-    # Agent is now idle — dispatch any waiting jobs immediately.
+    # Agent is now idle — reclaim stranded work, then dispatch waiting jobs.
+    reclaim_stale_jobs(org_id=agent.org_id)
     try_dispatch_queued(org_id=agent.org_id)
 
     return {"job_id": job_id, "status": job.status}

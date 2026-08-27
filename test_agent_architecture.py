@@ -393,6 +393,69 @@ class TestReclaimStaleJobs(unittest.TestCase):
         self.assertEqual(job.status, "failed")
         self.assertIn("No healthy agent", job.error)
 
+    def test_dispatch_alone_cannot_see_job_pinned_to_dead_agent(self):
+        """try_dispatch_queued only lists unassigned queued jobs.
+
+        A running (or queued-but-assigned) scan on a crashed agent is invisible
+        to dispatch. Without reclaim_stale_jobs the scan hangs forever — this
+        is the hosted-mode failure: Postgres skips the local agent, which was
+        the only caller of reclaim.
+        """
+        from api.jobs import executor
+        reg, jm, job = self._setup(attempts=1)
+        live_id, _ = reg.register(hostname="live", capabilities=["scan"], version="1.0", tags={})
+        reg.heartbeat(live_id)
+        with patch.object(executor, "agent_registry", reg), \
+             patch.object(executor, "job_manager", jm):
+            dispatched = executor.try_dispatch_queued()
+        self.assertEqual(dispatched, 0)
+        self.assertEqual(job.status, "running")
+        self.assertNotEqual(job.assigned_agent_id, live_id)
+
+    def test_reclaim_then_dispatch_moves_work_to_healthy_agent(self):
+        from api.jobs import executor
+        reg, jm, job = self._setup(attempts=1)
+        live_id, _ = reg.register(hostname="live", capabilities=["scan"], version="1.0", tags={})
+        reg.heartbeat(live_id)
+        with patch.object(executor, "agent_registry", reg), \
+             patch.object(executor, "job_manager", jm):
+            reclaimed = executor.reclaim_stale_jobs()
+        self.assertEqual(reclaimed, 1)
+        # reclaim_stale_jobs dispatches immediately after requeue.
+        self.assertEqual(job.status, "queued")
+        self.assertEqual(job.assigned_agent_id, live_id)
+
+    def test_start_housekeeping_is_idempotent(self):
+        from api.jobs import executor
+        prev = executor._housekeeping_started
+        try:
+            executor._housekeeping_started = False
+            with patch.object(executor.threading, "Thread") as mock_thread:
+                executor.start_housekeeping()
+                executor.start_housekeeping()
+            self.assertEqual(mock_thread.call_count, 1)
+            mock_thread.return_value.start.assert_called_once()
+        finally:
+            executor._housekeeping_started = prev
+
+
+class TestReclaimWiring(unittest.TestCase):
+    """The reclaim function is useless if nothing in hosted mode calls it."""
+
+    def test_heartbeat_and_complete_call_reclaim(self):
+        import inspect
+        from api.routes import agents
+        hb = inspect.getsource(agents.agent_heartbeat)
+        done = inspect.getsource(agents.complete_task)
+        self.assertIn("reclaim_stale_jobs", hb)
+        self.assertIn("reclaim_stale_jobs", done)
+
+    def test_hosted_startup_starts_housekeeping(self):
+        import inspect
+        from api import main as api_main
+        src = inspect.getsource(api_main.lifespan)
+        self.assertIn("start_housekeeping", src)
+
 
 if __name__ == "__main__":
     unittest.main()

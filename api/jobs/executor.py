@@ -14,6 +14,17 @@ Public API
                              that queued jobs are assigned as soon as an agent
                              becomes idle.  Returns the count dispatched.
 
+  reclaim_stale_jobs(org)   Requeue (or fail) jobs pinned to offline agents.
+                             try_dispatch_queued cannot see those jobs — they
+                             still have assigned_agent_id set — so reclaim must
+                             run on the controller, not only inside the desktop
+                             local-agent worker loop.
+
+  start_housekeeping()      Daemon thread: reclaim + dispatch. Required when
+                             Postgres is enabled because the local agent (the
+                             only previous caller of reclaim_stale_jobs) is
+                             not started in that mode.
+
 Dispatch rules
 ──────────────
 1. job.config.agent_id set  → assign to that specific agent; fail immediately
@@ -29,11 +40,14 @@ actually given the work, regardless of whether the user specified one.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 
 from api.agents.registry import agent_registry
 from api.jobs.manager import ScanJob, job_manager
+
+_log = logging.getLogger("netlogic.executor")
 
 # Prevent double-assignment race: only one thread may run try_dispatch_queued
 # at a time.  The lock is non-reentrant so callers must not hold it already.
@@ -195,7 +209,8 @@ def reclaim_stale_jobs(org_id: str = "") -> int:
     it up) or, once it has exhausted MAX_DISPATCH_ATTEMPTS, fail it cleanly. This is
     what makes the fleet self-healing: a crashed agent no longer strands its work.
 
-    Returns the number of jobs reclaimed. Called periodically by the worker loop.
+    Returns the number of jobs reclaimed. Called from agent heartbeats,
+    task-complete, the local-agent worker loop, and start_housekeeping().
     """
     reclaimed = 0
     for job in job_manager.list_dispatched_active(org_id=org_id):
@@ -227,3 +242,40 @@ def reclaim_stale_jobs(org_id: str = "") -> int:
     if reclaimed:
         try_dispatch_queued(org_id=org_id)
     return reclaimed
+
+
+# ── Controller housekeeping (SaaS / Postgres) ─────────────────────────────────
+
+_HOUSEKEEPING_INTERVAL = 3.0  # same cadence as the local-agent worker loop
+_housekeeping_started = False
+_housekeeping_lock = threading.Lock()
+
+
+def start_housekeeping(interval: float = _HOUSEKEEPING_INTERVAL) -> None:
+    """Reclaim stranded jobs and dispatch the queue on a daemon thread.
+
+    Desktop mode already does this inside local_agent._worker_loop. Hosted
+    mode (Postgres) deliberately does not start that agent, so without this
+    loop a remote agent crash leaves its scan running/queued forever — even
+    after another agent comes online, because try_dispatch_queued only sees
+    unassigned queued jobs.
+    """
+    global _housekeeping_started
+    with _housekeeping_lock:
+        if _housekeeping_started:
+            return
+        _housekeeping_started = True
+    threading.Thread(
+        target=_housekeeping_loop, args=(interval,),
+        daemon=True, name="nl-reclaim",
+    ).start()
+
+
+def _housekeeping_loop(interval: float) -> None:
+    while True:
+        try:
+            reclaim_stale_jobs()
+            try_dispatch_queued()
+        except Exception as exc:
+            _log.warning("Housekeeping error: %s", exc)
+        time.sleep(interval)

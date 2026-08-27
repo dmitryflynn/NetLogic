@@ -216,6 +216,11 @@ async def lifespan(app: FastAPI):
             "Postgres enabled — built-in local scan agent not started; "
             "register remote agents per org."
         )
+        # The local-agent worker loop is what reclaims jobs stranded on crashed
+        # agents. Without it, hosted scans stay "running" forever after an
+        # agent dies because try_dispatch_queued ignores assigned jobs.
+        from api.jobs.executor import start_housekeeping  # noqa: PLC0415
+        start_housekeeping()
 
     # Open the web dashboard in the default browser unless suppressed.
     # Set NETLOGIC_NO_BROWSER=1 for headless / Docker / CI environments.
