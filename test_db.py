@@ -29,8 +29,8 @@ def test_provisioning_noop_when_disabled(monkeypatch):
 
 
 def test_api_key_store_in_memory_without_db(monkeypatch):
-    # The process singleton was built at import time (no DB) → in-memory.
-    assert isinstance(api_keys.api_key_store, api_keys.ApiKeyStore)
+    # Builder choice follows the env at call time. The process singleton may
+    # already be Postgres if this file ran in a job that set DATABASE_URL.
     monkeypatch.delenv("NETLOGIC_DATABASE_URL", raising=False)
     assert isinstance(api_keys._build_api_key_store(), api_keys.ApiKeyStore)
 
