@@ -284,7 +284,8 @@ def _fetch(url: str, payload: str = None, timeout: float = 8.0) -> tuple[dict, s
         "Accept-Language": "en-US,en;q=0.5",
     })
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        from src.http_fetch import urlopen_no_redirect  # noqa: PLC0415
+        with urlopen_no_redirect(req, timeout=timeout, context=ctx) as resp:
             body = resp.read(65536).decode("utf-8", errors="replace")
             headers = _flatten_headers(resp.headers)
             return headers, body, resp.status

@@ -120,7 +120,8 @@ def _get(url: str, timeout: float, binary: bool = False, max_bytes: int = 262144
         "Accept-Language": "en-US,en;q=0.9",
     })
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        from src.http_fetch import urlopen_no_redirect  # noqa: PLC0415
+        with urlopen_no_redirect(req, timeout=timeout) as resp:
             raw = resp.read(max_bytes)
             return resp.status, (raw if binary else raw.decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:

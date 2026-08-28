@@ -384,7 +384,8 @@ def probe_http_auth_state(host: str, port: int, scheme: str = "http",
         req = urllib.request.Request(url, headers={"User-Agent": "NetLogic/2.0"})
         status, hdrs, body_head = None, {}, ""
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            from src.http_fetch import urlopen_no_redirect  # noqa: PLC0415
+            with urlopen_no_redirect(req, timeout=timeout) as resp:
                 status = resp.status
                 hdrs = {k.lower(): v for k, v in resp.headers.items()}
                 body_head = resp.read(512).decode("utf-8", errors="replace").lower()
