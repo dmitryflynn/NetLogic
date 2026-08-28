@@ -96,13 +96,16 @@ def _flatten_headers(msg) -> dict:
 def fetch_headers(url: str, timeout: float = 8.0) -> tuple[dict, int]:
     """
     Fetch HTTP headers from a URL. Returns (headers_dict, status_code).
-    Follows redirects (urllib default), ignores cert errors. Never raises:
-    on any failure returns ({}, 0) so the caller can produce a sane
-    "could not audit" result instead of a misleading all-missing report.
+    Does not follow redirects (a 3xx to metadata / RFC1918 would be SSRF).
+    Ignores cert errors. Never raises: on any failure returns ({}, 0) so the
+    caller can produce a sane "could not audit" result instead of a misleading
+    all-missing report.
 
     Also stashes a short body snippet on ``headers['_body_snippet']`` so bot-
     challenge pages can be detected when vendor headers are intermittent.
     """
+    from src.http_fetch import urlopen_no_redirect  # noqa: PLC0415
+
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -121,7 +124,7 @@ def fetch_headers(url: str, timeout: float = 8.0) -> tuple[dict, int]:
         return headers, status
 
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        with urlopen_no_redirect(req, timeout=timeout, context=ctx) as resp:
             body = resp.read(2048)
             return _pack(resp.headers, resp.status, body)
     except urllib.error.HTTPError as e:

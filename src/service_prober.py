@@ -59,7 +59,8 @@ def _http_get(host: str, port: int, path: str = "/", scheme: str = "http",
         ctx.verify_mode = ssl.CERT_NONE
         url = f"{scheme}://{host}:{port}{path}"
         req = urllib.request.Request(url, headers=headers or {})
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        from src.http_fetch import urlopen_no_redirect  # noqa: PLC0415
+        with urlopen_no_redirect(req, timeout=timeout, context=ctx) as resp:
             body = resp.read(16384).decode("utf-8", errors="replace")
             return resp.status, dict(resp.headers), body
     except urllib.error.HTTPError as e:
