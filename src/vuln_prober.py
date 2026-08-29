@@ -171,18 +171,37 @@ def _raw_http(host: str, port: int, request_bytes: bytes,
         return None
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Return the original 3xx instead of fetching Location.
+
+    Default urlopen follows redirects, including cross-host hops. A public
+    scan target that returns ``Location: http://169.254.169.254/...`` would
+    otherwise make the agent fetch metadata (or RFC1918) and treat that
+    body as a confirmed Tomcat/directory-listing finding.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
 def _http_get(host: str, port: int, path: str, scheme: str = "http",
               timeout: float = 5.0, headers: dict = None) -> tuple[Optional[int], Optional[str]]:
     """Simple HTTP GET returning (status_code, body) or (None, None).
     Checks the active CDN/edge block baseline: if the response matches the
-    baseline fingerprint, returns (-1, "") so callers skip it."""
+    baseline fingerprint, returns (-1, "") so callers skip it.
+
+    Redirects are not followed (see ``_NoRedirect``).
+    """
     try:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         url = f"{scheme}://{host}:{port}{path}"
         req = urllib.request.Request(url, headers=headers or {})
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        opener = urllib.request.build_opener(
+            _NoRedirect, urllib.request.HTTPSHandler(context=ctx),
+        )
+        with opener.open(req, timeout=timeout) as resp:
             status, body = resp.status, resp.read(16384).decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         try:
