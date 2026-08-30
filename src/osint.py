@@ -10,6 +10,8 @@ Aggregates public intelligence without touching the target directly:
 
 import socket
 import json
+import ssl
+import urllib.error
 import urllib.request
 import urllib.parse
 import re
@@ -361,8 +363,30 @@ TECH_SIGNATURES = {
     "Docker":       r"Docker",
 }
 
+def _header_blob(headers) -> str:
+    """Render headers as ``Name: value`` lines so TECH_SIGNATURES can match.
+
+    ``str(dict(headers))`` uses Python dict repr (``{'Server': 'nginx'}``),
+    which never matches patterns like ``Server: nginx``. HTTPMessage.items()
+    also keeps duplicate Server lines (common when a test/origin sets Server
+    in addition to the library default).
+    """
+    if headers is None:
+        return ""
+    try:
+        return "\n".join(f"{k}: {v}" for k, v in headers.items())
+    except Exception:
+        return str(headers)
+
+
 def fingerprint_http(target: str, port: int = 80) -> list[str]:
-    """Make HTTP HEAD request and fingerprint technologies from headers."""
+    """HEAD the in-scope origin and fingerprint technologies from its headers.
+
+    Redirects are not followed. urllib's default opener would chase a 3xx to
+    whatever Host is in Location — including 169.254.169.254 / RFC1918 — and
+    treat that response as the target's stack. Stay on the authorized origin;
+    3xx headers are still read via HTTPError.
+    """
     scheme = "https" if port in (443, 8443) else "http"
     url = f"{scheme}://{target}:{port}/"
     detected = []
@@ -370,18 +394,24 @@ def fingerprint_http(target: str, port: int = 80) -> list[str]:
         req = urllib.request.Request(url, method="HEAD", headers={
             "User-Agent": "Mozilla/5.0 (compatible; NetLogic/1.0)",
         })
-        # We deliberately ignore cert verification errors for recon
-        import ssl
+        # Ignore cert errors for recon (same as header_audit / stack fingerprint).
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
 
-        import urllib.error
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+                return None
+
+        handlers: list = [_NoRedirect]
+        if scheme == "https":
+            handlers.append(urllib.request.HTTPSHandler(context=ctx))
+        opener = urllib.request.build_opener(*handlers)
         try:
-            with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
-                header_str = str(dict(resp.headers))
+            with opener.open(req, timeout=5) as resp:
+                header_str = _header_blob(resp.headers)
         except urllib.error.HTTPError as e:
-            header_str = str(dict(e.headers))
+            header_str = _header_blob(e.headers)
 
         for tech, pattern in TECH_SIGNATURES.items():
             if re.search(pattern, header_str, re.IGNORECASE):
