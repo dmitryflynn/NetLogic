@@ -15,6 +15,8 @@ Guards (false data is the cardinal sin):
   * a total failure yields a valid, empty OSINTResult (no crash)
 """
 import json
+import re
+
 import pytest
 
 from src import osint
@@ -250,6 +252,107 @@ def test_run_osint_total_failure_is_valid_empty(monkeypatch):
     assert res.technologies == []
     assert res.emails == []
     assert res.certificate_names == []
+
+
+def test_header_blob_matches_tech_signatures():
+    """Signatures are ``Server: nginx`` lines, not Python dict repr."""
+    class H:
+        def items(self):
+            return [("Server", "nginx"), ("X-Powered-By", "PHP/8.2")]
+
+    blob = osint._header_blob(H())
+    assert re.search(r"Server: nginx", blob, re.IGNORECASE)
+    assert re.search(r"X-Powered-By: PHP", blob, re.IGNORECASE)
+    assert osint._header_blob(None) == ""
+
+
+def test_fingerprint_http_does_not_follow_off_origin_redirect():
+    """A 302 to another host must not be fetched (redirect SSRF / false stack).
+
+    Concrete trigger: OSINT HEAD against a public target that redirects to
+    169.254.169.254 or an internal neighbor. urllib's default opener would
+    follow and fingerprint the *redirect destination*.
+    """
+    import http.server
+    import threading
+
+    hits = {"origin": 0, "off": 0}
+
+    class Origin(http.server.BaseHTTPRequestHandler):
+        def do_HEAD(self):
+            hits["origin"] += 1
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{off_port}/")
+            self.end_headers()
+
+        def do_GET(self):
+            self.do_HEAD()
+
+        def log_message(self, *_a):
+            return
+
+    class Off(http.server.BaseHTTPRequestHandler):
+        def do_HEAD(self):
+            hits["off"] += 1
+            self.send_response(200)
+            self.send_header("Server", "nginx")
+            self.send_header("X-Powered-By", "PHP/8.2")
+            self.end_headers()
+
+        def do_GET(self):
+            self.do_HEAD()
+            self.wfile.write(b"off-origin")
+
+        def log_message(self, *_a):
+            return
+
+    origin = http.server.HTTPServer(("127.0.0.1", 0), Origin)
+    off = http.server.HTTPServer(("127.0.0.1", 0), Off)
+    off_port = off.server_address[1]
+    for t in (
+        threading.Thread(target=origin.serve_forever, daemon=True),
+        threading.Thread(target=off.serve_forever, daemon=True),
+    ):
+        t.start()
+    try:
+        detected = osint.fingerprint_http("127.0.0.1", port=origin.server_address[1])
+    finally:
+        origin.shutdown()
+        off.shutdown()
+        origin.server_close()
+        off.server_close()
+
+    assert hits["origin"] == 1
+    assert hits["off"] == 0, "redirect to off-origin host must not be followed"
+    assert "nginx" not in detected
+    assert "PHP" not in detected
+
+
+def test_fingerprint_http_reads_in_scope_headers():
+    """200 from the origin still fingerprints Server / X-Powered-By."""
+    import http.server
+    import threading
+
+    class Origin(http.server.BaseHTTPRequestHandler):
+        def do_HEAD(self):
+            self.send_response(200)
+            self.send_header("Server", "nginx")
+            self.send_header("X-Powered-By", "PHP/8.1")
+            self.end_headers()
+
+        def log_message(self, *_a):
+            return
+
+    origin = http.server.HTTPServer(("127.0.0.1", 0), Origin)
+    threading.Thread(target=origin.serve_forever, daemon=True).start()
+    try:
+        detected = osint.fingerprint_http("127.0.0.1", port=origin.server_address[1])
+    finally:
+        origin.shutdown()
+        origin.server_close()
+
+    assert "nginx" in detected
+    assert "PHP" in detected
 
 
 def test_run_osint_happy_path_dedups_and_scopes(monkeypatch):
