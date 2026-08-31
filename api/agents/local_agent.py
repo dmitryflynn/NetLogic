@@ -211,18 +211,27 @@ def _run_job(agent_id: str, job_id: str, org_id: str) -> bool:
             org_id      = getattr(job, "org_id", "") or "",
             emit_callback = emit,
         )
-        job.status   = "completed"
+        # Atomic vs cancel/delete: never assign status="completed" directly.
+        # A user cancel that won try_set_terminal first must stay cancelled even
+        # if the engine returned normally (JobCancelled swallowed, or the scan
+        # finished in the race window after cancel).
+        job, changed = job_manager.try_set_terminal(
+            job_id, "completed", org_id=org_id,
+        )
+        if job is None:
+            if agent:
+                agent_registry.mark_done(agent_id, job_id)
+            return True
+        if not changed:
+            _finish(job, agent)
+            return True
         job.progress = 100.0
         try:
             job.push_event({"type": "done", "data": {"message": "Scan complete."}})
         except JobCancelled:
-            # Cancel raced the final "done" emit — treat as cancelled, not complete.
-            _log.info("Scan cancelled for job %s (during finalisation)", job_id)
-            if job.status not in ("failed", "cancelled"):
-                job.status = "cancelled"
-                job.error = job.error or "Cancelled by user request."
-            _finish(job, agent)
-            return True
+            # stop_flag was set after we already committed completed — the scan
+            # actually finished; cancel lost the race and is a no-op.
+            pass
     except JobCancelled:
         # Cooperative cancel via push_event after cancel/delete set _stop_flag.
         # cancel_job() already set terminal status; delete_job() may not have.
