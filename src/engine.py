@@ -721,10 +721,12 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
                 if _invs:
                     art["investigations"] = _invs
                     _emit("investigations", {"investigations": _invs})
-            except Exception:  # noqa: BLE001
-                pass
-    except Exception:  # noqa: BLE001 — reasoning must never affect a scan
-        pass
+            except Exception as e:  # noqa: BLE001
+                from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+                reraise_if_cancelled(e)
+    except Exception as e:  # noqa: BLE001 — reasoning must never affect a scan
+        from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+        reraise_if_cancelled(e)
 
     # ── Change detection (Phase 7) — opt-in via --since-last, fail-soft ──
     # Diff this scan's observations against the prior persisted snapshot for the target. Produces
@@ -743,8 +745,9 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
                 art["change_report"] = delta_report(delta)
                 _emit("change", {"delta": art["change_delta"], "seed": art["change_seed"],
                                  "report": art["change_report"]})
-        except Exception:  # noqa: BLE001 — change detection never affects a scan
-            pass
+        except Exception as e:  # noqa: BLE001 — change detection never affects a scan
+            from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+            reraise_if_cancelled(e)
 
     # ── Architecture Summary (ALWAYS — deterministic synthesis, no AI needed) ──
     # Turn the scattered observations (frontend, hosting, CDN, auth, backend, TLS, DNS, endpoints)
@@ -756,8 +759,9 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
         if _arch is not None:
             art["architecture"] = _arch.to_dict()
             _emit("architecture", art["architecture"])
-    except Exception:  # noqa: BLE001 — synthesis is presentation-only, never block a scan
-        pass
+    except Exception as e:  # noqa: BLE001 — synthesis is presentation-only, never block a scan
+        from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+        reraise_if_cancelled(e)
 
     # ── AI Investigation Plan (opt-in: needs an AI key) — the overlay OVER the architecture ──
     # The AI reasons over the DETERMINISTIC architecture to propose grounded investigation objectives
@@ -769,8 +773,9 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
             if _plan:
                 art["investigation_plan"] = _plan
                 _emit("investigation_plan", {"objectives": _plan})
-        except Exception:  # noqa: BLE001 — the AI overlay never blocks a scan
-            pass
+        except Exception as e:  # noqa: BLE001 — the AI overlay never blocks a scan
+            from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+            reraise_if_cancelled(e)
 
     # ── Deterministic triage (ALWAYS — no --reason, no AI key required) ──
     # Rank + bucket the matched CVEs into "worth attention" vs "low-signal noise" so even a free scan
@@ -782,8 +787,9 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
         if _tri.attention or _tri.noise:
             art["triage"] = _tri.to_dict()
             _emit("triage", art["triage"])
-    except Exception:  # noqa: BLE001 — triage is presentation-only, never block a scan
-        pass
+    except Exception as e:  # noqa: BLE001 — triage is presentation-only, never block a scan
+        from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+        reraise_if_cancelled(e)
 
     return art
 
