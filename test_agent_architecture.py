@@ -394,5 +394,104 @@ class TestReclaimStaleJobs(unittest.TestCase):
         self.assertIn("No healthy agent", job.error)
 
 
+# ─── Resilience: restore assigned queue after controller restart ───────────────
+
+class TestRehydrateAssignedQueue(unittest.TestCase):
+    """pending_tasks is not persisted. After a controller crash/restart the
+    durable job still has assigned_agent_id, the agent is still online, and
+    both try_dispatch_queued and reclaim_stale_jobs skip it — scan never runs.
+    """
+
+    def _setup(self):
+        from api.agents.registry import AgentRegistry
+        from api.jobs.manager import JobManager, ScanJob
+        reg = AgentRegistry(persist_path=None)
+        aid, _ = reg.register(hostname="live", capabilities=["scan"], version="1.0", tags={})
+        reg.heartbeat(aid)
+        jm = JobManager()
+        jm._jobs.clear()
+        job = ScanJob(job_id="stranded", config=ScanRequest(target="example.com"), org_id="")
+        job.assigned_agent_id = aid
+        job.status = "queued"
+        job.dispatch_attempts = 1
+        # Simulate restart: assignment survived on disk, in-memory queue did not.
+        self.assertEqual(reg.get(aid).pending_tasks, [])
+        jm._jobs["stranded"] = job
+        return reg, jm, job, aid
+
+    def test_dispatch_and_reclaim_leave_assigned_queued_job_stranded(self):
+        """Documents the hole: online assigned+queued jobs are invisible to
+        both the dispatcher (looks for unassigned) and the reclaimer (skips
+        live agents)."""
+        from api.jobs import executor
+        reg, jm, job, aid = self._setup()
+        with patch.object(executor, "agent_registry", reg), \
+             patch.object(executor, "job_manager", jm):
+            self.assertEqual(executor.try_dispatch_queued(), 0)
+            self.assertEqual(executor.reclaim_stale_jobs(), 0)
+        self.assertEqual(job.status, "queued")
+        self.assertEqual(job.assigned_agent_id, aid)
+        self.assertEqual(reg.get_pending_tasks(aid), [])
+
+    def test_rehydrate_restores_queued_job_to_pending_queue(self):
+        from api.jobs import executor
+        reg, jm, job, aid = self._setup()
+        with patch.object(executor, "agent_registry", reg), \
+             patch.object(executor, "job_manager", jm):
+            n = executor.rehydrate_assigned_queue(aid)
+        self.assertEqual(n, 1)
+        self.assertEqual(reg.get(aid).pending_tasks, ["stranded"])
+        self.assertEqual(job.status, "queued")
+
+    def test_rehydrate_is_idempotent(self):
+        from api.jobs import executor
+        reg, jm, job, aid = self._setup()
+        with patch.object(executor, "agent_registry", reg), \
+             patch.object(executor, "job_manager", jm):
+            executor.rehydrate_assigned_queue(aid)
+            executor.rehydrate_assigned_queue(aid)
+        self.assertEqual(reg.get(aid).pending_tasks, ["stranded"])
+
+    def test_rehydrate_skips_running_jobs(self):
+        from api.jobs import executor
+        reg, jm, job, aid = self._setup()
+        job.status = "running"
+        with patch.object(executor, "agent_registry", reg), \
+             patch.object(executor, "job_manager", jm):
+            n = executor.rehydrate_assigned_queue(aid)
+        self.assertEqual(n, 0)
+        self.assertEqual(reg.get(aid).pending_tasks, [])
+
+    def test_rehydrate_ignores_other_agents_jobs(self):
+        from api.jobs import executor
+        reg, jm, job, aid = self._setup()
+        other, _ = reg.register(hostname="other", capabilities=["scan"], version="1.0", tags={})
+        reg.heartbeat(other)
+        with patch.object(executor, "agent_registry", reg), \
+             patch.object(executor, "job_manager", jm):
+            n = executor.rehydrate_assigned_queue(other)
+        self.assertEqual(n, 0)
+        self.assertEqual(reg.get(other).pending_tasks, [])
+        self.assertEqual(job.assigned_agent_id, aid)
+
+    def test_rehydrate_before_dispatch_keeps_capacity_for_assigned_work(self):
+        """If we dispatched new work before restoring the assigned queue, a
+        concurrency=1 agent would accept a second job and the original scan
+        would still be stranded."""
+        from api.jobs import executor
+        from api.jobs.manager import ScanJob
+        reg, jm, job, aid = self._setup()
+        extra = ScanJob(job_id="extra", config=ScanRequest(target="example.org"), org_id="")
+        extra.status = "queued"
+        jm._jobs["extra"] = extra
+        with patch.object(executor, "agent_registry", reg), \
+             patch.object(executor, "job_manager", jm):
+            executor.rehydrate_assigned_queue(aid)
+            dispatched = executor.try_dispatch_queued()
+        self.assertEqual(dispatched, 0)
+        self.assertIsNone(extra.assigned_agent_id)
+        self.assertEqual(reg.get(aid).pending_tasks, ["stranded"])
+
+
 if __name__ == "__main__":
     unittest.main()
