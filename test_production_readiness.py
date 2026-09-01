@@ -257,6 +257,33 @@ class TestAgentLifecycle(unittest.TestCase):
         job_detail = client.get(f"/v1/jobs/{job_id}", headers=self.headers)
         self.assertEqual(job_detail.json()["status"], "completed")
 
+    def test_task_poll_recovers_assignment_after_pending_queue_loss(self):
+        """Controller restart wipes pending_tasks. Agent poll must still
+        receive the job that was already assigned to it."""
+        from api.agents.registry import agent_registry
+
+        agent_id, token = self._register_agent()
+        agent_headers = {"Authorization": f"Bearer {token}"}
+        client.post(f"/v1/agents/{agent_id}/heartbeat", headers=agent_headers)
+
+        job_resp = client.post(
+            "/v1/jobs",
+            json={"target": "127.0.0.1", "agent_id": agent_id},
+            headers=self.headers,
+        )
+        self.assertEqual(job_resp.status_code, 202, job_resp.text)
+        job_id = job_resp.json()["job_id"]
+
+        agent = agent_registry.get(agent_id)
+        self.assertIn(job_id, agent.pending_tasks)
+        agent.pending_tasks.clear()  # simulate process restart
+
+        tasks_resp = client.get(f"/v1/agents/{agent_id}/tasks", headers=agent_headers)
+        self.assertEqual(tasks_resp.status_code, 200)
+        tasks = tasks_resp.json()
+        self.assertEqual(len(tasks), 1, tasks)
+        self.assertEqual(tasks[0]["job_id"], job_id)
+
 
 # ── Cross-org isolation ───────────────────────────────────────────────────────
 

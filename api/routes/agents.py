@@ -39,7 +39,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from api.agents.registry import Agent, agent_registry
 from api.auth.dependencies import require_org
 from api.auth.rate_limit import events_limiter, heartbeat_limiter, register_limiter
-from api.jobs.executor import try_dispatch_queued
+from api.jobs.executor import rehydrate_assigned_queue, try_dispatch_queued
 from api.jobs.manager import job_manager
 from api.middleware.audit import audit_log
 from api.models.agent import AgentRegistration, AgentTaskComplete
@@ -143,6 +143,10 @@ async def agent_heartbeat(
     if not heartbeat_limiter.allow(agent_id):
         raise HTTPException(status_code=429, detail="Heartbeat rate limit exceeded.")
     agent_registry.heartbeat(agent_id)
+    # pending_tasks is not persisted — restore jobs assigned to this agent
+    # before dispatching new work, so a restart cannot strand them forever
+    # and so load accounting still reflects already-assigned scans.
+    rehydrate_assigned_queue(agent_id)
     # Dispatch any queued jobs now that this agent has checked in.
     try_dispatch_queued(org_id=agent.org_id)
     return {
@@ -175,6 +179,7 @@ async def get_pending_tasks(
     """
     # Implicit heartbeat on every poll — no separate call needed.
     agent_registry.heartbeat(agent_id)
+    rehydrate_assigned_queue(agent_id)
 
     job_ids = agent_registry.get_pending_tasks(agent_id)
     tasks = []

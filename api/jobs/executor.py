@@ -73,6 +73,31 @@ async def submit_scan(job: ScanJob) -> None:
         # dispatched by try_dispatch_queued() on the next heartbeat.
 
 
+def rehydrate_assigned_queue(agent_id: str) -> int:
+    """Re-push queued jobs assigned to *agent_id* onto its pending_tasks.
+
+    ``pending_tasks`` is process-local and is not persisted. After a controller
+    restart the durable job still has ``assigned_agent_id`` set, but the agent's
+    in-memory queue is empty. ``try_dispatch_queued`` only considers unassigned
+    jobs, and ``reclaim_stale_jobs`` skips agents that are still online — so
+    the scan would wait forever unless we restore the queue when the agent
+    checks in.
+
+    Returns the number of jobs restored (including any already on the queue).
+    """
+    if not agent_id:
+        return 0
+    job_ids = [
+        job.job_id
+        for job in job_manager.list_dispatched_active()
+        if job.assigned_agent_id == agent_id and job.status == "queued"
+    ]
+    if not job_ids:
+        return 0
+    agent_registry.restore_pending_tasks(agent_id, job_ids)
+    return len(job_ids)
+
+
 def try_dispatch_queued(org_id: str = "") -> int:
     """Flush the queue: assign every waiting job to an idle agent.
 
