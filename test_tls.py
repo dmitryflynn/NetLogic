@@ -240,7 +240,7 @@ def test_analyze_cipher_empty():
 def test_probe_deprecated_excludes_placeholder(monkeypatch):
     # Force the "missing constant" path for TLSv1 and ensure it does NOT leak
     # an untestable placeholder into the deprecated list (which would inflate
-    # the DROWN heuristic and grading).
+    # grading).
     monkeypatch.setitem(tls._PROTO_MAP, "TLSv1", None)
     # Pretend nothing else negotiates either, to isolate the placeholder path.
     monkeypatch.setattr(tls, "_try_connect", lambda *a, **k: None)
@@ -258,6 +258,35 @@ def test_probe_records_confirmed_deprecated(monkeypatch):
     supported, deprecated = tls.probe_protocols("198.51.100.1", 443)
     assert "TLSv1.0" in deprecated and "TLSv1.1" in deprecated
     assert "TLSv1.2" in supported and "TLSv1.3" in supported
+
+
+# ─── DROWN must not fire on TLS 1.0+1.1 (CVE-2016-0800 requires SSLv2) ─────────
+
+def test_drown_not_inferred_from_tls10_and_tls11():
+    # The common legacy stack that still offers TLS 1.0 and 1.1. probe_protocols
+    # puts both in `deprecated`; that must not become a confirmed DROWN CRITICAL.
+    assert tls.check_drown(["TLSv1.0", "TLSv1.1"]) is None
+    assert tls.check_drown(["TLSv1.0"]) is None
+    assert tls.check_drown([]) is None
+
+
+def test_drown_only_when_sslv2_confirmed():
+    finding = tls.check_drown(["SSLv2", "TLSv1.0"])
+    assert finding is not None
+    assert finding.severity == "CRITICAL"
+    assert finding.cve == "CVE-2016-0800"
+
+
+def test_probe_tls10_tls11_does_not_emit_drown(monkeypatch):
+    """Full analyzer path: a host that speaks TLS 1.0+1.1 (and 1.2) is not DROWN."""
+    def fake_connect(host, port, min_v, max_v, timeout=5.0, expected_version=None):
+        return expected_version
+    monkeypatch.setattr(tls, "_try_connect", fake_connect)
+    _supported, deprecated = tls.probe_protocols("198.51.100.1", 443)
+    finding = tls.check_drown(deprecated)
+    assert finding is None
+    # Grade without the false CRITICAL is D (two deprecated protocols), not F.
+    assert tls.calculate_grade([], deprecated, None) == "D"
 
 
 # ─── grading ────────────────────────────────────────────────────────────────────
