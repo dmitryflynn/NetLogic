@@ -146,8 +146,7 @@ def probe_protocols(host: str, port: int) -> tuple[list[str], list[str]]:
 
     ``deprecated`` contains only protocols whose support was *confirmed* by a
     successful, version-verified handshake — never an untestable placeholder.
-    This keeps downstream counts (DROWN heuristic, grading) free of false
-    positives.
+    This keeps grading (and any SSLv2-gated checks) free of false positives.
     """
     supported = []
     deprecated = []
@@ -410,17 +409,22 @@ def check_crime(sock: ssl.SSLSocket) -> Optional[TLSFinding]:
     return None
 
 def check_drown(deprecated: list[str]) -> Optional[TLSFinding]:
-    """DROWN: SSLv2 support on same key."""
-    # Can't reliably test SSLv2 from Python; flag if very old protocols found
-    if len(deprecated) >= 2:
-        return TLSFinding(
-            severity="CRITICAL", cvss=9.8, cve="CVE-2016-0800",
-            title="DROWN — Decrypting RSA with Obsolete and Weakened eNcryption",
-            detail="Multiple deprecated protocol versions detected. If SSLv2 is also "
-                   "enabled on this host or shares a key with an SSLv2-enabled server, "
-                   "DROWN attack can decrypt RSA-encrypted TLS sessions."
-        )
-    return None
+    """DROWN (CVE-2016-0800) requires SSLv2 on the host or a shared RSA key.
+
+    Python cannot negotiate SSLv2, so this check must not infer DROWN from
+    TLS 1.0+TLS 1.1 (the only deprecated versions we can actually probe).
+    Those are common on legacy stacks and are already reported as MEDIUM
+    deprecated-protocol findings. Treating them as confirmed DROWN produced
+    a false CRITICAL / grade F on almost every dual-stack TLS 1.0/1.1 host.
+    """
+    if "SSLv2" not in deprecated:
+        return None
+    return TLSFinding(
+        severity="CRITICAL", cvss=9.8, cve="CVE-2016-0800",
+        title="DROWN — Decrypting RSA with Obsolete and Weakened eNcryption",
+        detail="SSLv2 is enabled. DROWN can decrypt RSA-encrypted TLS sessions "
+               "that share this key, including modern TLS connections."
+    )
 
 
 # ─── Grading ─────────────────────────────────────────────────────────────────────
