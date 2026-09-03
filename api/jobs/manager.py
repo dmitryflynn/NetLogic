@@ -153,9 +153,13 @@ class ScanJob:
         # jobs don't emit further events, so this only needs to be self-consistent
         # for any late SSE replay against the reloaded deque.
         job._total_events = len(job.events)
-        # Only if we reload a job that was still actively running, mark it as failed (zombie)
-        # Queued jobs that were waiting for an agent survive restart.
-        if job.status == "running":
+        # In-process scans die with the controller: a running job with no
+        # assigned agent is a zombie and must be failed on reload.
+        # Jobs pinned to an agent survive a controller restart — the agent is
+        # still executing and will POST complete. Failing them here made
+        # try_set_terminal refuse the completion and dropped the scan results.
+        # Dead agents are handled by reclaim_stale_jobs, not by this reload path.
+        if job.status == "running" and not job.assigned_agent_id:
             job.status = "failed"
             job.error = "Scan interrupted by server restart."
             if job.completed_at is None:

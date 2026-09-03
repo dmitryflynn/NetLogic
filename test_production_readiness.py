@@ -257,6 +257,55 @@ class TestAgentLifecycle(unittest.TestCase):
         job_detail = client.get(f"/v1/jobs/{job_id}", headers=self.headers)
         self.assertEqual(job_detail.json()["status"], "completed")
 
+    def test_agent_complete_survives_controller_restart(self):
+        """Controller restart must not fail a running job the agent still owns.
+
+        Previously ScanJob.from_dict marked every running job failed, so the
+        agent's POST /complete was a no-op and scan results were discarded.
+        """
+        from api.jobs.manager import ScanJob, job_manager
+
+        agent_id, token = self._register_agent()
+        agent_headers = {"Authorization": f"Bearer {token}"}
+        client.post(f"/v1/agents/{agent_id}/heartbeat", headers=agent_headers)
+
+        job_resp = client.post(
+            "/v1/jobs",
+            json={"target": "127.0.0.1", "agent_id": agent_id},
+            headers=self.headers,
+        )
+        self.assertEqual(job_resp.status_code, 202, job_resp.text)
+        job_id = job_resp.json()["job_id"]
+
+        tasks_resp = client.get(f"/v1/agents/{agent_id}/tasks", headers=agent_headers)
+        self.assertEqual(tasks_resp.status_code, 200)
+        self.assertEqual(len(tasks_resp.json()), 1)
+
+        events_resp = client.post(
+            f"/v1/agents/{agent_id}/tasks/{job_id}/events",
+            json=[{"type": "port", "data": {"port": 443, "service": "https"}}],
+            headers=agent_headers,
+        )
+        self.assertEqual(events_resp.status_code, 200)
+
+        live = job_manager.get(job_id)
+        self.assertEqual(live.status, "running")
+        reloaded = ScanJob.from_dict(live.to_dict())
+        job_manager._jobs[job_id] = reloaded
+        self.assertEqual(reloaded.status, "running", reloaded.error)
+
+        complete_resp = client.post(
+            f"/v1/agents/{agent_id}/tasks/{job_id}/complete",
+            json={"error": None},
+            headers=agent_headers,
+        )
+        self.assertEqual(complete_resp.status_code, 200, complete_resp.text)
+        self.assertEqual(complete_resp.json()["status"], "completed")
+        detail = client.get(f"/v1/jobs/{job_id}", headers=self.headers)
+        self.assertEqual(detail.json()["status"], "completed")
+        ports = [e for e in detail.json().get("events", []) if e.get("type") == "port"]
+        self.assertTrue(ports, "pre-restart scan events must survive reload")
+
 
 # ── Cross-org isolation ───────────────────────────────────────────────────────
 
