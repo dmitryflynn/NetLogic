@@ -227,14 +227,16 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown — mark any still-running jobs as failed so they don't get
-    # stuck in "running" state after a restart.
+    # Shutdown — fail in-process running jobs (no agent) so they don't come
+    # back as zombies. Jobs assigned to an agent are still executing remotely;
+    # failing them here made POST /complete a no-op and discarded the results.
+    # Queued jobs are still failed here (same as before); they have not started.
     import logging  # noqa: PLC0415
     from api.jobs.manager import job_manager  # noqa: PLC0415
     _log = logging.getLogger("netlogic.api")
     _log.info("NetLogic API shutting down — draining in-flight jobs...")
     for job in list(job_manager._jobs.values()):
-        if job.status in ("running", "queued"):
+        if job.status == "queued" or (job.status == "running" and not job.assigned_agent_id):
             job.status = "failed"
             job.error = "Scan interrupted by server shutdown."
             import time as _time  # noqa: PLC0415

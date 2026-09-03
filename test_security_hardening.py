@@ -241,6 +241,46 @@ class TestPersistedJobRehydration(unittest.TestCase):
             restored = ScanJob.from_dict(data)
         self.assertEqual(restored.config.ai_base_url, "http://127.0.0.1:11434/v1")
 
+    def test_reload_keeps_running_job_assigned_to_an_agent(self):
+        """A remote agent is still executing after a controller restart.
+
+        Marking the durable job failed made POST /complete a no-op
+        (try_set_terminal refuses to leave a terminal state) and discarded
+        the scan results.
+        """
+        from api.jobs.manager import ScanJob, JobManager
+        req = ScanRequest(target="example.com")
+        job = ScanJob(
+            job_id="live-agent-scan", config=req, org_id="acme",
+            status="running", assigned_agent_id="agent-live",
+        )
+        job.started_at = 1.0
+        restored = ScanJob.from_dict(job.to_dict())
+        self.assertEqual(restored.status, "running")
+        self.assertEqual(restored.assigned_agent_id, "agent-live")
+        self.assertIsNone(restored.error)
+
+        mgr = JobManager.__new__(JobManager)
+        mgr._jobs = {restored.job_id: restored}
+        mgr._lock = __import__("threading").RLock()
+        mgr._pg = False
+        mgr._pg_store = None
+        mgr.store = None
+        got, changed = mgr.try_set_terminal(restored.job_id, "completed")
+        self.assertTrue(changed)
+        self.assertEqual(got.status, "completed")
+
+    def test_reload_fails_running_job_with_no_agent(self):
+        """In-process scan thread died with the controller — no agent will complete it."""
+        from api.jobs.manager import ScanJob
+        req = ScanRequest(target="example.com")
+        job = ScanJob(
+            job_id="zombie-scan", config=req, org_id="acme", status="running",
+        )
+        restored = ScanJob.from_dict(job.to_dict())
+        self.assertEqual(restored.status, "failed")
+        self.assertIn("server restart", restored.error or "")
+
 
 class TestJwtRevocation(unittest.TestCase):
     def setUp(self):
