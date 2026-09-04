@@ -978,8 +978,28 @@ def _run_nuclei(ctx, target, ports_open, https_port, timeout, select_nuclei_tags
 
 def _run_verifier2(ctx, host_result, target, build_engine_context, reverify_with_context, run_verifier_test, Signal):
     try:
+        phase1_sigs = ctx.art.get("verifier_signals") or []
+        failed_cves = set()
+        phase1_results = []
+        for s in phase1_sigs:
+            claim = getattr(s, "claim", "") or ""
+            confirmed = bool(getattr(s, "probe_confirmed", False))
+            if claim.startswith("CVE-") and not confirmed:
+                failed_cves.add(claim)
+            phase1_results.append({
+                "claim": claim,
+                "probe_confirmed": confirmed,
+                "evidence": str(getattr(s, "evidence", "") or "")[:300],
+            })
+        if not failed_cves:
+            return
         engine_ctx = build_engine_context(ctx.art)
-        plans = reverify_with_context(engine_ctx, complete=ctx.completer)
+        plans = reverify_with_context(
+            cve_ids=list(failed_cves),
+            phase1_results=phase1_results,
+            context=engine_ctx,
+            complete=ctx.completer,
+        )
         if not plans:
             return
         ctx.emit("progress", {"percent": 97, "status": "Verifier phase 2…"}, message="Re-verifying CVEs with full context…")
