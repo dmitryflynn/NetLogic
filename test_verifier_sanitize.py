@@ -235,3 +235,118 @@ def test_ssh_builtin_plan_is_not_emitted():
         service="ssh", product="OpenSSH", version="9.3", port=22,
     )
     assert plans == []
+
+
+def test_run_verifier2_passes_required_reverify_arguments():
+    """Phase 2 used to call reverify_with_context(engine_ctx, complete=...) which
+    TypeErrors (cve_ids + phase1_results are required). The deep-scan path already
+    passes the right kwargs; the default engine sensor must match."""
+    from types import SimpleNamespace
+
+    from src.engine import _run_verifier2
+    from src.fusion.signals import Signal
+    from src.verifier.planner import reverify_with_context as real_reverify
+
+    # Guard: the broken call shape is still a TypeError against the real API.
+    try:
+        real_reverify({"not": "cves"}, complete=lambda _s, _u: "[]")
+        raise AssertionError("expected TypeError for missing phase1_results")
+    except TypeError as exc:
+        assert "phase1_results" in str(exc)
+
+    called = {}
+
+    def fake_reverify(cve_ids, phase1_results, context=None, complete=None):
+        called["cve_ids"] = list(cve_ids)
+        called["phase1_results"] = phase1_results
+        called["context"] = context
+        called["complete"] = complete
+        return [{"cve_id": "CVE-2021-41773", "port": 80, "path": "/cgi-bin/x", "method": "GET"}]
+
+    def fake_run_test(plan, host):
+        return SimpleNamespace(success=True, evidence=f"GET {plan['path']} → 200", status_code=200)
+
+    completer = lambda _s, _u: "[]"
+    phase1 = Signal(
+        source="verifier", kind="vuln", claim="CVE-2021-41773", host="1.2.3.4",
+        probe_confirmed=False, evidence="phase1 miss",
+    )
+    logs = []
+    ctx = SimpleNamespace(
+        art={"verifier_signals": [phase1]},
+        completer=completer,
+        emit=lambda *a, **k: logs.append((a, k)),
+    )
+    _run_verifier2(
+        ctx, SimpleNamespace(ip="1.2.3.4"), "example.com",
+        lambda art: {"target": "example.com"},
+        fake_reverify, fake_run_test, Signal,
+    )
+
+    assert called["cve_ids"] == ["CVE-2021-41773"]
+    assert called["context"] == {"target": "example.com"}
+    assert called["complete"] is completer
+    assert called["phase1_results"][0]["claim"] == "CVE-2021-41773"
+    assert called["phase1_results"][0]["probe_confirmed"] is False
+    assert any(getattr(s, "probe_confirmed", False) and s.claim == "CVE-2021-41773"
+               for s in ctx.art["verifier_signals"][1:])
+    assert not any(
+        a and a[0] == "log" and isinstance(a[1], dict) and a[1].get("level") == "warn"
+        for a, _k in logs
+    )
+
+
+def test_run_verifier2_skips_when_phase1_already_confirmed():
+    from types import SimpleNamespace
+
+    from src.engine import _run_verifier2
+    from src.fusion.signals import Signal
+
+    def boom(*_a, **_k):
+        raise AssertionError("reverify must not run when every Phase 1 CVE confirmed")
+
+    ctx = SimpleNamespace(
+        art={"verifier_signals": [
+            Signal(source="verifier", kind="vuln", claim="CVE-2021-41773",
+                   host="1.2.3.4", probe_confirmed=True, evidence="already confirmed"),
+        ]},
+        completer=lambda _s, _u: "[]",
+        emit=lambda *_a, **_k: None,
+    )
+    _run_verifier2(
+        ctx, SimpleNamespace(ip="1.2.3.4"), "example.com",
+        boom, boom, boom, Signal,
+    )
+    assert len(ctx.art["verifier_signals"]) == 1
+
+
+def test_run_verifier2_real_reverify_does_not_typeerror():
+    """End-to-end: the live planner API must accept the engine's call (empty plans OK)."""
+    from types import SimpleNamespace
+
+    from src.engine import _run_verifier2
+    from src.fusion.signals import Signal
+    from src.verifier.planner import reverify_with_context
+
+    logs = []
+    ctx = SimpleNamespace(
+        art={"verifier_signals": [
+            Signal(source="verifier", kind="vuln", claim="CVE-2021-41773",
+                   host="1.2.3.4", probe_confirmed=False, evidence="phase1 miss"),
+        ]},
+        completer=lambda _s, _u: "[]",
+        emit=lambda *a, **k: logs.append((a, k)),
+    )
+    _run_verifier2(
+        ctx, SimpleNamespace(ip="1.2.3.4"), "example.com",
+        lambda _art: {"target": "example.com"},
+        reverify_with_context,
+        lambda *_a, **_k: SimpleNamespace(success=False, evidence="", status_code=404),
+        Signal,
+    )
+    warn_texts = [
+        a[1].get("text", "") for a, _k in logs
+        if a and a[0] == "log" and isinstance(a[1], dict) and a[1].get("level") == "warn"
+    ]
+    assert not any("phase1_results" in t or "TypeError" in t for t in warn_texts)
+    assert len(ctx.art["verifier_signals"]) == 1
