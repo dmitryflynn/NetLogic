@@ -566,16 +566,25 @@ class JobManager:
         record — used by capacity eviction on the Postgres backend so trimming
         RAM never destroys job history (the JSON backend has no such distinction
         and always removes the file).
+
+        User deletes (_evict_only=False) must hit Postgres even when the job is
+        no longer in `_jobs`. get()/list() serve cache-evicted history from the
+        DB without rehydrating the cache, so a cache miss is the common case
+        for SaaS history — not a reason to no-op the durable delete.
         """
         with self._lock:
-            if job_id not in self._jobs:
-                return False
-            del self._jobs[job_id]
+            present = job_id in self._jobs
+            if present:
+                del self._jobs[job_id]
 
         if self._pg and self._pg_store is not None:
-            if not _evict_only:
-                self._pg_store.delete_sync(job_id)   # explicit user delete only
-            return True
+            if _evict_only:
+                return present
+            deleted = self._pg_store.delete_sync(job_id)
+            return present or deleted
+
+        if not present:
+            return False
 
         # JSON backend: remove the on-disk record (never follow a malicious job_id).
         path = self.store._safe_path(job_id) if self.store else None
