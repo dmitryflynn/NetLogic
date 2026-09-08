@@ -322,37 +322,54 @@ def probe_shellshock(host: str, port: int, scheme: str = "http",
 
 def probe_spring_actuator(host: str, port: int, scheme: str = "http",
                            timeout: float = 4.0) -> list[CVEProbe]:
-    """Spring Boot actuator endpoint exposure — information disclosure and potential RCE."""
+    """Spring Boot actuator endpoint exposure — information disclosure and potential RCE.
+
+    Confirmation requires actuator-specific body markers, matching
+    ``service_prober.check_http_admin_panels``. A bare HTTP 200 (SPA catch-all,
+    login page after a 3xx, generic JSON error) must not pin CRITICAL findings.
+    """
     probes = []
+    # (path, severity, title, detail, distinctive body markers — any one confirms)
     endpoints = [
         ("/actuator/env",      "CRITICAL", "Spring Boot /actuator/env — Credentials in Environment",
          "All environment variables, Spring properties, and system properties exposed. "
-         "Often contains database URLs with credentials, API keys, and JWT secrets."),
+         "Often contains database URLs with credentials, API keys, and JWT secrets.",
+         ("propertySources", "systemEnvironment")),
         ("/actuator/heapdump", "CRITICAL", "Spring Boot /actuator/heapdump — JVM Memory Dump",
          "JVM heap dump accessible for download. Memory analysis reveals credentials, "
-         "session tokens, cryptographic keys, and sensitive business data."),
+         "session tokens, cryptographic keys, and sensitive business data.",
+         ("JAVA PROFILE", "HPROF")),
         ("/actuator/httptrace","MEDIUM",   "Spring Boot /actuator/httptrace — HTTP Request History",
-         "Recent HTTP request/response pairs exposed including Authorization headers and cookies."),
+         "Recent HTTP request/response pairs exposed including Authorization headers and cookies.",
+         ('"traces"',)),
         ("/actuator/mappings", "MEDIUM",   "Spring Boot /actuator/mappings — Full Route Map",
          "All application routes, controllers, and handler methods enumerated. "
-         "Aids targeted attack planning against internal endpoints."),
+         "Aids targeted attack planning against internal endpoints.",
+         ("dispatcherServlets", "dispatcherHandlers")),
         ("/actuator/beans",    "LOW",      "Spring Boot /actuator/beans — Bean Configuration",
-         "Spring application context bean wiring and component configuration exposed."),
+         "Spring application context bean wiring and component configuration exposed.",
+         ('"contexts"', '"beans"')),
         ("/actuator/loggers",  "MEDIUM",   "Spring Boot /actuator/loggers — Log Level Control",
-         "Actuator loggers endpoint may allow changing log verbosity to capture credentials in logs."),
+         "Actuator loggers endpoint may allow changing log verbosity to capture credentials in logs.",
+         ("configuredLevel", "effectiveLevel")),
     ]
-    for path, severity, title, detail in endpoints:
+    for path, severity, title, detail, markers in endpoints:
         status, body = _http_get(host, port, path, scheme=scheme, timeout=timeout)
-        if status == 200 and body and len(body.strip()) > 5:
-            probes.append(CVEProbe(
-                cve_id="CWE-215",
-                title=title, severity=severity, confirmed=True,
-                detail=detail,
-                evidence=f"GET {path} → HTTP 200 ({len(body)} bytes)",
-                remediation=("Disable actuator endpoints in production: "
-                             "management.endpoints.enabled-by-default=false; "
-                             "require authentication; restrict to admin networks only.")
-            ))
+        if status != 200 or not body:
+            continue
+        body_lower = body.lower()
+        hit = next((m for m in markers if m.lower() in body_lower), None)
+        if hit is None:
+            continue
+        probes.append(CVEProbe(
+            cve_id="CWE-215",
+            title=title, severity=severity, confirmed=True,
+            detail=detail,
+            evidence=f"GET {path} → HTTP 200 ({len(body)} bytes) containing {hit}",
+            remediation=("Disable actuator endpoints in production: "
+                         "management.endpoints.enabled-by-default=false; "
+                         "require authentication; restrict to admin networks only.")
+        ))
     return probes
 
 

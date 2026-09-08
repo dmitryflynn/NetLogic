@@ -333,6 +333,60 @@ def test_spring_actuator_detect_vs_empty(monkeypatch):
     assert vp.probe_spring_actuator("h", 8080) == []
 
 
+def test_spring_actuator_rejects_generic_200(monkeypatch):
+    """SPA catch-all / login HTML / generic JSON must not pin CRITICAL actuator findings.
+
+    service_prober.check_http_admin_panels already requires content markers; the
+    vuln_prober duplicate used to confirm on HTTP 200 + body > 5 bytes, which
+    fusion then pins as un-droppable probe-confirmed CRITICAL.
+    """
+    spa = "<!doctype html><html><head><title>My App</title></head><body>" + "x" * 500 + "</body></html>"
+    monkeypatch.setattr(vp, "_http_get", lambda *a, **k: (200, spa))
+    assert vp.probe_spring_actuator("h", 8080) == []
+
+    monkeypatch.setattr(vp, "_http_get",
+                        lambda *a, **k: (200, '{"error":"Cannot GET /actuator/env","status":404}'))
+    assert vp.probe_spring_actuator("h", 8080) == []
+
+    monkeypatch.setattr(vp, "_http_get",
+                        lambda *a, **k: (200, "<html><form>Sign in</form></html>"))
+    assert vp.probe_spring_actuator("h", 8080) == []
+
+
+def test_spring_actuator_heapdump_requires_hprof_magic(monkeypatch):
+    def fake(host, port, path, **k):
+        if path == "/actuator/heapdump":
+            return (200, "JAVA PROFILE 1.0.2\x00binary heap")
+        return (404, "")
+    monkeypatch.setattr(vp, "_http_get", fake)
+    out = vp.probe_spring_actuator("h", 8080)
+    assert any("heapdump" in p.title.lower() and p.severity == "CRITICAL" for p in out)
+
+    monkeypatch.setattr(vp, "_http_get",
+                        lambda *a, **k: (200, "<html>download starting...</html>"))
+    assert vp.probe_spring_actuator("h", 8080) == []
+
+
+def test_spring_actuator_real_json_still_confirms(monkeypatch):
+    bodies = {
+        "/actuator/env": '{"propertySources":[{"name":"systemEnvironment"}]}',
+        "/actuator/mappings": '{"contexts":{"application":{"mappings":{"dispatcherServlets":{}}}}}',
+        "/actuator/loggers": '{"loggers":{"ROOT":{"configuredLevel":"INFO","effectiveLevel":"INFO"}}}',
+        "/actuator/beans": '{"contexts":{"application":{"beans":{}}}}',
+        "/actuator/httptrace": '{"traces":[]}',
+        "/actuator/heapdump": "HTML download page, not a dump",
+    }
+    monkeypatch.setattr(vp, "_http_get", lambda h, p, path, **k: (200, bodies.get(path, "")))
+    out = vp.probe_spring_actuator("h", 8080)
+    titles = " ".join(p.title for p in out).lower()
+    assert "actuator/env" in titles
+    assert "mappings" in titles
+    assert "loggers" in titles
+    assert "beans" in titles
+    assert "httptrace" in titles
+    assert "heapdump" not in titles
+
+
 def test_phpinfo_requires_table_signature(monkeypatch):
     monkeypatch.setattr(vp, "_http_get",
                         lambda *a, **k: (200, "<html><h1>PHP Version 8.1.2</h1><table border>...</table>"))
