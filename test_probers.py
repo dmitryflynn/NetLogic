@@ -371,6 +371,44 @@ def test_tomcat_default_creds_vs_rejected(monkeypatch):
     assert vp.probe_tomcat_default_creds("h", 8080) is None
 
 
+def test_tomcat_rejects_generic_200(monkeypatch):
+    """SPA catch-all / login HTML / generic 200 must not pin CRITICAL Tomcat manager.
+
+    service_prober.check_http_admin_panels already requires Tomcat markers; the
+    vuln_prober duplicate used to confirm CWE-306 on any HTTP 200 for /manager/html.
+    urllib follows 3xx by default, so a 302-to-login also arrived as status 200.
+    Fusion then pins probe-confirmed CRITICAL as un-droppable.
+    """
+    spa = "<!doctype html><html><head><title>My App</title></head><body>" + "x" * 500 + "</body></html>"
+    monkeypatch.setattr(vp, "_http_get", lambda *a, **k: (200, spa))
+    assert vp.probe_tomcat_default_creds("h", 8080) is None
+
+    monkeypatch.setattr(vp, "_http_get",
+                        lambda *a, **k: (200, "<html><form>Sign in</form></html>"))
+    assert vp.probe_tomcat_default_creds("h", 8080) is None
+
+    monkeypatch.setattr(vp, "_http_get",
+                        lambda *a, **k: (200, '{"error":"Cannot GET /manager/html","status":404}'))
+    assert vp.probe_tomcat_default_creds("h", 8080) is None
+
+
+def test_tomcat_unauthenticated_real_manager_confirms(monkeypatch):
+    monkeypatch.setattr(vp, "_http_get",
+                        lambda *a, **k: (200, "<html><title>Tomcat Web Application Manager</title></html>"))
+    f = vp.probe_tomcat_default_creds("h", 8080)
+    assert f and f.confirmed and f.cve_id == "CWE-306" and f.severity == "CRITICAL"
+
+
+def test_tomcat_default_creds_generic_200_after_auth_rejected(monkeypatch):
+    """A 401 wall that turns into a generic 200 for any Basic auth is not Tomcat."""
+    def fake(host, port, path, scheme="http", timeout=5.0, headers=None):
+        if headers and "Authorization" in headers:
+            return (200, "<html><body>welcome</body></html>")
+        return (401, "")
+    monkeypatch.setattr(vp, "_http_get", fake)
+    assert vp.probe_tomcat_default_creds("h", 8080) is None
+
+
 def test_open_redirect_requires_reflected_marker(monkeypatch):
     class FakeResp:
         def __init__(self, code, loc):

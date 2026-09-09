@@ -429,20 +429,42 @@ def probe_backup_files(host: str, port: int, scheme: str = "http",
     return findings
 
 
-def probe_tomcat_default_creds(host: str, port: int, timeout: float = 5.0) -> Optional[CVEProbe]:
-    """Apache Tomcat manager — default/weak credential brute-force."""
+# Distinctive Tomcat manager HTML — same markers as service_prober.check_http_admin_panels.
+# A bare HTTP 200 (SPA catch-all, login page after urllib followed a 3xx, generic 404
+# document) must not pin CWE-306 CRITICAL; fusion treats probe-confirmed findings as
+# un-droppable.
+_TOMCAT_MANAGER_MARKERS = ("Tomcat Web Application Manager", "Manager Application", "html-manager")
+
+
+def _is_tomcat_manager_body(body: Optional[str]) -> bool:
+    if not body:
+        return False
+    lower = body.lower()
+    return any(m.lower() in lower for m in _TOMCAT_MANAGER_MARKERS)
+
+
+def probe_tomcat_default_creds(host: str, port: int, scheme: str = "http",
+                               timeout: float = 5.0) -> Optional[CVEProbe]:
+    """Apache Tomcat manager — unauthenticated access or default/weak credentials.
+
+    Confirmation requires Tomcat manager HTML in the 200 body, matching
+    ``service_prober.check_http_admin_panels``. A bare HTTP 200 must not pin
+    CRITICAL CWE-306 / CWE-521 findings.
+    """
     # First check if manager exists
-    status, body = _http_get(host, port, "/manager/html", timeout=timeout)
+    status, body = _http_get(host, port, "/manager/html", scheme=scheme, timeout=timeout)
     if status not in (200, 401):
         return None
     if status == 200:
+        if not _is_tomcat_manager_body(body):
+            return None
         return CVEProbe(
             cve_id="CWE-306",
             title="Tomcat Manager — Unauthenticated Access",
             severity="CRITICAL", confirmed=True,
             detail="Apache Tomcat manager (/manager/html) accessible without any authentication. "
                    "WAR file deployment capability = arbitrary code execution on the server.",
-            evidence="GET /manager/html → HTTP 200 (no authentication required)",
+            evidence="GET /manager/html → HTTP 200 (no authentication required) with Tomcat manager HTML",
             remediation="Require authentication for Tomcat manager; restrict to 127.0.0.1; remove manager from production."
         )
     if status == 401:
@@ -453,16 +475,16 @@ def probe_tomcat_default_creds(host: str, port: int, timeout: float = 5.0) -> Op
         ]
         for username, password in default_creds:
             cred_b64 = base64.b64encode(f"{username}:{password}".encode()).decode()
-            s, b = _http_get(host, port, "/manager/html", timeout=timeout,
+            s, b = _http_get(host, port, "/manager/html", scheme=scheme, timeout=timeout,
                              headers={"Authorization": f"Basic {cred_b64}"})
-            if s == 200:
+            if s == 200 and _is_tomcat_manager_body(b):
                 return CVEProbe(
                     cve_id="CWE-521",
                     title=f"Tomcat Manager — Default Credentials ({username}:{password or '<empty>'})",
                     severity="CRITICAL", confirmed=True,
                     detail=(f"Tomcat manager authenticated with default credentials {username}:{password or '<empty>'}. "
                             "Arbitrary WAR deployment = full server code execution as the Tomcat service user."),
-                    evidence=f"GET /manager/html with {username}:{password or '<empty>'} → HTTP 200",
+                    evidence=f"GET /manager/html with {username}:{password or '<empty>'} → HTTP 200 with Tomcat manager HTML",
                     remediation="Change all Tomcat manager credentials; restrict manager access to admin IPs; "
                                 "consider removing manager webapp from production."
                 )
@@ -770,7 +792,7 @@ def probe_web_vulnerabilities(target: str, ports: list,
         if port in (8080, 8443, 8000, 8001, 8008, 8888) or svc in ("http-alt", "https-alt"):
             for probe in probe_spring_actuator(target, port, scheme=scheme, timeout=timeout):
                 _add(probe)
-            _add(probe_tomcat_default_creds(target, port, timeout=timeout))
+            _add(probe_tomcat_default_creds(target, port, scheme=scheme, timeout=timeout))
 
         # Grafana
         if svc == "grafana" or port == 3000:
