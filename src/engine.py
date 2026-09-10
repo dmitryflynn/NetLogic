@@ -372,6 +372,8 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
                 complete=_ai_complete,
             )
         except Exception as exc:  # noqa: BLE001
+            from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+            reraise_if_cancelled(exc)
             _emit("log", {"text": f"SensorDirector: {exc}", "level": "warn"})
 
     # ── Build initial StepContext ──
@@ -398,8 +400,9 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
             try:
                 from src.reasoning import generators  # noqa: PLC0415
                 generators.populate(_rs)
-            except Exception:  # noqa: BLE001 — seeding must never break a scan
-                pass
+            except Exception as exc:  # noqa: BLE001 — seeding must never break a scan
+                from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+                reraise_if_cancelled(exc)
     _ctx.state = _rs
     _ctx.completer = _ai_complete
     _ctx.extras["sensor_plan"] = _sensor_plan
@@ -496,6 +499,8 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
                                         "capability_gaps": _cap_gaps},
                   message=f"Active validation: {_confirmed} hypothesis(es) confirmed via safe checks")
         except Exception as exc:  # noqa: BLE001 — validation must never break a scan
+            from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+            reraise_if_cancelled(exc)
             _emit("log", {"text": f"Active validation: {exc}", "level": "warn"})
 
     # ── AI Investigation Agent (opt-in) — engine baselined; AI drives tools ──
@@ -548,6 +553,8 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
                       f"{art['ai_agent'].get('steps_used', 0)} steps"
                   ))
         except Exception as exc:  # noqa: BLE001 — agent must never break a scan
+            from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+            reraise_if_cancelled(exc)
             _emit("log", {"text": f"AI investigation agent: {exc}", "level": "warn"})
 
     # ── Fusion pipeline (sensors → gate → AI adjudication → unified analysis) ──
@@ -596,6 +603,8 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
                     ai_evt["beyond_cves"] = bc
                 _emit("ai", ai_evt)
         except Exception as e:
+            from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+            reraise_if_cancelled(e)
             _emit("log", {"text": f"Fusion: {e}", "level": "warn"})
 
     # ── Iterative re-probe loop: resolve potential findings via targeted probes ──
@@ -661,6 +670,8 @@ def run_scan(target: str, ports: list, args, emit=None) -> dict:
                                 _updated_vulns.append(_r)
                         art["fusion"]["detected_vulnerabilities"] = _updated_vulns
             except Exception as exc:  # noqa: BLE001
+                from src.cancel import reraise_if_cancelled  # noqa: PLC0415
+                reraise_if_cancelled(exc)
                 _emit("log", {"text": f"Re-probe loop: {exc}", "level": "warn"})
 
     # ── Legacy AI analysis (fallback when fusion did not produce AI analysis) ──

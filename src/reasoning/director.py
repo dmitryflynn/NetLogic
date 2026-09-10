@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional
 
+from src.cancel import reraise_if_cancelled
 from src.reasoning.budget import BudgetManager
 from src.reasoning.memory import MemoryStore
 from src.reasoning.registry import SensorStep, StepContext
@@ -131,6 +132,7 @@ class ReconDirector:
             try:
                 self._run_multi_host(state, ctx)
             except Exception as exc:  # noqa: BLE001 — multi-host must never break a single-host scan
+                reraise_if_cancelled(exc)
                 log.warning("multi-host dispatch failed (%s) — primary host result kept", exc)
 
         # Phase 8 (analysis-only): run the GoalPlanner over the generated objectives so the
@@ -142,7 +144,8 @@ class ReconDirector:
             state.execution.investigation_plans = plans
             if plans:
                 ctx.emit("reasoning", {"event": "planned", "plans": len(plans)})
-        except Exception:  # noqa: BLE001 — planning must never break a scan
+        except Exception as exc:  # noqa: BLE001 — planning must never break a scan
+            reraise_if_cancelled(exc)
             log.warning("investigation planning skipped", exc_info=True)
 
         # Integrity audit — catch state corruption immediately (fail-soft: log, never abort).
@@ -154,14 +157,15 @@ class ReconDirector:
                 for i in issues:
                     if i.severity in ("error", "fatal"):
                         log.warning("reasoning audit %s [%s] %s", i.severity, i.code, i.message)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            reraise_if_cancelled(exc)
 
         state.execution.budget = self.budget.to_dict()
         if self.persist:
             try:
                 self.persist(state)
-            except Exception:
+            except Exception as exc:
+                reraise_if_cancelled(exc)
                 log.warning("reasoning persistence skipped", exc_info=True)
         return state
 
@@ -203,8 +207,8 @@ class ReconDirector:
             if self.refresh:
                 try:
                     self.refresh(state, ctx.art)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    reraise_if_cancelled(exc)
             gained = bool(obs) or self._contested_count(state) < before
             no_gain = 0 if gained else no_gain + 1
 
@@ -270,6 +274,7 @@ class ReconDirector:
             try:
                 self._reason_one_host(child_state, host_ctx, child_budget)
             except Exception as exc:  # noqa: BLE001 — one host's failure must not abort the world
+                reraise_if_cancelled(exc)
                 log.warning("host %s reasoning failed (%s)", host, exc)
                 continue
             expanded.append(host)
@@ -318,9 +323,11 @@ class ReconDirector:
                     ctx.emit("reasoning", {"event": "candidate_selected",
                                            "source": cand.source, "kind": cand.kind})
                 except Exception as e:  # noqa: BLE001
+                    reraise_if_cancelled(e)
                     log.warning("candidate instantiation failed (%s): %s", cand.kind, e)
             return out
         except Exception as exc:  # noqa: BLE001
+            reraise_if_cancelled(exc)
             log.warning("candidate selection failed (%s) — baseline intents only", exc)
             return []
 
@@ -422,8 +429,8 @@ class ReconDirector:
             if self.refresh:
                 try:
                     self.refresh(state, ctx.art)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    reraise_if_cancelled(exc)
 
             # Deterministic inference: resolve framework hypotheses from evidence CONTENT
             # (rule packs) — confirms/refutes, satisfies objectives, records contradictions.
@@ -442,10 +449,10 @@ class ReconDirector:
                     from src.reasoning.provenance import ProvenanceBuilder  # noqa: PLC0415
                     prov = ProvenanceBuilder().build(state, inference_steps)
                     state.execution.provenance = prov.to_dict()
-                except Exception:  # noqa: BLE001
-                    pass
-            except Exception:  # noqa: BLE001
-                pass
+                except Exception as exc:  # noqa: BLE001
+                    reraise_if_cancelled(exc)
+            except Exception as exc:  # noqa: BLE001
+                reraise_if_cancelled(exc)
 
             # Novel-vulnerability inference (Track C): deterministically REFUTE or mark LIKELY the
             # novel hypotheses C1 invented, from the same evidence blob. Never CONFIRMS (that needs
@@ -458,8 +465,8 @@ class ReconDirector:
                         "decision": s.decision, "evidence_ids": list(s.evidence_refs),
                         "supporting_obs": [s.rule], "confidence_delta": 0.0,
                         "rule_applied": f"inference:{s.rule}", "ai_summary": ""})
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                reraise_if_cancelled(exc)
 
             # Satisfy objectives whose discriminating evidence arrived this cycle (by type;
             # content-based satisfaction above takes precedence). `evidence_for` honors an
@@ -497,6 +504,7 @@ class ReconDirector:
                                     "gathered": len(succeeded_ev),
                                     "dead_ends": len(feedback.dead_ends)})
         except Exception as exc:
+            reraise_if_cancelled(exc)
             log.warning("Phase 3 cycle failed (%s) — continuing with Phase 2 results", exc)
 
     def _run_cognitive_layer(self, state: ReasoningState, ctx: StepContext):
@@ -532,6 +540,7 @@ class ReconDirector:
                 tasks, ctx=VerifierContext(known_objectives=known, known_observation_ids=known_obs),
             )
         except Exception as exc:  # noqa: BLE001 — any cognitive-layer failure contributes nothing
+            reraise_if_cancelled(exc)
             log.warning("cognitive layer skipped (%s)", exc)
             return None
 
@@ -588,6 +597,7 @@ class ReconDirector:
                                        stage_failed=rec.stage_failed, reasons=rec.reasons),
                         trigger="rejected")
         except Exception as exc:  # noqa: BLE001 — designer failure never breaks the scan
+            reraise_if_cancelled(exc)
             log.warning("investigation designer skipped (%s)", exc)
 
         # Record rejections too, so the replay shows what the pipeline caught and why.
@@ -621,6 +631,7 @@ class ReconDirector:
             from src.reasoning.ai.sanitize import sanitize_ai_text  # noqa: PLC0415
             decisions = FindingAdjudicator(completer).decide(state)
         except Exception as exc:  # noqa: BLE001 — adjudication never breaks the scan
+            reraise_if_cancelled(exc)
             log.warning("ai adjudication skipped (%s)", exc)
             return
         if not decisions:
@@ -654,8 +665,8 @@ class ReconDirector:
                         rationale=rationale, outcome=("refuted" if verdict == "ruled_out"
                                                       else "possible" if verdict == "likely_exploitable"
                                                       else "unresolved"))
-                except Exception:  # noqa: BLE001 — transcript is a nicety, not load-bearing
-                    pass
+                except Exception as exc:  # noqa: BLE001 — transcript is a nicety, not load-bearing
+                    reraise_if_cancelled(exc)
         ctx.emit("reasoning", {"event": "ai_adjudication", "decided": applied})
 
     @staticmethod
@@ -680,7 +691,6 @@ class ReconDirector:
         try:
             return step.run(ctx) or []
         except Exception as exc:
-            from src.cancel import reraise_if_cancelled  # noqa: PLC0415
             reraise_if_cancelled(exc)
             log.warning("sensor step %s failed (%s)", step.name, exc)
             return []
