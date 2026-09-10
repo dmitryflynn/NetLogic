@@ -2,6 +2,8 @@
 
 Uses synthetic SensorSteps so the loop machinery is tested without network or AI.
 """
+import pytest
+
 from src.reasoning import (BudgetManager, ReconDirector, ReasoningState, Scheduler,
                            SensorStep, StepContext, StrategyManager)
 
@@ -136,3 +138,52 @@ def test_loop_runs_deterministically_without_ai_key():
                              [], has_ai_key=False, executor=_fake_executor)
     director.run(StepContext("ex.com", _contested_state(), {}, lambda t, d=None: events.append(t)))
     assert any(t == "reasoning" for t in events)
+
+
+class JobCancelled(Exception):
+    """Mirrors api.jobs.manager.JobCancelled — cancel.py matches on the type name."""
+
+
+def test_phase3_cycle_reraises_job_cancelled(monkeypatch):
+    """Cancel during Phase 3 must unwind the scan.
+
+    The director used to log ``Phase 3 cycle failed`` and continue into fusion / AI
+    after the operator hit Cancel, so probes kept running on a cancelled job.
+    """
+    def boom(*_a, **_k):
+        raise JobCancelled("job-1")
+
+    monkeypatch.setattr("src.reasoning.generators.populate", boom)
+    director = ReconDirector(Scheduler(), StrategyManager(), BudgetManager.for_tier("local"),
+                             [], has_ai_key=False, executor=_fake_executor)
+    assert director._phase3_initialized
+    ctx = StepContext("ex.com", ReasoningState(target="ex.com", scope=["ex.com"]),
+                      {}, lambda *_a, **_k: None)
+    with pytest.raises(JobCancelled):
+        director._run_phase3_cycle(ctx.state, ctx)
+
+
+def test_director_planning_reraises_job_cancelled(monkeypatch):
+    """Cancel during investigation-planning emit must not be swallowed as 'skipped'."""
+    def boom(*_a, **_k):
+        raise JobCancelled("job-1")
+
+    monkeypatch.setattr("src.reasoning.planning_pass.plan_investigations", boom)
+    director = ReconDirector(Scheduler(), StrategyManager(), BudgetManager.for_tier("hosted"),
+                             [], has_ai_key=False, executor=_fake_executor)
+    with pytest.raises(JobCancelled):
+        director.run(StepContext("ex.com", _contested_state(), {}, lambda *_a, **_k: None))
+
+
+def test_multi_host_reraises_job_cancelled_from_child(monkeypatch):
+    """A cancelled multi-host dispatch must stop the scan, not keep the primary and continue."""
+    def boom(*_a, **_k):
+        raise JobCancelled("job-1")
+
+    monkeypatch.setattr(ReconDirector, "_run_multi_host", boom)
+    state = _contested_state()
+    state.world_modeling_enabled = True
+    director = ReconDirector(Scheduler(), StrategyManager(), BudgetManager.for_tier("hosted"),
+                             [], has_ai_key=False, executor=_fake_executor)
+    with pytest.raises(JobCancelled):
+        director.run(StepContext("ex.com", state, {}, lambda *_a, **_k: None))
