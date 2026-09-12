@@ -294,15 +294,20 @@ def check_kubernetes_noauth(host: str, port: int = 6443, timeout: float = 4.0) -
         status, _, body = result
         if status == 401 or status == 403:
             return None  # Auth enforced
-        if status == 200 and ("serverAddressByClientCIDRs" in body or '"kind":"APIVersions"' in body.replace(" ", "")
-                              or '"versions"' in body):
+        if status == 200:
             try:
                 data = json.loads(body)
             except Exception:
                 continue
             if not isinstance(data, dict):
                 continue
-            if "serverAddressByClientCIDRs" not in data and "versions" not in data:
+            # kube-apiserver GET /api is kind=APIVersions (usually with
+            # serverAddressByClientCIDRs). A generic {"versions":[...]} REST
+            # envelope is not enough — same FP class as docker requiring ApiVersion.
+            kind = str(data.get("kind") or "")
+            if kind != "APIVersions" and "serverAddressByClientCIDRs" not in data:
+                continue
+            if not isinstance(data.get("versions"), list):
                 continue
             return ServiceFinding(
                 service="k8s-api", port=port, severity="CRITICAL",
@@ -346,16 +351,25 @@ def check_consul_noauth(host: str, port: int = 8500, timeout: float = 4.0) -> Op
     result = _http_get(host, port, "/v1/catalog/services", timeout=timeout)
     if not result:
         return None
-    status, _, body = result
+    status, hdrs, body = result
     if status == 403:
         return None
-    if status == 200 and body.strip().startswith("{"):
+    if status == 200:
         try:
             services = json.loads(body)
-            svc_count = len(services)
-            svc_sample = list(services.keys())[:5]
         except Exception:
-            svc_count, svc_sample = 0, []
+            return None
+        if not isinstance(services, dict):
+            return None
+        # Catalog is map[string][]string. Reject generic JSON objects
+        # ({"status":"ok"}) the way docker rejects a 200 without ApiVersion.
+        if not all(isinstance(v, list) for v in services.values()):
+            return None
+        has_consul_index = any(str(k).lower() == "x-consul-index" for k in (hdrs or {}))
+        if not has_consul_index and "consul" not in services:
+            return None
+        svc_count = len(services)
+        svc_sample = list(services.keys())[:5]
         return ServiceFinding(
             service="consul-http", port=port, severity="HIGH",
             title="Consul — Unauthenticated API Access",
