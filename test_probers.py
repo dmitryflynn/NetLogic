@@ -142,6 +142,49 @@ def test_k8s_html_docs_not_anonymous_api(monkeypatch):
     assert sp.check_kubernetes_noauth("h", 6443) is None
 
 
+def test_k8s_generic_versions_json_not_anonymous_api(monkeypatch):
+    """A versioned REST envelope on 6443 is not kube-apiserver. Fusion pins this CRITICAL."""
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, '{"versions":["v1"]}'))
+    assert sp.check_kubernetes_noauth("h", 6443) is None
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, '{"status":"ok","versions":[]}'))
+    assert sp.check_kubernetes_noauth("h", 6443) is None
+
+
+def test_k8s_apiversions_still_detected(monkeypatch):
+    body = (
+        '{"kind":"APIVersions","versions":["v1"],'
+        '"serverAddressByClientCIDRs":[{"clientCIDR":"0.0.0.0/0","serverAddress":"10.0.0.1:6443"}]}'
+    )
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, body))
+    f = sp.check_kubernetes_noauth("h", 6443)
+    assert f and f.severity == "CRITICAL"
+    # Either identity field is enough; 401/403 still means auth is enforced.
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, '{"kind":"APIVersions","versions":["v1"]}'))
+    assert sp.check_kubernetes_noauth("h", 6443).severity == "CRITICAL"
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (401, {}, '{"kind":"Status"}'))
+    assert sp.check_kubernetes_noauth("h", 6443) is None
+
+
+def test_consul_generic_json_not_unauth_api(monkeypatch):
+    """Any JSON object on 8500 used to confirm HIGH Consul exposure."""
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, '{"status":"ok"}'))
+    assert sp.check_consul_noauth("h", 8500) is None
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, "{}"))
+    assert sp.check_consul_noauth("h", 8500) is None
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, '{"web":"not-a-tag-list"}'))
+    assert sp.check_consul_noauth("h", 8500) is None
+
+
+def test_consul_catalog_still_detected(monkeypatch):
+    monkeypatch.setattr(sp, "_http_get",
+                        lambda *a, **k: (200, {"X-Consul-Index": "42"}, '{"consul":[],"web":["http"]}'))
+    f = sp.check_consul_noauth("h", 8500)
+    assert f and f.severity == "HIGH" and "consul" in f.detail
+    # Default self-registration is enough even without the Consul header.
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, '{"consul":[]}'))
+    assert sp.check_consul_noauth("h", 8500).severity == "HIGH"
+
+
 def test_etcd_health_is_not_kv_access(monkeypatch):
     def fake(host, port, path, **k):
         if path == "/health":
