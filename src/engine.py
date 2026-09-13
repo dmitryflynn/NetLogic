@@ -987,11 +987,13 @@ def _run_verifier2(ctx, host_result, target, build_engine_context, reverify_with
         for plan in plans[:5]:
             port = plan.get("port", 443)
             result = run_verifier_test(plan, host=host_result.ip or target)
+            if not result.success:
+                continue
             signals.append(Signal(
                 source="verifier", kind="vuln", claim=plan.get("cve_id", "reverify"),
                 host=host_result.ip or target, port=port,
                 reliability="high", evidence=result.evidence or "re-verified",
-                exploit_available=result.success, probe_confirmed=result.success,
+                exploit_available=True, probe_confirmed=True,
                 observed_data={"reason": "reverify", "plan": plan, "status": result.status_code},
                 exposure={"reachability": "public"}))
         for s in signals:

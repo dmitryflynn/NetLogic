@@ -112,6 +112,33 @@ def test_version_matched_exploitable_critical_is_discarded():
     assert v.decision == "discarded"
 
 
+def test_failed_verifier_does_not_corroborate_version_match():
+    """A failed active test is not a second independent source.
+
+    Before the fix, source=verifier + reliability=high + probe_confirmed=False
+    broke the version-only guard and auto-confirmed the banner CVE.
+    """
+    [v] = adjudicate([
+        _sig("nvd", "CVE-2021-40438", reliability="medium", cvss=9.1, version_matched=True),
+        _sig("verifier", "CVE-2021-40438", reliability="high", cvss=9.1,
+             probe_confirmed=False, version_matched=False,
+             evidence="GET /?unix://… → HTTP 404"),
+    ])
+    assert v.decision == "discarded"
+    assert v.pinned is False
+
+
+def test_confirmed_verifier_still_pins():
+    [v] = adjudicate([
+        _sig("nvd", "CVE-2021-40438", reliability="medium", cvss=9.1, version_matched=True),
+        _sig("verifier", "CVE-2021-40438", reliability="high", cvss=9.1,
+             probe_confirmed=True, version_matched=False,
+             evidence="GET /?unix://… → HTTP 502 AH00957"),
+    ])
+    assert v.decision == "confirmed"
+    assert v.pinned is True
+
+
 # ── Deterministic, exposure-aware impact ────────────────────────────────────────
 
 def test_impact_kev_is_critical():

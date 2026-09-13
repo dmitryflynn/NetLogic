@@ -88,8 +88,21 @@ def _impact_of(signals: list[Signal]) -> str:
     return base
 
 
+def _evidential(signals: list[Signal]) -> list[Signal]:
+    """Signals that actually support the claim.
+
+    A verifier/re-probe attempt that did not confirm is not independent evidence.
+    Counting it as a high-reliability source would auto-confirm every banner CVE
+    the planner merely *tried* to test (404, generic 502, connection error).
+    """
+    return [
+        s for s in signals
+        if not (s.source == "verifier" and not s.is_probe_confirmed)
+    ]
+
+
 def _is_version_only(signals: list[Signal]) -> bool:
-    """True when every signal is a banner/version/pattern match and none is probe-confirmed.
+    """True when every evidential signal is a banner/version/pattern match.
 
     Pattern matches are investigation *leads*, never findings — the AI cannot
     confirm or deny patch level from a version string (distros backport fixes).
@@ -121,12 +134,20 @@ def _adjudicate_group(signals: list[Signal]) -> Verdict:
     host = signals[0].host
     port = signals[0].port
     claim = signals[0].claim
-    impact = _impact_of(signals)
-    sources = {s.source for s in signals}
+    evidence = _evidential(signals)
+    if not evidence:
+        return Verdict(
+            host=host, port=port, claim=claim, decision="discarded",
+            impact="low", pinned=False, agreement=0,
+            rationale="failed verifier/re-probe only — not independent evidence",
+            signals=list(signals),
+        )
+    impact = _impact_of(evidence)
+    sources = {s.source for s in evidence}
     agreement = len(sources)
-    has_high = any(s.reliability == "high" for s in signals)
-    version_only = _is_version_only(signals)
-    pinned = _is_pinned(signals, impact)
+    has_high = any(s.reliability == "high" for s in evidence)
+    version_only = _is_version_only(evidence)
+    pinned = _is_pinned(evidence, impact)
 
     # Pattern/version matches are NEVER findings. They may seed active validation
     # elsewhere, but must not enter confirmed/potential/gray report surfaces.
