@@ -139,6 +139,34 @@ def test_ai_agent_tool_confirm_pins_over_version_only_discard():
     assert "CVE-2021-31166" in cv_ids
 
 
+def test_failed_verifier_signals_are_not_extracted():
+    from src.fusion.signals import Signal
+
+    art = {
+        "host_result": {"ip": "203.0.113.5", "target": "example.com",
+                        "ports": [{"port": 80, "service": "http"}]},
+        "vuln_matches": [{
+            "port": 80, "service": "http", "product": "apache", "version": "2.4.41",
+            "detection_confidence": "HIGH",
+            "cves": [{"id": "CVE-2021-40438", "cvss_score": 9.1, "kev": False,
+                      "description": "mod_proxy SSRF"}],
+        }],
+        "verifier_signals": [
+            Signal(source="verifier", kind="vuln", claim="CVE-2021-40438",
+                   host="203.0.113.5", port=80, reliability="high",
+                   probe_confirmed=False, evidence="GET /?unix://… → HTTP 404"),
+        ],
+    }
+    sigs = signals_from_artifacts(art)
+    verifier = [s for s in sigs if s.source == "verifier"]
+    assert verifier == []
+    fusion = run_fusion(art, skip_synthesis=True)
+    confirmed = {r["subject"] for r in fusion["confirmed"]}
+    discarded = {r["subject"] for r in fusion["discarded"]}
+    assert "CVE-2021-40438" not in confirmed
+    assert "CVE-2021-40438" in discarded
+
+
 def test_high_impact_version_match_is_discarded_not_potential():
     fusion = run_fusion(_artifacts())
     potential = {r["subject"] for r in fusion["potential"]}

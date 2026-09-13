@@ -79,7 +79,11 @@ def run_verifier(
             exposure=exposure or {"reachability": "unknown"},
             raw_metadata={"verification_plan": plan, "error": result.error} if result.error else {"verification_plan": plan},
         )
-        signals.append(sig)
+        # Failed tests are not evidence. Emitting them as high-reliability
+        # signals lets the fusion gate treat "we tried a probe" as corroboration
+        # of the banner CVE and auto-confirm it.
+        if result.success:
+            signals.append(sig)
 
         log.info("Verifier [%s] %s %s → %s (%s)",
                  cve_id, plan.get("method", "GET"), plan.get("path", "/"),

@@ -63,8 +63,14 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
     "CVE-2021-40438": [
         {"cve_id": "CVE-2021-40438", "method": "GET",
          "path": "/?unix:///var/run/example.socket|http://127.0.0.1:80/",
-         "expected_status": [400, 502], "expected_body_patterns": ["proxy", "Bad Gateway"],
-         "port": 80, "tls": False, "evidence_hint": "mod_proxy SSRF — expect 502 Bad Gateway with proxy error"},
+         "expected_status": [400, 502],
+         # Generic nginx/cloud 502 pages say "Bad Gateway" / "proxy" — that is not
+         # proof of Apache mod_proxy SSRF. Require a distinctive httpd error.
+         "expected_body_patterns": [
+             "AH00957", "AH00959", "AH01114",
+             "No protocol handler was valid", "mod_proxy", "proxy: unix:",
+         ],
+         "port": 80, "tls": False, "evidence_hint": "mod_proxy SSRF — Apache proxy error, not a generic 502"},
     ],
     "CVE-2021-44790": [
         {"cve_id": "CVE-2021-44790", "method": "POST",
@@ -95,7 +101,7 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
     "CVE-2024-38475": [
         {"cve_id": "CVE-2024-38475", "method": "GET",
          "path": "/?%7", "expected_status": [400, 500, 502],
-         "expected_body_patterns": ["error", "Internal Server Error"],
+         "expected_body_patterns": ["mod_rewrite", "AH10411", "AH10412"],
          "port": 80, "tls": False, "evidence_hint": "mod_rewrite improper escaping"},
     ],
     "CVE-2024-38476": [
@@ -119,7 +125,8 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
     "CVE-2021-26691": [
         {"cve_id": "CVE-2021-26691", "method": "GET",
          "path": "/", "headers": {"Session": "malicious"},
-         "expected_status": [500, 400], "expected_body_patterns": ["Internal Server Error"],
+         "expected_status": [500, 400],
+         "expected_body_patterns": ["mod_session", "AH00604"],
          "port": 80, "tls": False, "evidence_hint": "mod_session heap overflow via crafted Session header"},
     ],
     "CVE-2022-22721": [

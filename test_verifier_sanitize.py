@@ -229,6 +229,62 @@ def test_run_test_coerces_status_and_patterns(monkeypatch):
     assert result.success is True
 
 
+def test_generic_nginx_502_does_not_confirm_mod_proxy_ssrf(monkeypatch):
+    """A front-proxy 502 Bad Gateway is not proof of CVE-2021-40438."""
+    plans = generate_plans_for_cves(
+        [{"id": "CVE-2021-40438", "cvss_score": 9.1, "description": "mod_proxy SSRF"}],
+        service="http", product="Apache", version="2.4.41", port=80,
+    )
+    assert len(plans) == 1
+
+    def fake_send(host, port, payload, timeout=5.0, use_tls=False):
+        return (
+            b"HTTP/1.0 502 Bad Gateway\r\n\r\n"
+            b"<html><head><title>502 Bad Gateway</title></head>"
+            b"<body><center><h1>502 Bad Gateway</h1></center>"
+            b"<hr><center>nginx</center></body></html>",
+            1.0, "",
+        )
+
+    monkeypatch.setattr("src.verifier.runner._tcp_send_recv", fake_send)
+    result = run_test(plans[0], "203.0.113.5")
+    assert result.success is False
+
+
+def test_apache_mod_proxy_error_confirms_ssrf_plan(monkeypatch):
+    plans = generate_plans_for_cves(
+        [{"id": "CVE-2021-40438", "cvss_score": 9.1, "description": "mod_proxy SSRF"}],
+        service="http", product="Apache", version="2.4.41", port=80,
+    )
+
+    def fake_send(host, port, payload, timeout=5.0, use_tls=False):
+        return (
+            b"HTTP/1.0 502 Bad Gateway\r\n\r\n"
+            b"AH00957: HTTP: attempt to connect to 127.0.0.1:80 failed\n"
+            b"proxy: unix:/var/run/example.socket",
+            1.0, "",
+        )
+
+    monkeypatch.setattr("src.verifier.runner._tcp_send_recv", fake_send)
+    result = run_test(plans[0], "203.0.113.5")
+    assert result.success is True
+
+
+def test_run_verifier_omits_failed_tests(monkeypatch):
+    from src.verifier.engine import run_verifier
+
+    monkeypatch.setattr(
+        "src.verifier.runner._tcp_send_recv",
+        lambda *a, **k: (b"HTTP/1.0 404 Not Found\r\n\r\nmissing", 1.0, ""),
+    )
+    sigs = run_verifier(
+        host="203.0.113.5", port=80, service="http",
+        product="Apache", version="2.4.41",
+        cves=[{"id": "CVE-2021-40438", "cvss_score": 9.1, "description": "ssrf"}],
+    )
+    assert sigs == []
+
+
 def test_ssh_builtin_plan_is_not_emitted():
     plans = generate_plans_for_cves(
         [{"id": "CVE-2023-38408", "cvss_score": 9.8, "description": "openssh agent"}],

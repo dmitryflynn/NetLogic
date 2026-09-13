@@ -214,12 +214,11 @@ def signals_from_artifacts(art: dict) -> list[Signal]:
                 exposure=exposure,
             ))
 
-    # 6. AI-driven verifier signals (probe-confirmed ground truth).
-    # These come from the verifier engine which generated per-CVE test plans,
-    # executed them via raw sockets, and captured response evidence. Every signal
-    # is already set with is_probe_confirmed=True so the gate pins it as confirmed.
+    # 6. AI-driven verifier signals — probe-confirmed ground truth only.
+    # Failed tests must not enter the gate: a high-reliability "we tried"
+    # signal would corroborate the banner CVE and auto-confirm it.
     for vsig in (art.get("verifier_signals") or []):
-        if isinstance(vsig, Signal):
+        if isinstance(vsig, Signal) and vsig.is_probe_confirmed:
             sigs.append(vsig)
 
     # 7. AI Investigation Agent confirmations — tool-executed proof (crash_probe,
