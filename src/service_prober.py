@@ -167,10 +167,8 @@ def check_memcached_noauth(host: str, port: int = 11211, timeout: float = 3.0) -
     return None
 
 
-def check_mongodb_noauth(host: str, port: int = 27017, timeout: float = 3.0) -> Optional[ServiceFinding]:
-    """MongoDB: wire protocol isMaster query to detect unauthenticated access."""
-    # Minimal OP_QUERY packet for {isMaster: 1} against admin.$cmd
-    bson_doc = b"\x13\x00\x00\x00\x10isMaster\x00\x01\x00\x00\x00\x00"
+def _mongo_op_query(bson_doc: bytes) -> bytes:
+    """Legacy OP_QUERY against admin.$cmd. messageLength includes the 4-byte length field."""
     header = (
         b"\x00\x00\x00\x00"   # messageLength — filled in below
         b"\x01\x00\x00\x00"   # requestID
@@ -179,27 +177,79 @@ def check_mongodb_noauth(host: str, port: int = 27017, timeout: float = 3.0) -> 
         b"\x00\x00\x00\x00"   # flags
         b"admin.$cmd\x00"      # collection name
         b"\x00\x00\x00\x00"   # numberToSkip
-        b"\x01\x00\x00\x00"   # numberToReturn (-1 or 1)
+        b"\x01\x00\x00\x00"   # numberToReturn
     ) + bson_doc
-    # messageLength is the TOTAL length of the message (including the 4-byte
-    # length field itself), so replace the leading placeholder in-place rather
-    # than prepending a second length prefix (which produced a malformed packet
-    # the server silently rejected → missed detections).
-    packet = struct.pack("<I", len(header)) + header[4:]
+    return struct.pack("<I", len(header)) + header[4:]
 
-    resp = _tcp_send_recv(host, port, packet, timeout, recv=1024)
-    if resp and len(resp) > 20:
-        text = resp.decode("utf-8", errors="replace")
-        if any(kw in text for kw in ("ismaster", "isWritablePrimary", "maxBsonObjectSize", "localTime")):
-            return ServiceFinding(
-                service="mongodb", port=port, severity="CRITICAL",
-                title="MongoDB — Unauthenticated Access",
-                detail="MongoDB is responding to wire protocol commands without authentication. "
-                       "Full database read/write access possible across all collections.",
-                evidence=f"isMaster OP_QUERY received valid response ({len(resp)} bytes)",
-                remediation="Launch mongod with --auth; configure users; bind to 127.0.0.1; use TLS."
-            )
-    return None
+
+def _mongo_op_msg(bson_doc: bytes) -> bytes:
+    """OP_MSG (opcode 2013) with a single body section. Required on MongoDB 6+ for
+    anything other than hello/isMaster — OP_QUERY was removed except those two."""
+    header = (
+        b"\x00\x00\x00\x00"   # messageLength — filled in below
+        b"\x01\x00\x00\x00"   # requestID
+        b"\x00\x00\x00\x00"   # responseTo
+        b"\xdd\x07\x00\x00"   # opCode 2013 OP_MSG
+        b"\x00\x00\x00\x00"   # flagBits (no checksum)
+        b"\x00"               # section kind 0 (body)
+    ) + bson_doc
+    return struct.pack("<I", len(header)) + header[4:]
+
+
+def _mongo_bson_int32_cmd(name: str, extra: bytes = b"") -> bytes:
+    """BSON document `{<name>: 1, ...extra}`."""
+    payload = b"\x10" + name.encode("ascii") + b"\x00\x01\x00\x00\x00" + extra + b"\x00"
+    return struct.pack("<I", 4 + len(payload)) + payload
+
+
+_MONGO_AUTH_MARKERS = (
+    "unauthorized",
+    "not authorized",
+    "requires authentication",
+    "authentication required",
+    "auth failed",
+)
+# BSON array field `databases` — do not substring-match "databases"; the auth
+# error errmsg is "command listDatabases requires authentication".
+_MONGO_DB_LIST_FIELD = b"\x04databases\x00"
+
+
+def check_mongodb_noauth(host: str, port: int = 27017, timeout: float = 3.0) -> Optional[ServiceFinding]:
+    """MongoDB: unauthenticated listDatabases — isMaster/hello is not evidence.
+
+    hello/isMaster is a handshake command MongoDB always answers without
+    credentials, including when `--auth` is enabled. Treating that reply as
+    unauthenticated access false-confirms CRITICAL on every secured cluster.
+    Fusion maps service-probe findings to high-reliability `source=probe`
+    signals and pins them as un-droppable.
+    """
+    hello = _mongo_op_query(_mongo_bson_int32_cmd("isMaster"))
+    resp = _tcp_send_recv(host, port, hello, timeout, recv=1024)
+    if not resp or len(resp) <= 20:
+        return None
+    text = resp.decode("utf-8", errors="replace")
+    if not any(kw in text for kw in ("ismaster", "isWritablePrimary", "maxBsonObjectSize", "localTime")):
+        return None
+
+    # {listDatabases: 1, $db: "admin"} via OP_MSG (MongoDB 3.6+ / required on 6+).
+    db_elem = b"\x02$db\x00" + struct.pack("<I", 6) + b"admin\x00"
+    listdb = _mongo_op_msg(_mongo_bson_int32_cmd("listDatabases", extra=db_elem))
+    resp2 = _tcp_send_recv(host, port, listdb, timeout, recv=2048)
+    if not resp2 or len(resp2) <= 20:
+        return None
+    text2 = resp2.decode("utf-8", errors="replace").lower()
+    if any(kw in text2 for kw in _MONGO_AUTH_MARKERS):
+        return None
+    if _MONGO_DB_LIST_FIELD not in resp2:
+        return None
+    return ServiceFinding(
+        service="mongodb", port=port, severity="CRITICAL",
+        title="MongoDB — Unauthenticated Access",
+        detail="MongoDB accepted listDatabases without credentials. "
+               "Full database read/write access possible across all collections.",
+        evidence=f"listDatabases OP_MSG returned databases array ({len(resp2)} bytes)",
+        remediation="Launch mongod with --auth; configure users; bind to 127.0.0.1; use TLS."
+    )
 
 
 def check_elasticsearch_noauth(host: str, port: int = 9200, timeout: float = 4.0) -> Optional[ServiceFinding]:
