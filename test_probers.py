@@ -88,17 +88,45 @@ def test_redis_probe_is_read_only():
 
 
 def test_mongodb_packet_is_wellformed_and_detected(monkeypatch):
-    captured = {}
+    captured = []
     def fake(host, port, data, timeout=3.0, recv=4096):
-        captured["pkt"] = data
+        captured.append(data)
+        if b"listDatabases" in data:
+            return b"\x00" * 16 + b"\x04databases\x00" + b"\x00" * 8
         # canned isMaster reply (field names appear as ASCII in BSON)
         return b"\x00" * 16 + b"...ismaster...maxBsonObjectSize...localTime..." + b"\x00" * 8
     monkeypatch.setattr(sp, "_tcp_send_recv", fake)
     f = sp.check_mongodb_noauth("h", 27017)
     assert f and f.severity == "CRITICAL"
+    assert len(captured) == 2
     # Regression guard: messageLength field must equal the total packet length.
-    pkt = captured["pkt"]
-    assert struct.unpack("<I", pkt[:4])[0] == len(pkt)
+    for pkt in captured:
+        assert struct.unpack("<I", pkt[:4])[0] == len(pkt)
+    assert b"isMaster" in captured[0]
+    assert b"\xd4\x07\x00\x00" in captured[0]  # OP_QUERY
+    assert b"listDatabases" in captured[1]
+    assert b"\xdd\x07\x00\x00" in captured[1]  # OP_MSG (MongoDB 6+ dropped OP_QUERY except hello)
+
+
+def test_mongodb_ismaster_with_auth_no_finding(monkeypatch):
+    """hello/isMaster succeeds on secured MongoDB; that must not confirm CRITICAL."""
+    def fake(host, port, data, timeout=3.0, recv=4096):
+        if b"listDatabases" in data:
+            return (b"\x00" * 16
+                    + b"errmsg\x00command listDatabases requires authentication"
+                    + b"Unauthorized")
+        return b"\x00" * 16 + b"...ismaster...maxBsonObjectSize...localTime..." + b"\x00" * 8
+    monkeypatch.setattr(sp, "_tcp_send_recv", fake)
+    assert sp.check_mongodb_noauth("h", 27017) is None
+
+
+def test_mongodb_ismaster_only_no_finding(monkeypatch):
+    """Handshake without a BSON databases array is identity, not unauthenticated access."""
+    monkeypatch.setattr(
+        sp, "_tcp_send_recv",
+        lambda *a, **k: b"\x00" * 16 + b"...ismaster...maxBsonObjectSize...localTime..." + b"\x00" * 8,
+    )
+    assert sp.check_mongodb_noauth("h", 27017) is None
 
 
 def test_mongodb_short_or_unrelated_no_finding(monkeypatch):
