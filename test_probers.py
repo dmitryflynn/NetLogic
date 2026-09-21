@@ -310,17 +310,56 @@ def test_shellshock_marker_required_and_safe(monkeypatch):
     seen = {}
     def fake(host, port, req, timeout=5.0):
         seen["req"] = req
-        return "HTTP/1.1 200 OK\r\n\r\n\n\nNETLOGIC_SHELLSHOCK_CONFIRMED\n"
+        return f"HTTP/1.1 200 OK\r\n\r\n\n\n{vp._SHELLSHOCK_TOKEN}\n"
     monkeypatch.setattr(vp, "_raw_http", fake)
     f = vp.probe_shellshock("h", 80)
     assert f and f.confirmed
-    # payload must only echo a marker — no destructive shell commands
-    req = seen["req"].decode("latin1").lower()
+    # payload must only echo a computed marker — no destructive shell commands
+    req = seen["req"].decode("latin1")
+    req_l = req.lower()
     for danger in ("rm ", "cat /etc/shadow", "wget", "curl", "/bin/sh -c", "mkfifo", ";reboot"):
-        assert danger not in req
-    # Normal CGI output without the marker → no finding.
+        assert danger not in req_l
+    # The evaluated token must not appear in the injected headers, otherwise a
+    # CGI that reflects User-Agent (Apache printenv) would confirm CRITICAL.
+    assert vp._SHELLSHOCK_TOKEN not in req
+    # Normal CGI output without the evaluated token → no finding.
     monkeypatch.setattr(vp, "_raw_http", lambda *a, **k: "HTTP/1.1 200 OK\r\n\r\nhello world")
     assert vp.probe_shellshock("h", 80) is None
+
+
+def test_shellshock_header_reflection_is_not_confirmation(monkeypatch):
+    """Apache printenv / error pages that echo UA must not pin Shellshock RCE."""
+    captured = {}
+
+    def reflect(host, port, req, timeout=5.0):
+        captured["req"] = req
+        body = req.decode("latin1")
+        return (
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"
+            "SERVER_SOFTWARE=Apache/2.4.41\n"
+            f"HTTP_USER_AGENT={body.split('User-Agent: ', 1)[-1].split(chr(13), 1)[0]}\n"
+            f"HTTP_REFERER={body.split('Referer: ', 1)[-1].split(chr(13), 1)[0]}\n"
+        )
+
+    monkeypatch.setattr(vp, "_raw_http", reflect)
+    assert vp.probe_shellshock("h", 80) is None
+    # Sanity: the request really did carry the unevaluated arithmetic payload.
+    assert b"NETLOGIC_$((" in captured["req"]
+
+
+def test_shellshock_execution_still_confirms_when_env_is_also_dumped(monkeypatch):
+    """A bash CGI that dumps env after executing still confirms (true positive)."""
+    def fake(host, port, req, timeout=5.0):
+        body = req.decode("latin1")
+        ua = body.split("User-Agent: ", 1)[-1].split("\r", 1)[0]
+        return (
+            "HTTP/1.1 200 OK\r\n\r\n"
+            f"{vp._SHELLSHOCK_TOKEN}\n"
+            f"HTTP_USER_AGENT={ua}\n"
+        )
+    monkeypatch.setattr(vp, "_raw_http", fake)
+    f = vp.probe_shellshock("h", 80)
+    assert f and f.confirmed and f.cve_id == "CVE-2014-6271"
 
 
 def test_spring_actuator_detect_vs_empty(monkeypatch):
