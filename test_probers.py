@@ -251,6 +251,49 @@ def test_admin_panel_tomcat_manager_basic_auth(monkeypatch):
     assert any("Tomcat Manager" in f.title for f in out)
 
 
+def test_admin_panel_jboss_waf_403_is_not_critical(monkeypatch):
+    """WAF/deny on the well-known JBoss console paths must not pin CRITICAL.
+
+    Baseline is a normal 404; only /jmx-console and /web-console return 403 with
+    a generic block page (no JMX/JBoss markers). That is the common ModSecurity /
+    Cloudflare signature-block shape, not evidence of JBoss.
+    """
+    def fake(host, port, path, scheme="http", timeout=4.0):
+        if path in ("/jmx-console", "/web-console"):
+            return (403, {}, "<html>Access Denied</html>")
+        return (404, {}, "not found")
+    monkeypatch.setattr(sp, "_http_get", fake)
+    out = sp.check_http_admin_panels("h", 80)
+    assert not any("JBoss" in f.title for f in out), [(_f.title, _f.severity) for _f in out]
+    assert not any(f.severity == "CRITICAL" for f in out)
+
+
+def test_admin_panel_jboss_401_without_markers_is_not_critical(monkeypatch):
+    def fake(host, port, path, scheme="http", timeout=4.0):
+        if path == "/jmx-console":
+            return (401, {}, "Unauthorized")
+        return (404, {}, "not found")
+    monkeypatch.setattr(sp, "_http_get", fake)
+    out = sp.check_http_admin_panels("h", 80)
+    assert not any("JBoss" in f.title for f in out)
+
+
+def test_admin_panel_jboss_login_page_still_confirms(monkeypatch):
+    """A real JBoss 401/200 body still confirms via the keyword list."""
+    def fake(host, port, path, scheme="http", timeout=4.0):
+        if path == "/jmx-console":
+            return (401, {}, "<html><title>JBoss JMX Console</title>Please log in</html>")
+        if path == "/web-console":
+            return (200, {}, "<html>JBoss Web Console</html>")
+        return (404, {}, "not found")
+    monkeypatch.setattr(sp, "_http_get", fake)
+    out = sp.check_http_admin_panels("h", 80)
+    titles = [f.title for f in out]
+    assert any("JBoss JMX Console" in t for t in titles)
+    assert any("JBoss Web Console" in t for t in titles)
+    assert all(f.severity == "CRITICAL" for f in out if "JBoss" in f.title)
+
+
 def test_admin_panel_all_404_no_findings(monkeypatch):
     monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (404, {}, "not found"))
     assert sp.check_http_admin_panels("h", 80) == []
