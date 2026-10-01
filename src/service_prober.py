@@ -599,11 +599,18 @@ def check_http_admin_panels(host: str, port: int, scheme: str = "http",
                                                    "/jmx-console", "/web-console"):
             continue  # Auth is enforced — expected
 
-        # Tomcat manager/host-manager protected by Basic auth: the 401/403 itself
-        # (challenge for these specific paths) is the evidence that the panel exists.
+        # Tomcat manager/host-manager: a path-specific 401/403 is a Basic-auth
+        # challenge, which is itself evidence the panel exists (HIGH, not CRITICAL,
+        # unless the 200 branch below fires).
+        # JBoss /jmx-console and /web-console must NOT auto-confirm from status
+        # alone — those paths are standard WAF signatures. A Cloudflare/ModSecurity
+        # 403 on /jmx-console with a 404/200 baseline would otherwise pin a
+        # fusion CRITICAL ("JBoss JMX Console Exposed") with no JBoss in the body.
+        # Keep them in the 401/403 allow-list so a real JBoss login page can still
+        # match the body keywords below.
         auth_protected_panel = (
             status in (401, 403)
-            and path in ("/manager/html", "/host-manager/html", "/jmx-console", "/web-console")
+            and path in ("/manager/html", "/host-manager/html")
         )
 
         # Confirm by body keywords. Every CRITICAL/HIGH path carries a distinctive
