@@ -85,13 +85,6 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
          "expected_status": [400, 502], "expected_body_patterns": ["Bad Gateway"],
          "port": 80, "tls": False, "evidence_hint": "HTTP request smuggling via unclosed connections"},
     ],
-    "CVE-2019-0211": [
-        {"cve_id": "CVE-2019-0211", "method": "GET",
-         "path": "/server-status",
-         "expected_status": [200, 403],
-         "expected_body_patterns": ["apache", "server-status"],
-         "port": 80, "tls": False, "evidence_hint": "CARPE DIEM — check if mod_status exposes server-status"},
-    ],
     "CVE-2024-38475": [
         {"cve_id": "CVE-2024-38475", "method": "GET",
          "path": "/?%7", "expected_status": [400, 500, 502],
@@ -139,6 +132,13 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
     # SSH CVEs cannot be verified with an HTTP GET — skip (no HTTP plan).
 }
 
+# Local / non-HTTP bugs. A GET to a well-known path cannot prove these, and the
+# previous builtin confirmed CVE-2019-0211 from a default Apache 403 page
+# because the <address> footer contains "Apache".
+_HTTP_UNTESTABLE_CVES = frozenset({
+    "CVE-2019-0211",  # prefork/worker scoreboard LPE (CARPE DIEM) — not mod_status
+})
+
 
 def _find_builtin(cve_id: str) -> Optional[list[dict]]:
     for key, plans in _BUILTIN_PLANS.items():
@@ -166,6 +166,10 @@ def generate_plans_for_cves(cves: list[dict], service: str, product: str, versio
         # Skip low-impact or info-only CVEs
         cvss = float(cve.get("cvss_score", 0) or 0)
         if cvss < 7.0:
+            continue
+
+        if cve_id in _HTTP_UNTESTABLE_CVES:
+            log.debug("Skipping %s: not verifiable via HTTP", cve_id)
             continue
 
         # Check built-in plans first
@@ -295,6 +299,10 @@ def reverify_with_context(
     if not cve_ids or complete is None:
         return []
 
+    cve_ids = [cid for cid in cve_ids if cid not in _HTTP_UNTESTABLE_CVES]
+    if not cve_ids:
+        return []
+
     parts = ["CVEs needing re-verification: " + ", ".join(cve_ids)]
     if phase1_results:
         parts.append("PHASE 1 RESULTS:\n```json\n" + json.dumps(phase1_results, indent=2, default=str) + "\n```")
@@ -320,8 +328,11 @@ def reverify_with_context(
             continue
         if obj.get("skip"):
             continue
+        cid = str(obj.get("cve_id", "unknown"))
+        if cid in _HTTP_UNTESTABLE_CVES:
+            continue
         plan = {
-            "cve_id": str(obj.get("cve_id", "unknown")),
+            "cve_id": cid,
             "method": obj.get("method", "GET"),
             "path": obj.get("path", "/"),
             "expected_status": obj.get("expected_status") or [],

@@ -114,14 +114,81 @@ def test_builtin_smuggling_plans_are_dropped():
 
 def test_builtin_safe_get_plan_survives():
     plans = generate_plans_for_cves(
-        [{"id": "CVE-2019-0211", "cvss_score": 8.0, "description": "status"}],
+        [{"id": "CVE-2024-38476", "cvss_score": 8.0, "description": "htaccess"}],
         service="http", product="Apache", version="2.4", port=8080, use_tls=True,
     )
     assert len(plans) == 1
-    assert plans[0]["path"] == "/server-status"
+    assert plans[0]["path"] == "/.htaccess"
     assert plans[0]["method"] == "GET"
     assert plans[0]["port"] == 8080
     assert plans[0]["tls"] is True
+
+
+def test_cve_2019_0211_not_confirmed_from_apache_403(monkeypatch):
+    """CVE-2019-0211 is a local prefork scoreboard LPE, not an HTTP finding.
+
+    The old builtin sent GET /server-status and treated a default Apache 403
+    (footer contains 'Apache') as probe confirmation. Fusion then pinned it.
+    """
+    apache_403 = (
+        b"HTTP/1.0 403 Forbidden\r\nContent-Type: text/html\r\n\r\n"
+        b"<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\r\n"
+        b"<html><head><title>403 Forbidden</title></head><body>\r\n"
+        b"<h1>Forbidden</h1>\r\n"
+        b"<p>You don't have permission to access this resource.</p>\r\n"
+        b"<hr>\r\n"
+        b"<address>Apache/2.4.29 (Ubuntu) Server at example.com Port 80</address>\r\n"
+        b"</body></html>\r\n"
+    )
+
+    def fake_send(host, port, payload, timeout=5.0, use_tls=False):
+        return apache_403, 1.0, ""
+
+    monkeypatch.setattr("src.verifier.runner._tcp_send_recv", fake_send)
+
+    # The legacy plan WOULD have confirmed on this 403. Guard that we no longer
+    # emit it — including when an AI completer tries to reinvent it.
+    def reinvent(_system, _user):
+        return json.dumps({
+            "cve_id": "CVE-2019-0211",
+            "testable": True,
+            "method": "GET",
+            "path": "/server-status",
+            "expected_status": [200, 403],
+            "expected_body_patterns": ["apache", "server-status"],
+            "port": 80,
+            "tls": False,
+        })
+
+    plans = generate_plans_for_cves(
+        [{"id": "CVE-2019-0211", "cvss_score": 7.8,
+          "description": "Apache HTTP Server privilege escalation via scoreboard"}],
+        service="http", product="Apache", version="2.4.29", port=80,
+        complete=reinvent,
+    )
+    assert plans == []
+
+    from src.verifier.planner import reverify_with_context
+    assert reverify_with_context(
+        ["CVE-2019-0211"], [],
+        complete=lambda _s, _u: json.dumps([{
+            "cve_id": "CVE-2019-0211", "method": "GET",
+            "path": "/server-status", "expected_status": [403],
+            "expected_body_patterns": ["apache"], "port": 80,
+        }]),
+    ) == []
+
+    # Document the false-positive the builtin used to emit if it were sent.
+    leaked = run_test({
+        "cve_id": "CVE-2019-0211",
+        "method": "GET",
+        "path": "/server-status",
+        "expected_status": [200, 403],
+        "expected_body_patterns": ["apache", "server-status"],
+        "port": 80,
+    }, "scanme.example")
+    assert leaked.success is True
+    assert leaked.status_code == 403
 
 
 def test_parse_http_response_accepts_lf_only():
