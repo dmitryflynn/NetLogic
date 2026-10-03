@@ -124,6 +124,71 @@ def test_builtin_safe_get_plan_survives():
     assert plans[0]["tls"] is True
 
 
+def test_cve_2021_39275_not_confirmed_from_wordpress_homepage(monkeypatch):
+    """CVE-2021-39275 is an ap_escape_quotes OOB write, not a win.ini read.
+
+    The old builtin sent GET /%5c..%5c../windows/win.ini and treated a 200
+    whose body contained 'fonts' as confirmation. WordPress permalinks rewrite
+    unknown paths to index.php; default themes put 'fonts' in stylesheet ids
+    and Google Fonts links. Fusion then pinned the CRITICAL.
+    """
+    wp_200 = (
+        b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n"
+        b"<!DOCTYPE html><html><head>"
+        b"<link rel='stylesheet' id='twenty-twenty-fonts-css' "
+        b"href='https://fonts.googleapis.com/css?family=Inter' />"
+        b"</head><body><h1>Hello</h1></body></html>"
+    )
+
+    def fake_send(host, port, payload, timeout=5.0, use_tls=False):
+        return wp_200, 1.0, ""
+
+    monkeypatch.setattr("src.verifier.runner._tcp_send_recv", fake_send)
+
+    def reinvent(_system, _user):
+        return json.dumps({
+            "cve_id": "CVE-2021-39275",
+            "testable": True,
+            "method": "GET",
+            "path": "/%5c..%5c..%5c../windows/win.ini",
+            "expected_status": [200, 400],
+            "expected_body_patterns": ["fonts", "extensions"],
+            "port": 80,
+            "tls": False,
+        })
+
+    plans = generate_plans_for_cves(
+        [{"id": "CVE-2021-39275", "cvss_score": 9.8,
+          "description": "ap_escape_quotes out-of-bounds write"}],
+        service="http", product="Apache", version="2.4.41", port=80,
+        complete=reinvent,
+    )
+    assert plans == []
+
+    from src.verifier.planner import reverify_with_context
+    assert reverify_with_context(
+        ["CVE-2021-39275"], [],
+        complete=lambda _s, _u: json.dumps([{
+            "cve_id": "CVE-2021-39275", "method": "GET",
+            "path": "/%5c..%5c..%5c../windows/win.ini",
+            "expected_status": [200],
+            "expected_body_patterns": ["fonts"], "port": 80,
+        }]),
+    ) == []
+
+    # Document the false-positive the builtin used to emit if it were sent.
+    leaked = run_test({
+        "cve_id": "CVE-2021-39275",
+        "method": "GET",
+        "path": "/%5c..%5c..%5c../windows/win.ini",
+        "expected_status": [200, 400],
+        "expected_body_patterns": ["fonts", "extensions"],
+        "port": 80,
+    }, "scanme.example")
+    assert leaked.success is True
+    assert leaked.status_code == 200
+
+
 def test_parse_http_response_accepts_lf_only():
     from src.verifier.runner import _parse_http_response
 

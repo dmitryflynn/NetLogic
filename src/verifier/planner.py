@@ -110,12 +110,6 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
          "expected_body_patterns": ["htpasswd"],
          "port": 80, "tls": False, "evidence_hint": "null pointer dereference in mod_proxy"},
     ],
-    "CVE-2021-39275": [
-        {"cve_id": "CVE-2021-39275", "method": "GET",
-         "path": "/%5c..%5c..%5c../windows/win.ini",
-         "expected_status": [200, 400], "expected_body_patterns": ["fonts", "extensions"],
-         "port": 80, "tls": False, "evidence_hint": "ap_escape_quotes buffer overflow path traversal"},
-    ],
     "CVE-2021-26691": [
         {"cve_id": "CVE-2021-26691", "method": "GET",
          "path": "/", "headers": {"Session": "malicious"},
@@ -138,6 +132,13 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
     ],
     # SSH CVEs cannot be verified with an HTTP GET — skip (no HTTP plan).
 }
+
+# Local / memory-corruption bugs. A GET that matches generic HTML tokens cannot
+# prove these. The previous builtin confirmed CVE-2021-39275 from a WordPress
+# (or any SPA/rewrite) 200 page because "fonts" appears in theme CSS links.
+_HTTP_UNTESTABLE_CVES = frozenset({
+    "CVE-2021-39275",  # ap_escape_quotes OOB write — not a win.ini file read
+})
 
 
 def _find_builtin(cve_id: str) -> Optional[list[dict]]:
@@ -166,6 +167,10 @@ def generate_plans_for_cves(cves: list[dict], service: str, product: str, versio
         # Skip low-impact or info-only CVEs
         cvss = float(cve.get("cvss_score", 0) or 0)
         if cvss < 7.0:
+            continue
+
+        if cve_id in _HTTP_UNTESTABLE_CVES:
+            log.debug("Skipping %s: not verifiable via HTTP", cve_id)
             continue
 
         # Check built-in plans first
@@ -295,6 +300,10 @@ def reverify_with_context(
     if not cve_ids or complete is None:
         return []
 
+    cve_ids = [cid for cid in cve_ids if cid not in _HTTP_UNTESTABLE_CVES]
+    if not cve_ids:
+        return []
+
     parts = ["CVEs needing re-verification: " + ", ".join(cve_ids)]
     if phase1_results:
         parts.append("PHASE 1 RESULTS:\n```json\n" + json.dumps(phase1_results, indent=2, default=str) + "\n```")
@@ -320,8 +329,11 @@ def reverify_with_context(
             continue
         if obj.get("skip"):
             continue
+        cid = str(obj.get("cve_id", "unknown"))
+        if cid in _HTTP_UNTESTABLE_CVES:
+            continue
         plan = {
-            "cve_id": str(obj.get("cve_id", "unknown")),
+            "cve_id": cid,
             "method": obj.get("method", "GET"),
             "path": obj.get("path", "/"),
             "expected_status": obj.get("expected_status") or [],
