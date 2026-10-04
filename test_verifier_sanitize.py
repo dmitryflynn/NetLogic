@@ -124,6 +124,147 @@ def test_builtin_safe_get_plan_survives():
     assert plans[0]["tls"] is True
 
 
+def test_cve_2024_38476_not_confirmed_from_apache_htaccess_403(monkeypatch):
+    """CVE-2024-38476 is substitution encoding, not a forbidden .htaccess.
+
+    The old builtin sent GET /.htaccess and treated HTTP 403 plus the
+    substring 'htaccess' as confirmation. Apache 2.4.6 / 2.4.29 default
+    403 pages echo the URI ('access /.htaccess on this server'). Shared
+    hosts also emit 'unable to read htaccess file'. Fusion then pinned
+    the CRITICAL.
+    """
+    classic_403 = (
+        b"HTTP/1.0 403 Forbidden\r\nContent-Type: text/html\r\n\r\n"
+        b"<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n"
+        b"<html><head>\n<title>403 Forbidden</title>\n</head><body>\n"
+        b"<h1>Forbidden</h1>\n"
+        b"<p>You don't have permission to access /.htaccess\n"
+        b"on this server.</p>\n"
+        b"</body></html>\n"
+    )
+    hosting_403 = (
+        b"HTTP/1.0 403 Forbidden\r\nContent-Type: text/html\r\n\r\n"
+        b"<h1>Forbidden</h1>"
+        b"<p>You don't have permission to access this resource."
+        b"Server unable to read htaccess file, denying access to be safe</p>"
+    )
+
+    def reinvent(_system, _user):
+        return json.dumps({
+            "cve_id": "CVE-2024-38476",
+            "testable": True,
+            "method": "GET",
+            "path": "/.htaccess",
+            "expected_status": [200, 403],
+            "expected_body_patterns": ["htaccess"],
+            "port": 80,
+            "tls": False,
+        })
+
+    plans = generate_plans_for_cves(
+        [{"id": "CVE-2024-38476", "cvss_score": 8.1,
+          "description": "Apache HTTP Server substitution encoding issue"}],
+        service="http", product="Apache", version="2.4.29", port=80,
+        complete=reinvent,
+    )
+    assert plans == []
+
+    from src.verifier.planner import reverify_with_context
+    assert reverify_with_context(
+        ["CVE-2024-38476"], [],
+        complete=lambda _s, _u: json.dumps([{
+            "cve_id": "CVE-2024-38476", "method": "GET",
+            "path": "/.htaccess",
+            "expected_status": [403],
+            "expected_body_patterns": ["htaccess"], "port": 80,
+        }]),
+    ) == []
+
+    def fake_classic(host, port, payload, timeout=5.0, use_tls=False):
+        return classic_403, 1.0, ""
+
+    monkeypatch.setattr("src.verifier.runner._tcp_send_recv", fake_classic)
+    leaked = run_test({
+        "cve_id": "CVE-2024-38476",
+        "method": "GET",
+        "path": "/.htaccess",
+        "expected_status": [200, 403],
+        "expected_body_patterns": ["htaccess"],
+        "port": 80,
+    }, "scanme.example")
+    assert leaked.success is True
+    assert leaked.status_code == 403
+
+    def fake_hosting(host, port, payload, timeout=5.0, use_tls=False):
+        return hosting_403, 1.0, ""
+
+    monkeypatch.setattr("src.verifier.runner._tcp_send_recv", fake_hosting)
+    leaked_hosting = run_test({
+        "cve_id": "CVE-2024-38476",
+        "method": "GET",
+        "path": "/.htaccess",
+        "expected_status": [200, 403],
+        "expected_body_patterns": ["htaccess"],
+        "port": 80,
+    }, "scanme.example")
+    assert leaked_hosting.success is True
+
+
+def test_cve_2024_38477_not_confirmed_from_apache_htpasswd_403(monkeypatch):
+    """CVE-2024-38477 is a mod_proxy NULL deref, not a forbidden .htpasswd."""
+    classic_403 = (
+        b"HTTP/1.0 403 Forbidden\r\nContent-Type: text/html\r\n\r\n"
+        b"<h1>Forbidden</h1>\n"
+        b"<p>You don't have permission to access /.htpasswd\n"
+        b"on this server.</p>\n"
+    )
+
+    def reinvent(_system, _user):
+        return json.dumps({
+            "cve_id": "CVE-2024-38477",
+            "testable": True,
+            "method": "GET",
+            "path": "/.htpasswd",
+            "expected_status": [200, 403],
+            "expected_body_patterns": ["htpasswd"],
+            "port": 80,
+        })
+
+    plans = generate_plans_for_cves(
+        [{"id": "CVE-2024-38477", "cvss_score": 7.5,
+          "description": "Apache HTTP Server crash in mod_proxy"}],
+        service="http", product="Apache", version="2.4.29", port=80,
+        complete=reinvent,
+    )
+    assert plans == []
+
+    from src.verifier.planner import reverify_with_context
+    assert reverify_with_context(
+        ["CVE-2024-38477"], [],
+        complete=lambda _s, _u: json.dumps([{
+            "cve_id": "CVE-2024-38477", "method": "GET",
+            "path": "/.htpasswd",
+            "expected_status": [403],
+            "expected_body_patterns": ["htpasswd"], "port": 80,
+        }]),
+    ) == []
+
+    def fake_send(host, port, payload, timeout=5.0, use_tls=False):
+        return classic_403, 1.0, ""
+
+    monkeypatch.setattr("src.verifier.runner._tcp_send_recv", fake_send)
+    leaked = run_test({
+        "cve_id": "CVE-2024-38477",
+        "method": "GET",
+        "path": "/.htpasswd",
+        "expected_status": [200, 403],
+        "expected_body_patterns": ["htpasswd"],
+        "port": 80,
+    }, "scanme.example")
+    assert leaked.success is True
+    assert leaked.status_code == 403
+
+
 def test_parse_http_response_accepts_lf_only():
     from src.verifier.runner import _parse_http_response
 

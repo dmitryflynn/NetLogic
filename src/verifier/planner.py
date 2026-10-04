@@ -98,18 +98,6 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
          "expected_body_patterns": ["error", "Internal Server Error"],
          "port": 80, "tls": False, "evidence_hint": "mod_rewrite improper escaping"},
     ],
-    "CVE-2024-38476": [
-        {"cve_id": "CVE-2024-38476", "method": "GET",
-         "path": "/.htaccess", "expected_status": [200, 403],
-         "expected_body_patterns": ["htaccess"],
-         "port": 80, "tls": False, "evidence_hint": "information disclosure via core"},
-    ],
-    "CVE-2024-38477": [
-        {"cve_id": "CVE-2024-38477", "method": "GET",
-         "path": "/.htpasswd", "expected_status": [200, 403],
-         "expected_body_patterns": ["htpasswd"],
-         "port": 80, "tls": False, "evidence_hint": "null pointer dereference in mod_proxy"},
-    ],
     "CVE-2021-39275": [
         {"cve_id": "CVE-2021-39275", "method": "GET",
          "path": "/%5c..%5c..%5c../windows/win.ini",
@@ -139,6 +127,15 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
     # SSH CVEs cannot be verified with an HTTP GET — skip (no HTTP plan).
 }
 
+# Local / encoding / crash bugs. A 403 that echoes the requested filename
+# cannot prove these. The previous builtins confirmed CVE-2024-38476/38477
+# from Apache's default (or shared-hosting) 403 page because it contains
+# "htaccess" / "htpasswd".
+_HTTP_UNTESTABLE_CVES = frozenset({
+    "CVE-2024-38476",  # substitution encoding — not a .htaccess 403
+    "CVE-2024-38477",  # mod_proxy NULL deref — not a .htpasswd 403
+})
+
 
 def _find_builtin(cve_id: str) -> Optional[list[dict]]:
     for key, plans in _BUILTIN_PLANS.items():
@@ -166,6 +163,10 @@ def generate_plans_for_cves(cves: list[dict], service: str, product: str, versio
         # Skip low-impact or info-only CVEs
         cvss = float(cve.get("cvss_score", 0) or 0)
         if cvss < 7.0:
+            continue
+
+        if cve_id in _HTTP_UNTESTABLE_CVES:
+            log.debug("Skipping %s: not verifiable via HTTP", cve_id)
             continue
 
         # Check built-in plans first
@@ -295,6 +296,10 @@ def reverify_with_context(
     if not cve_ids or complete is None:
         return []
 
+    cve_ids = [cid for cid in cve_ids if cid not in _HTTP_UNTESTABLE_CVES]
+    if not cve_ids:
+        return []
+
     parts = ["CVEs needing re-verification: " + ", ".join(cve_ids)]
     if phase1_results:
         parts.append("PHASE 1 RESULTS:\n```json\n" + json.dumps(phase1_results, indent=2, default=str) + "\n```")
@@ -320,8 +325,11 @@ def reverify_with_context(
             continue
         if obj.get("skip"):
             continue
+        cid = str(obj.get("cve_id", "unknown"))
+        if cid in _HTTP_UNTESTABLE_CVES:
+            continue
         plan = {
-            "cve_id": str(obj.get("cve_id", "unknown")),
+            "cve_id": cid,
             "method": obj.get("method", "GET"),
             "path": obj.get("path", "/"),
             "expected_status": obj.get("expected_status") or [],
