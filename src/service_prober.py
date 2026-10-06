@@ -203,34 +203,47 @@ def check_mongodb_noauth(host: str, port: int = 27017, timeout: float = 3.0) -> 
 
 
 def check_elasticsearch_noauth(host: str, port: int = 9200, timeout: float = 4.0) -> Optional[ServiceFinding]:
-    """Elasticsearch: cluster and index enumeration without credentials."""
+    """Elasticsearch/OpenSearch: cluster root document without credentials.
+
+    Confirmation requires a JSON object with a string ``cluster_name`` — the
+    distinctive GET / payload. A 200 HTML/JS page that merely *mentions*
+    elasticsearch (docker-mapped frontend, status page, docs) must not pin
+    CRITICAL unauthenticated data access; fusion treats probe findings as
+    un-droppable.
+    """
     result = _http_get(host, port, "/", timeout=timeout)
     if not result:
         return None
     status, hdrs, body = result
     if status == 401:
         return None
-    if status == 200 and ("cluster_name" in body or "elasticsearch" in body.lower()):
-        cluster_name = version = ""
-        try:
-            data = json.loads(body)
-            cluster_name = data.get("cluster_name", "")
-            version = data.get("version", {}).get("number", "")
-        except Exception:
-            pass
-        # Check if we can list indices
-        idx = _http_get(host, port, "/_cat/indices?v", timeout=timeout)
-        has_indices = idx and idx[0] == 200 and len(idx[2].strip()) > 5
-        return ServiceFinding(
-            service="elasticsearch", port=port, severity="CRITICAL",
-            title="Elasticsearch — Open Access (No Authentication)",
-            detail=(f"Elasticsearch cluster '{cluster_name}' v{version} is open without authentication. "
-                    f"{'Index listing accessible. ' if has_indices else ''}"
-                    "Full data exfiltration and arbitrary document write possible."),
-            evidence=f"GET / → HTTP 200; cluster_name={cluster_name!r}; indices accessible={has_indices}",
-            remediation="Enable xpack.security.enabled=true; configure TLS and user roles; restrict to private network."
-        )
-    return None
+    if status != 200:
+        return None
+    try:
+        data = json.loads(body)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    cluster_name = data.get("cluster_name")
+    if not isinstance(cluster_name, str) or not cluster_name.strip():
+        return None
+    version = ""
+    version_info = data.get("version")
+    if isinstance(version_info, dict):
+        version = str(version_info.get("number", "") or "")
+    # Check if we can list indices
+    idx = _http_get(host, port, "/_cat/indices?v", timeout=timeout)
+    has_indices = idx and idx[0] == 200 and len(idx[2].strip()) > 5
+    return ServiceFinding(
+        service="elasticsearch", port=port, severity="CRITICAL",
+        title="Elasticsearch — Open Access (No Authentication)",
+        detail=(f"Elasticsearch cluster '{cluster_name}' v{version} is open without authentication. "
+                f"{'Index listing accessible. ' if has_indices else ''}"
+                "Full data exfiltration and arbitrary document write possible."),
+        evidence=f"GET / → HTTP 200; cluster_name={cluster_name!r}; indices accessible={has_indices}",
+        remediation="Enable xpack.security.enabled=true; configure TLS and user roles; restrict to private network."
+    )
 
 
 def check_couchdb_noauth(host: str, port: int = 5984, timeout: float = 4.0) -> Optional[ServiceFinding]:

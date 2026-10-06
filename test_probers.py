@@ -119,6 +119,38 @@ def test_elasticsearch_detected_vs_auth(monkeypatch):
     assert sp.check_elasticsearch_noauth("h", 9200) is None
 
 
+def test_elasticsearch_html_mention_is_not_open_cluster(monkeypatch):
+    """Port 9200 is in the default scan set and always runs this check.
+
+    A docker-mapped frontend, status page, or docs HTML that contains the
+    word 'elasticsearch' (or the token cluster_name in JS) used to pin
+    CRITICAL unauthenticated cluster access. Fusion then treats source=probe
+    + high reliability as un-droppable. Require the JSON cluster root.
+    """
+    html = (
+        "<!doctype html><html><head><title>Search UI</title></head>"
+        "<body>We use elasticsearch. cluster_name is configured in env."
+        + "x" * 200 + "</body></html>"
+    )
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, html))
+    assert sp.check_elasticsearch_noauth("h", 9200) is None
+
+    monkeypatch.setattr(sp, "_http_get",
+                        lambda *a, **k: (200, {}, '["elasticsearch","cluster_name"]'))
+    assert sp.check_elasticsearch_noauth("h", 9200) is None
+
+    monkeypatch.setattr(sp, "_http_get",
+                        lambda *a, **k: (200, {}, '{"name":"node-1","tagline":"You Know, for Search"}'))
+    assert sp.check_elasticsearch_noauth("h", 9200) is None
+
+
+def test_opensearch_json_root_still_confirms(monkeypatch):
+    body = '{"cluster_name":"opensearch","version":{"number":"2.11.0","distribution":"opensearch"}}'
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, body))
+    f = sp.check_elasticsearch_noauth("h", 9200)
+    assert f and f.severity == "CRITICAL" and "opensearch" in f.detail
+
+
 def test_couchdb_detected_vs_secure(monkeypatch):
     monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, '["_users","mydb"]'))
     assert sp.check_couchdb_noauth("h", 5984).severity == "CRITICAL"
