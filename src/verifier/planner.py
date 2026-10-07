@@ -92,12 +92,6 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
          "expected_body_patterns": ["apache", "server-status"],
          "port": 80, "tls": False, "evidence_hint": "CARPE DIEM — check if mod_status exposes server-status"},
     ],
-    "CVE-2024-38475": [
-        {"cve_id": "CVE-2024-38475", "method": "GET",
-         "path": "/?%7", "expected_status": [400, 500, 502],
-         "expected_body_patterns": ["error", "Internal Server Error"],
-         "port": 80, "tls": False, "evidence_hint": "mod_rewrite improper escaping"},
-    ],
     "CVE-2024-38476": [
         {"cve_id": "CVE-2024-38476", "method": "GET",
          "path": "/.htaccess", "expected_status": [200, 403],
@@ -116,12 +110,6 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
          "expected_status": [200, 400], "expected_body_patterns": ["fonts", "extensions"],
          "port": 80, "tls": False, "evidence_hint": "ap_escape_quotes buffer overflow path traversal"},
     ],
-    "CVE-2021-26691": [
-        {"cve_id": "CVE-2021-26691", "method": "GET",
-         "path": "/", "headers": {"Session": "malicious"},
-         "expected_status": [500, 400], "expected_body_patterns": ["Internal Server Error"],
-         "port": 80, "tls": False, "evidence_hint": "mod_session heap overflow via crafted Session header"},
-    ],
     "CVE-2022-22721": [
         {"cve_id": "CVE-2022-22721", "method": "GET",
          "path": "/", "headers": {"Content-Length": str(1024 * 1024 * 400)},
@@ -129,15 +117,19 @@ _BUILTIN_PLANS: dict[str, list[dict]] = {
          "expected_body_patterns": ["error", "large", "limit"],
          "port": 80, "tls": False, "evidence_hint": "LimitXMLRequestBody integer overflow on 32-bit"},
     ],
-    "CVE-2019-0217": [
-        {"cve_id": "CVE-2019-0217", "method": "GET",
-         "path": "/", "headers": {"Authorization": "Digest "},
-         "expected_status": [400, 401, 500],
-         "expected_body_patterns": ["digest", "WWW-Authenticate"],
-         "port": 80, "tls": False, "evidence_hint": "race condition in mod_auth_digest"},
-    ],
     # SSH CVEs cannot be verified with an HTTP GET — skip (no HTTP plan).
 }
+
+# Heap overflows, races, and rewrite-escaping bugs cannot be proven by a generic
+# HTTP 400/401/500 page. The previous builtins confirmed:
+#   CVE-2024-38475 from GET /?%7 + "Internal Server Error" (any 500ing app / WAF)
+#   CVE-2021-26691 from GET / + Session: malicious + ISE (Apache default 500 page)
+#   CVE-2019-0217  from Authorization: Digest + body "digest" (401 JSON / SPA)
+_HTTP_UNTESTABLE_CVES = frozenset({
+    "CVE-2024-38475",  # mod_rewrite escaping — not a generic 500
+    "CVE-2021-26691",  # mod_session heap overflow — not GET / 500
+    "CVE-2019-0217",   # mod_auth_digest prefork LPE — not a 401 mentioning digest
+})
 
 
 def _find_builtin(cve_id: str) -> Optional[list[dict]]:
@@ -166,6 +158,10 @@ def generate_plans_for_cves(cves: list[dict], service: str, product: str, versio
         # Skip low-impact or info-only CVEs
         cvss = float(cve.get("cvss_score", 0) or 0)
         if cvss < 7.0:
+            continue
+
+        if cve_id in _HTTP_UNTESTABLE_CVES:
+            log.debug("Skipping %s: not verifiable via HTTP", cve_id)
             continue
 
         # Check built-in plans first
@@ -295,6 +291,10 @@ def reverify_with_context(
     if not cve_ids or complete is None:
         return []
 
+    cve_ids = [cid for cid in cve_ids if cid not in _HTTP_UNTESTABLE_CVES]
+    if not cve_ids:
+        return []
+
     parts = ["CVEs needing re-verification: " + ", ".join(cve_ids)]
     if phase1_results:
         parts.append("PHASE 1 RESULTS:\n```json\n" + json.dumps(phase1_results, indent=2, default=str) + "\n```")
@@ -320,8 +320,11 @@ def reverify_with_context(
             continue
         if obj.get("skip"):
             continue
+        cid = str(obj.get("cve_id", "unknown"))
+        if cid in _HTTP_UNTESTABLE_CVES:
+            continue
         plan = {
-            "cve_id": str(obj.get("cve_id", "unknown")),
+            "cve_id": cid,
             "method": obj.get("method", "GET"),
             "path": obj.get("path", "/"),
             "expected_status": obj.get("expected_status") or [],
