@@ -235,3 +235,107 @@ def test_ssh_builtin_plan_is_not_emitted():
         service="ssh", product="OpenSSH", version="9.3", port=22,
     )
     assert plans == []
+
+
+_APACHE_500 = (
+    b"HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/html\r\n\r\n"
+    b"<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n"
+    b"<html><head>\n<title>500 Internal Server Error</title>\n</head><body>\n"
+    b"<h1>Internal Server Error</h1>\n"
+    b"<p>The server encountered an internal error or\n"
+    b"misconfiguration and was unable to complete\nyour request.</p>\n"
+    b"</body></html>\n"
+)
+
+
+def _assert_untestable(cve_id: str, old_plan: dict, innocent: bytes, monkeypatch):
+    """Planner must not emit (or let AI reinvent) a plan; the old HTTP check
+    would have probe-confirmed the CVE from *innocent*."""
+
+    def reinvent(_system, _user):
+        return json.dumps({"cve_id": cve_id, "testable": True, **old_plan})
+
+    plans = generate_plans_for_cves(
+        [{"id": cve_id, "cvss_score": 9.0, "description": "untestable via HTTP"}],
+        service="http", product="Apache", version="2.4.41", port=80,
+        complete=reinvent,
+    )
+    assert plans == []
+
+    from src.verifier.planner import reverify_with_context
+    assert reverify_with_context(
+        [cve_id], [],
+        complete=lambda _s, _u: json.dumps([{
+            "cve_id": cve_id, **old_plan,
+        }]),
+    ) == []
+
+    def fake_send(host, port, payload, timeout=5.0, use_tls=False):
+        return innocent, 1.0, ""
+
+    monkeypatch.setattr("src.verifier.runner._tcp_send_recv", fake_send)
+    leaked = run_test({"cve_id": cve_id, **old_plan}, "scanme.example")
+    assert leaked.success is True
+
+
+def test_cve_2021_26691_not_confirmed_from_apache_500(monkeypatch):
+    """CVE-2021-26691 is a mod_session heap overflow, not GET / returning 500.
+
+    The old builtin sent Session: malicious and treated Apache's default
+    500 page ('Internal Server Error') as confirmation. The header is ignored
+    by stock httpd; any PHP fatal / uncaught exception on / pinned the CVE.
+    Fusion then treated the probe as un-droppable.
+    """
+    _assert_untestable(
+        "CVE-2021-26691",
+        {
+            "method": "GET", "path": "/",
+            "headers": {"Session": "malicious"},
+            "expected_status": [500, 400],
+            "expected_body_patterns": ["Internal Server Error"],
+            "port": 80, "tls": False,
+        },
+        _APACHE_500,
+        monkeypatch,
+    )
+
+
+def test_cve_2024_38475_not_confirmed_from_apache_500(monkeypatch):
+    """CVE-2024-38475 is mod_rewrite escaping, not GET /?%7 + a 500 page."""
+    _assert_untestable(
+        "CVE-2024-38475",
+        {
+            "method": "GET", "path": "/?%7",
+            "expected_status": [400, 500, 502],
+            "expected_body_patterns": ["error", "Internal Server Error"],
+            "port": 80, "tls": False,
+        },
+        _APACHE_500,
+        monkeypatch,
+    )
+
+
+def test_cve_2019_0217_not_confirmed_from_401_mentioning_digest(monkeypatch):
+    """CVE-2019-0217 is a prefork mod_auth_digest LPE, not a 401 JSON body.
+
+    The old builtin sent Authorization: Digest and confirmed on body substring
+    'digest' / 'WWW-Authenticate'. An API that rejects the scheme with
+    {"error":"invalid digest"} — or a 401 SPA bundle containing digest() —
+    pinned a local privilege-escalation CVE as probe-confirmed.
+    """
+    json_401 = (
+        b"HTTP/1.0 401 Unauthorized\r\nContent-Type: application/json\r\n\r\n"
+        b'{"error":"invalid digest"}'
+    )
+    _assert_untestable(
+        "CVE-2019-0217",
+        {
+            "method": "GET", "path": "/",
+            "headers": {"Authorization": "Digest "},
+            "expected_status": [400, 401, 500],
+            "expected_body_patterns": ["digest", "WWW-Authenticate"],
+            "port": 80, "tls": False,
+        },
+        json_401,
+        monkeypatch,
+    )
