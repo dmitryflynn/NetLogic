@@ -151,6 +151,56 @@ def test_etcd_health_is_not_kv_access(monkeypatch):
     assert sp.check_etcd_noauth("h", 2379) is None
 
 
+def test_etcd_html_member_mention_is_not_kv_access(monkeypatch):
+    """Port 2379 is in the default scan set and always runs this check.
+
+    A docker-mapped frontend or SPA catch-all whose HTML/JS contains
+    'member' / '"action"' / '"node"' used to pin CRITICAL unauthenticated
+    etcd access. Fusion then treats source=probe + high reliability as
+    un-droppable. Require the JSON v2 keys document or v3 MemberList.
+    """
+    html = (
+        "<!doctype html><html><head><title>Console</title></head>"
+        "<body>Already a member? Sign in. "
+        '{"action":"click","node":"menu"}'
+        + "x" * 200 + "</body></html>"
+    )
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, html))
+    assert sp.check_etcd_noauth("h", 2379) is None
+
+    monkeypatch.setattr(sp, "_http_get",
+                        lambda *a, **k: (200, {}, '{"health":"true","member":"local"}'))
+    assert sp.check_etcd_noauth("h", 2379) is None
+
+    monkeypatch.setattr(sp, "_http_get",
+                        lambda *a, **k: (200, {}, '{"action":"login","ok":true}'))
+    assert sp.check_etcd_noauth("h", 2379) is None
+
+
+def test_etcd_v2_keys_json_still_confirms(monkeypatch):
+    body = '{"action":"get","node":{"key":"/","dir":true,"nodes":[{"key":"/registry"}]}}'
+
+    def fake(host, port, path, **k):
+        if path == "/v2/keys":
+            return 200, {}, body
+        return 404, {}, ""
+    monkeypatch.setattr(sp, "_http_get", fake)
+    f = sp.check_etcd_noauth("h", 2379)
+    assert f and f.severity == "CRITICAL" and "/v2/keys" in f.evidence
+
+
+def test_etcd_v3_member_list_json_still_confirms(monkeypatch):
+    body = '{"members":[{"ID":"8e9e05c52164694d","name":"default","peerURLs":["http://localhost:2380"]}]}'
+
+    def fake(host, port, path, **k):
+        if path == "/v3/cluster/member/list":
+            return 200, {}, body
+        return 404, {}, ""
+    monkeypatch.setattr(sp, "_http_get", fake)
+    f = sp.check_etcd_noauth("h", 2379)
+    assert f and f.severity == "CRITICAL" and "member/list" in f.evidence
+
+
 def test_vault_uninitialized_vs_sealed(monkeypatch):
     monkeypatch.setattr(sp, "_http_get",
                         lambda *a, **k: (200, {}, '{"initialized":false,"sealed":true}'))
