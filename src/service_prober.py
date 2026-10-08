@@ -315,6 +315,36 @@ def check_kubernetes_noauth(host: str, port: int = 6443, timeout: float = 4.0) -
     return None
 
 
+def _etcd_unauth_payload(path: str, body: str) -> bool:
+    """True only for a real etcd v2 keys document or v3 MemberList JSON.
+
+    Port 2379 is in the default scan set. A docker-mapped frontend, SPA
+    catch-all, or JS bundle that happens to contain the tokens ``member``,
+    ``"action"``, or ``"node"`` must not pin CRITICAL unauthenticated KV
+    access — fusion treats probe findings as un-droppable.
+    """
+    try:
+        data = json.loads(body)
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    if path.startswith("/v2"):
+        # GET /v2/keys → {"action":"get","node":{"key":"/",...}}
+        node = data.get("node")
+        return isinstance(node, dict) and ("key" in node or "dir" in node or "value" in node)
+    # GET/POST /v3/cluster/member/list → {"members":[{...peerURLs...}]}
+    members = data.get("members")
+    if not isinstance(members, list):
+        return False
+    if not members:
+        return True
+    first = members[0]
+    if not isinstance(first, dict):
+        return False
+    return any(k in first for k in ("peerURLs", "clientURLs", "ID", "id", "name"))
+
+
 def check_etcd_noauth(host: str, port: int = 2379, timeout: float = 4.0) -> Optional[ServiceFinding]:
     """etcd: holds Kubernetes secrets, certificates, and all cluster state."""
     for path in ("/v2/keys", "/v3/cluster/member/list"):
@@ -324,12 +354,7 @@ def check_etcd_noauth(host: str, port: int = 2379, timeout: float = 4.0) -> Opti
         status, _, body = result
         if status == 401:
             return None
-        if status == 200 and body.strip():
-            blob = body.lstrip()
-            if path.startswith("/v2") and '"node"' not in blob and '"action"' not in blob:
-                continue
-            if path.startswith("/v3") and "member" not in blob.lower() and "peerURLs" not in blob:
-                continue
+        if status == 200 and body.strip() and _etcd_unauth_payload(path, body):
             return ServiceFinding(
                 service="etcd", port=port, severity="CRITICAL",
                 title="etcd — Unauthenticated Key-Value Access",
