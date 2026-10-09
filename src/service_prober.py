@@ -233,30 +233,90 @@ def check_elasticsearch_noauth(host: str, port: int = 9200, timeout: float = 4.0
     return None
 
 
+_COUCHDB_SYSTEM_DBS = frozenset({"_users", "_replicator", "_global_changes"})
+
+
+def _header(hdrs: Optional[dict], name: str) -> str:
+    """Read a response header case-insensitively."""
+    if not hdrs:
+        return ""
+    want = name.lower()
+    for k, v in hdrs.items():
+        if str(k).lower() == want:
+            return str(v or "")
+    return ""
+
+
+def _couchdb_all_dbs_payload(body: str) -> Optional[list[str]]:
+    """Return database names only for a real CouchDB /_all_dbs JSON array.
+
+    The payload is a JSON *array of strings* (db names). A 200 whose body merely
+    starts with ``[`` — HTML/JS, invalid JSON, or a REST API list of objects —
+    must not pin CRITICAL unauthenticated admin access; fusion treats probe
+    findings as un-droppable.
+    """
+    try:
+        data = json.loads(body)
+    except Exception:
+        return None
+    if not isinstance(data, list):
+        return None
+    if not all(isinstance(x, str) for x in data):
+        return None
+    return data
+
+
+def _couchdb_welcome(host: str, port: int, timeout: float) -> bool:
+    """True if GET / is the CouchDB Welcome document (``{"couchdb": "Welcome"}``)."""
+    result = _http_get(host, port, "/", timeout=timeout)
+    if not result:
+        return False
+    status, _, body = result
+    if status != 200:
+        return False
+    try:
+        data = json.loads(body)
+    except Exception:
+        return False
+    return isinstance(data, dict) and isinstance(data.get("couchdb"), str)
+
+
 def check_couchdb_noauth(host: str, port: int = 5984, timeout: float = 4.0) -> Optional[ServiceFinding]:
-    """CouchDB: check for unauthenticated admin API access."""
+    """CouchDB: unauthenticated admin API (GET /_all_dbs) with CouchDB identity.
+
+    Port 5984 is in the default scan set and always runs this check. A
+    docker-mapped JSON API, SPA catch-all, or JS bundle whose body starts with
+    ``[`` must not pin CRITICAL; require a JSON array of db-name strings plus
+    CouchDB identity (Server header, system db names, or the Welcome document).
+    """
     result = _http_get(host, port, "/_all_dbs", timeout=timeout)
     if not result:
         return None
-    status, _, body = result
+    status, hdrs, body = result
     if status == 401:
         return None
-    if status == 200 and body.strip().startswith("["):
-        try:
-            dbs = json.loads(body)
-            db_count = len(dbs)
-            db_sample = dbs[:4]
-        except Exception:
-            db_count, db_sample = 0, []
-        return ServiceFinding(
-            service="couchdb", port=port, severity="CRITICAL",
-            title="CouchDB — Unauthenticated Admin Access",
-            detail=f"CouchDB /_all_dbs accessible without credentials. "
-                   f"{db_count} database(s) visible: {', '.join(str(d) for d in db_sample)}.",
-            evidence=f"GET /_all_dbs → HTTP 200 with {db_count} databases",
-            remediation="Set require_valid_user=true in local.ini; create admin credentials; restrict network access."
-        )
-    return None
+    if status != 200:
+        return None
+    dbs = _couchdb_all_dbs_payload(body)
+    if dbs is None:
+        return None
+    server = _header(hdrs, "Server")
+    identified = (
+        "couchdb" in server.lower()
+        or any(name in _COUCHDB_SYSTEM_DBS for name in dbs)
+        or _couchdb_welcome(host, port, timeout)
+    )
+    if not identified:
+        return None
+    db_sample = dbs[:4]
+    return ServiceFinding(
+        service="couchdb", port=port, severity="CRITICAL",
+        title="CouchDB — Unauthenticated Admin Access",
+        detail=f"CouchDB /_all_dbs accessible without credentials. "
+               f"{len(dbs)} database(s) visible: {', '.join(db_sample)}.",
+        evidence=f"GET /_all_dbs → HTTP 200 with {len(dbs)} databases",
+        remediation="Set require_valid_user=true in local.ini; create admin credentials; restrict network access."
+    )
 
 
 def check_docker_noauth(host: str, port: int = 2375, timeout: float = 4.0) -> Optional[ServiceFinding]:
