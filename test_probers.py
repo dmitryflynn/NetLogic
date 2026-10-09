@@ -126,6 +126,66 @@ def test_couchdb_detected_vs_secure(monkeypatch):
     assert sp.check_couchdb_noauth("h", 5984) is None
 
 
+def test_couchdb_json_array_without_identity_is_not_admin_access(monkeypatch):
+    """Port 5984 is in the default scan set and always runs this check.
+
+    A docker-mapped JSON API, SPA catch-all, or JS file whose body starts
+    with '[' used to pin CRITICAL unauthenticated CouchDB admin access
+    (json.loads failure still confirmed). Fusion then treats source=probe
+    + high reliability as un-droppable. Require a JSON array of db-name
+    strings plus CouchDB identity.
+    """
+    html = (
+        "<!doctype html><html><head><title>API</title></head>"
+        "<body>member node action ["
+        + "x" * 200 + "]</body></html>"
+    )
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, html))
+    assert sp.check_couchdb_noauth("h", 5984) is None
+
+    # Invalid JSON that merely starts with '['
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, "[object Object]"))
+    assert sp.check_couchdb_noauth("h", 5984) is None
+
+    # JSON array of objects — a generic REST collection, not db names
+    monkeypatch.setattr(sp, "_http_get",
+                        lambda *a, **k: (200, {}, '[{"id":1,"name":"users"}]'))
+    assert sp.check_couchdb_noauth("h", 5984) is None
+
+    # JSON array of generic strings, no CouchDB Server header / Welcome / system dbs
+    def fake_api(host, port, path, **k):
+        if path == "/_all_dbs":
+            return 200, {"Content-Type": "application/json"}, '["users","orders"]'
+        return 200, {}, '{"ok":true,"users":[]}'
+    monkeypatch.setattr(sp, "_http_get", fake_api)
+    assert sp.check_couchdb_noauth("h", 5984) is None
+
+    # Empty JSON array without CouchDB identity
+    monkeypatch.setattr(sp, "_http_get", lambda *a, **k: (200, {}, "[]"))
+    assert sp.check_couchdb_noauth("h", 5984) is None
+
+
+def test_couchdb_empty_array_with_server_header_still_confirms(monkeypatch):
+    monkeypatch.setattr(
+        sp, "_http_get",
+        lambda *a, **k: (200, {"Server": "CouchDB/3.3.3 (Erlang OTP/25)"}, "[]"),
+    )
+    f = sp.check_couchdb_noauth("h", 5984)
+    assert f and f.severity == "CRITICAL" and "0 database" in f.evidence
+
+
+def test_couchdb_welcome_document_identifies_named_dbs(monkeypatch):
+    def fake(host, port, path, **k):
+        if path == "/_all_dbs":
+            return 200, {}, '["mydb","analytics"]'
+        if path == "/":
+            return 200, {}, '{"couchdb":"Welcome","version":"3.3.3"}'
+        return 404, {}, ""
+    monkeypatch.setattr(sp, "_http_get", fake)
+    f = sp.check_couchdb_noauth("h", 5984)
+    assert f and f.severity == "CRITICAL" and "mydb" in f.detail
+
+
 def test_docker_api_detected_vs_random_200(monkeypatch):
     monkeypatch.setattr(sp, "_http_get",
                         lambda *a, **k: (200, {}, '{"Version":"24.0.5","ApiVersion":"1.43"}'))
