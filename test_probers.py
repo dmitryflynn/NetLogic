@@ -216,6 +216,48 @@ def test_admin_panel_env_with_creds(monkeypatch):
     assert any(f.severity == "CRITICAL" and "/.env" in f.evidence for f in out)
 
 
+def test_admin_panel_env_html_login_form_not_critical(monkeypatch):
+    """A 200 at /.env that is an HTML login page (password field) is not an env leak.
+
+    Baseline does not save this: the random 404 path returns a different page, so
+    the probe used to confirm CRITICAL from the substring 'password' and fusion
+    pinned it as un-droppable.
+    """
+    login = (
+        "<!DOCTYPE html><html><head><title>Not Found: /.env</title></head>"
+        "<body><form><input type='password' name='password'>"
+        "<a href='/forgot'>Forgot password</a></form></body></html>"
+    )
+    not_found = (
+        "<!DOCTYPE html><html><head><title>Not Found: /xyz</title></head>"
+        "<body><form><input type='password' name='password'></form></body></html>"
+    )
+
+    def fake(host, port, path, scheme="http", timeout=4.0):
+        if path == "/.env":
+            return (200, {}, login)
+        if path == "/.env.backup":
+            return (200, {}, login)
+        if path.startswith("/xyz"):
+            return (200, {}, not_found)
+        return (200, {}, not_found)
+
+    monkeypatch.setattr(sp, "_http_get", fake)
+    out = sp.check_http_admin_panels("h", 80)
+    env_hits = [f for f in out if "/.env" in f.evidence]
+    assert env_hits == [], [(f.title, f.severity, f.evidence) for f in env_hits]
+
+
+def test_looks_like_dotenv_accepts_real_rejects_html():
+    assert sp._looks_like_dotenv("DB_PASSWORD=hunter2\nSECRET_KEY=abc") is True
+    assert sp._looks_like_dotenv("# comment\nAPI_KEY=abc123\n") is True
+    assert sp._looks_like_dotenv(
+        "<!DOCTYPE html><html><body><input type='password'></body></html>"
+    ) is False
+    assert sp._looks_like_dotenv("Forgot your password? API_KEY docs.") is False
+    assert sp._looks_like_dotenv("") is False
+
+
 def test_admin_panel_spa_catchall_no_false_critical(monkeypatch):
     """
     The cardinal-sin case: a single-page app returns HTTP 200 with a big HTML

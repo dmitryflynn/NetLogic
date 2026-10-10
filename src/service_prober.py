@@ -105,6 +105,31 @@ def _response_baseline(host: str, port: int, scheme: str = "http",
     }
 
 
+def _looks_like_dotenv(body: str) -> bool:
+    """True only for KEY=value dotenv text, never an HTML login/marketing page.
+
+    Fusion pins every service-probe finding as un-droppable, so a generic 200
+    whose body merely mentions "password" (login form, docs, 404 chrome) must
+    not confirm CRITICAL Environment File Exposed. Same rule as
+    web_fingerprint._SENSITIVE_PATHS["/.env"].
+    """
+    if not body:
+        return False
+    head = body.lstrip()[:200].lower()
+    if "<html" in head or head.startswith("<!doctype"):
+        return False
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key = line.split("=", 1)[0]
+        if key and key[0].isupper() and all(c.isalnum() or c == "_" for c in key):
+            return True
+    return False
+
+
 def _is_baseline_block(baseline: dict, status: int, body: str, hdrs: dict | None = None) -> bool:
     """True if a probe response matches the CDN/edge block baseline.
     
@@ -609,7 +634,11 @@ def check_http_admin_panels(host: str, port: int, scheme: str = "http",
         # Confirm by body keywords. Every CRITICAL/HIGH path carries a distinctive
         # signature so a generic 200 (e.g. an SPA catch-all route) cannot trip a
         # high-severity finding — false positives are the cardinal sin here.
-        if auth_protected_panel:
+        # dotenv paths also require KEY=value lines: substring "password" matches
+        # login forms and docs pages when the 404 chrome differs from baseline.
+        if path in ("/.env", "/.env.backup"):
+            confirmed = _looks_like_dotenv(body)
+        elif auth_protected_panel:
             confirmed = True
         elif keywords:
             body_lower = body.lower()
