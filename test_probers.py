@@ -293,6 +293,50 @@ def test_apache_traversal_detected_vs_clean(monkeypatch):
     assert vp.probe_apache_path_traversal("h", 80) is None
 
 
+def test_apache_traversal_ignores_html_passwd_examples(monkeypatch):
+    """_raw_http skips the SPA/CDN baseline, so a 404/200 HTML page that quotes
+    a passwd snippet used to pin CVE-2021-41773 CRITICAL. Require HTTP 200 + a
+    raw passwd body, not HTML chrome."""
+    html_404 = (
+        "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\n\r\n"
+        "<html><head><title>Not Found</title></head><body>"
+        "<p>Linux accounts look like <code>root:x:0:0:root:/root:/bin/bash</code> "
+        "and daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin</p></body></html>"
+    )
+    monkeypatch.setattr(vp, "_raw_http", lambda *a, **k: html_404)
+    assert vp.probe_apache_path_traversal("h", 80) is None
+
+    html_200 = (
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"
+        "<!DOCTYPE html><html><body>"
+        "<pre>root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin</pre>"
+        "</body></html>"
+    )
+    monkeypatch.setattr(vp, "_raw_http", lambda *a, **k: html_200)
+    assert vp.probe_apache_path_traversal("h", 80) is None
+
+    # Double-encoding branch: same HTML must not confirm CVE-2021-42013 either.
+    # First request (single encoding) misses; second (double encoding) is the HTML.
+    calls = {"n": 0}
+    def fake(*a, **k):
+        calls["n"] += 1
+        return html_200 if calls["n"] > 1 else "HTTP/1.1 404 Not Found\r\n\r\n"
+    monkeypatch.setattr(vp, "_raw_http", fake)
+    assert vp.probe_apache_path_traversal("h", 80) is None
+
+
+def test_apache_traversal_double_encoding_still_confirms(monkeypatch):
+    calls = {"n": 0}
+    def fake(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "HTTP/1.1 404 Not Found\r\n\r\n"
+        return "HTTP/1.1 200 OK\r\n\r\nroot:x:0:0:root:/root:/bin/bash\nnologin"
+    monkeypatch.setattr(vp, "_raw_http", fake)
+    f = vp.probe_apache_path_traversal("h", 80)
+    assert f and f.confirmed and f.cve_id == "CVE-2021-42013"
+
+
 def test_apache_traversal_handles_none(monkeypatch):
     monkeypatch.setattr(vp, "_raw_http", lambda *a, **k: None)
     assert vp.probe_apache_path_traversal("h", 80) is None

